@@ -19,4 +19,9 @@
     <Folder Include="Gate\" />
   </ItemGroup>
 
+  <!-- 双端共享代码：通过链接引用 Unity 项目中的 GameShared 源码 -->
+  <ItemGroup>
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\**\*.cs" Exclude="**\*.asmdef;**\*.meta" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>
