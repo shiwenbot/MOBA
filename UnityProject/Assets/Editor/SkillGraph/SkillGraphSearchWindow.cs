@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
@@ -31,10 +31,29 @@ namespace TEngine.Editor.SkillGraph
             return new List<SearchTreeEntry>
             {
                 new SearchTreeGroupEntry(new GUIContent("Create Skill Node"), 0),
-                new SearchTreeEntry(new GUIContent("Skill Node", _indentationIcon))
+                new SearchTreeGroupEntry(new GUIContent("Entry"), 1),
+                new SearchTreeEntry(new GUIContent("Entry Node", _indentationIcon))
                 {
-                    level = 1,
-                    userData = "Skill Node"
+                    level = 2,
+                    userData = SkillNodeType.Entry
+                },
+                new SearchTreeGroupEntry(new GUIContent("Action"), 1),
+                new SearchTreeEntry(new GUIContent("Action Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.Action
+                },
+                new SearchTreeGroupEntry(new GUIContent("Condition"), 1),
+                new SearchTreeEntry(new GUIContent("Condition Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.Condition
+                },
+                new SearchTreeGroupEntry(new GUIContent("Delay"), 1),
+                new SearchTreeEntry(new GUIContent("Delay Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.Delay
                 }
             };
         }
@@ -48,8 +67,14 @@ namespace TEngine.Editor.SkillGraph
                 context.screenMousePosition - _editorWindow.position.position);
             Vector2 graphMousePosition = _graphView.contentViewContainer.WorldToLocal(windowMousePosition);
 
-            string nodeTitle = searchTreeEntry.userData as string ?? "Skill Node";
-            _graphView.CreateNode(nodeTitle, graphMousePosition);
+            if (searchTreeEntry.userData is SkillNodeType nodeType)
+            {
+                _graphView.CreateNode(nodeType, graphMousePosition);
+                return true;
+            }
+
+            string nodeTypeName = searchTreeEntry.userData as string;
+            _graphView.CreateNode(nodeTypeName, graphMousePosition);
             return true;
         }
 

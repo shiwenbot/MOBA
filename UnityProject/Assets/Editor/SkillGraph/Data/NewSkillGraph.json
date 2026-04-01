@@ -1,0 +1,42 @@
+{
+    "graphName": "NewSkillGraph",
+    "nodes": [
+        {
+            "guid": "b82fc63843ad4644d9b3c5cf5aa5c0fb",
+            "title": "Entry",
+            "nodeType": "Entry",
+            "position": {
+                "x": 142.0,
+                "y": 152.0
+            },
+            "properties": []
+        },
+        {
+            "guid": "1b87f6132db0a634ba4b58b3bdd66b04",
+            "title": "Action",
+            "nodeType": "Action",
+            "position": {
+                "x": 287.0,
+                "y": 152.0
+            },
+            "properties": [
+                {
+                    "key": "actionType",
+                    "value": "PlayAnimation"
+                },
+                {
+                    "key": "value",
+                    "value": "1"
+                }
+            ]
+        }
+    ],
+    "edges": [
+        {
+            "outputNodeGuid": "b82fc63843ad4644d9b3c5cf5aa5c0fb",
+            "outputPortName": "Next",
+            "inputNodeGuid": "1b87f6132db0a634ba4b58b3bdd66b04",
+            "inputPortName": "In"
+        }
+    ]
+}
