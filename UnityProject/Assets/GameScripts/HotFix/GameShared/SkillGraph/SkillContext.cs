@@ -7,6 +7,12 @@ namespace GameShared.SkillGraph
         void Log(string message);
 
         FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null);
+
+        FTask PlayAnimationAsync(
+            SkillContext context,
+            string prefabLocation,
+            float speed,
+            FCancellationToken? cancellationToken = null);
     }
 
     public sealed class SkillContext

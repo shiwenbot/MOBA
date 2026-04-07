@@ -12,6 +12,7 @@ namespace GameShared.SkillGraph
 
             registry.Register(RuntimeNodeTypes.Entry, new EntryNodeHandler());
             registry.Register(RuntimeNodeTypes.Debug, new DebugNodeHandler());
+            registry.Register(RuntimeNodeTypes.Action, new ActionNodeHandler());
             registry.Register(RuntimeNodeTypes.Delay, new DelayNodeHandler());
         }
     }
@@ -44,6 +45,27 @@ namespace GameShared.SkillGraph
                 return SkillExecuteResult.Complete();
             }
 
+            return SkillExecuteResult.Continue("Out");
+        }
+    }
+
+    public sealed class ActionNodeHandler : ISkillNodeHandler
+    {
+        public async FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
+        {
+            string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
+            if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.4.");
+            }
+
+            string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
+            if (string.IsNullOrWhiteSpace(prefabLocation))
+                throw new InvalidOperationException($"Action node {node.NodeId} prefabLocation cannot be empty.");
+
+            float speed = node.GetFloatPropertyValue(RuntimePropertyKeys.Value, 1f);
+            await context.Runtime!.PlayAnimationAsync(context, prefabLocation, speed, context.CancellationToken);
             return SkillExecuteResult.Continue("Out");
         }
     }

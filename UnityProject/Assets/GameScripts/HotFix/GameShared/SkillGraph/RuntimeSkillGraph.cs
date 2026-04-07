@@ -9,7 +9,21 @@ namespace GameShared.SkillGraph
     {
         public const string Entry = "Entry";
         public const string Debug = "Debug";
+        public const string Action = "Action";
         public const string Delay = "Delay";
+    }
+
+    public static class RuntimeActionTypes
+    {
+        public const string PlayAnimation = "PlayAnimation";
+    }
+
+    public static class RuntimePropertyKeys
+    {
+        public const string ActionType = "actionType";
+        public const string Value = "value";
+        public const string PrefabAssetPath = "prefabAssetPath";
+        public const string PrefabLocation = "prefabLocation";
     }
 
     public sealed class RuntimeSkillGraph
