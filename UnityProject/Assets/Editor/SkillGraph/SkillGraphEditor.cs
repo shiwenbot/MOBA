@@ -61,6 +61,7 @@ namespace TEngine.Editor.SkillGraph
             toolbar.Add(new ToolbarButton(SaveGraph) { text = "Save" });
             toolbar.Add(new ToolbarButton(SaveGraphAs) { text = "Save As" });
             toolbar.Add(new ToolbarButton(LoadGraph) { text = "Load" });
+            toolbar.Add(new ToolbarButton(ExportGraph) { text = "Export" });
 
             VisualElement spacer = new VisualElement();
             spacer.style.flexGrow = 1f;
@@ -178,6 +179,21 @@ namespace TEngine.Editor.SkillGraph
             _currentGraphAssetPath = normalizedPath;
             _currentGraphName = graphData.graphName;
             UpdateWindowState();
+        }
+
+        private void ExportGraph()
+        {
+            string graphName = GetDefaultGraphName();
+            SkillGraphData graphData = _graphView.SerializeGraph(graphName);
+            if (SkillGraphExporter.Export(graphData, out string exportPath, out string errorMessage))
+            {
+                _currentGraphName = graphData.graphName;
+                UpdateWindowState();
+                EditorUtility.DisplayDialog("Export Success", $"Exported runtime graph to:\n{exportPath}", "OK");
+                return;
+            }
+
+            EditorUtility.DisplayDialog("Export Failed", errorMessage, "OK");
         }
 
         private string GetDefaultGraphName()

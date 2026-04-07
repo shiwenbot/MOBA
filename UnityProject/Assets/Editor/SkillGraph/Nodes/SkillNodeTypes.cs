@@ -5,6 +5,7 @@ namespace TEngine.Editor.SkillGraph
     internal enum SkillNodeType
     {
         Entry,
+        Debug,
         Action,
         Condition,
         Delay

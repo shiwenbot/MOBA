@@ -37,6 +37,12 @@ namespace TEngine.Editor.SkillGraph
                     level = 2,
                     userData = SkillNodeType.Entry
                 },
+                new SearchTreeGroupEntry(new GUIContent("Debug"), 1),
+                new SearchTreeEntry(new GUIContent("Debug Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.Debug
+                },
                 new SearchTreeGroupEntry(new GUIContent("Action"), 1),
                 new SearchTreeEntry(new GUIContent("Action Node", _indentationIcon))
                 {

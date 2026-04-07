@@ -9,6 +9,7 @@ namespace TEngine.Editor.SkillGraph
             SkillGraphNode node = nodeType switch
             {
                 SkillNodeType.Entry => new EntryNode(),
+                SkillNodeType.Debug => new DebugNode(),
                 SkillNodeType.Action => new ActionNode(),
                 SkillNodeType.Condition => new ConditionNode(),
                 SkillNodeType.Delay => new DelayNode(),
