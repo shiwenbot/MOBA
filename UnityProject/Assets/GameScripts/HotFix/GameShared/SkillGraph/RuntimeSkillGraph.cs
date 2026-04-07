@@ -10,6 +10,9 @@ namespace GameShared.SkillGraph
         public const string Entry = "Entry";
         public const string Debug = "Debug";
         public const string Action = "Action";
+        public const string Condition = "Condition";
+        public const string Branch = "Branch";
+        public const string SetVariable = "SetVariable";
         public const string Delay = "Delay";
     }
 
@@ -21,13 +24,42 @@ namespace GameShared.SkillGraph
     public static class RuntimePropertyKeys
     {
         public const string ActionType = "actionType";
+        public const string Key = "key";
+        public const string Operator = "operator";
         public const string Value = "value";
+        public const string ValueType = "valueType";
         public const string PrefabAssetPath = "prefabAssetPath";
         public const string PrefabLocation = "prefabLocation";
     }
 
+    public static class RuntimeValueTypes
+    {
+        public const string String = "String";
+        public const string Float = "Float";
+        public const string Int = "Int";
+        public const string Bool = "Bool";
+    }
+
+    public static class RuntimeConditionOperators
+    {
+        public const string Exists = "Exists";
+        public const string Equal = "Equal";
+        public const string NotEqual = "NotEqual";
+        public const string Greater = "Greater";
+        public const string GreaterOrEqual = "GreaterOrEqual";
+        public const string Less = "Less";
+        public const string LessOrEqual = "LessOrEqual";
+        public const string IsTrue = "IsTrue";
+        public const string IsFalse = "IsFalse";
+    }
+
     public sealed class RuntimeSkillGraph
     {
+        public const string CurrentVersion = "0.5";
+
+        [JsonProperty("version")]
+        public string Version { get; set; } = CurrentVersion;
+
         [JsonProperty("skillName")]
         public string SkillName { get; set; } = string.Empty;
 
