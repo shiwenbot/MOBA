@@ -1,0 +1,46 @@
+{
+    "graphName": "NewSkillGraph",
+    "nodes": [
+        {
+            "guid": "7206eac0b80ee2244a4a14d8e7f0ace3",
+            "title": "Entry",
+            "nodeType": "Entry",
+            "position": {
+                "x": 122.0,
+                "y": 148.0
+            },
+            "properties": []
+        },
+        {
+            "guid": "56b9434025b4c50478e002a5bd3412ae",
+            "title": "Action",
+            "nodeType": "Action",
+            "position": {
+                "x": 297.0,
+                "y": 148.0
+            },
+            "properties": [
+                {
+                    "key": "actionType",
+                    "value": "PlayAnimation"
+                },
+                {
+                    "key": "value",
+                    "value": "1"
+                },
+                {
+                    "key": "prefabAssetPath",
+                    "value": "Assets/AssetRaw/Actor/Darius.prefab"
+                }
+            ]
+        }
+    ],
+    "edges": [
+        {
+            "outputNodeGuid": "7206eac0b80ee2244a4a14d8e7f0ace3",
+            "outputPortName": "Next",
+            "inputNodeGuid": "56b9434025b4c50478e002a5bd3412ae",
+            "inputPortName": "In"
+        }
+    ]
+}

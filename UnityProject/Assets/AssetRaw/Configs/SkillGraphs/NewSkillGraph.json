@@ -1,0 +1,35 @@
+{
+  "skillName": "NewSkillGraph",
+  "nodes": [
+    {
+      "nodeId": 0,
+      "nodeType": "Entry",
+      "properties": []
+    },
+    {
+      "nodeId": 1,
+      "nodeType": "Action",
+      "properties": [
+        {
+          "key": "actionType",
+          "value": "PlayAnimation"
+        },
+        {
+          "key": "value",
+          "value": "1"
+        },
+        {
+          "key": "prefabLocation",
+          "value": "Darius"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "fromNodeId": 0,
+      "fromPort": "Next",
+      "toNodeId": 1
+    }
+  ]
+}
