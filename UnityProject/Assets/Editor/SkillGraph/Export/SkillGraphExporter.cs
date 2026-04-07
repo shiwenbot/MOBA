@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using GameLogic;
 using GameShared.SkillGraph;
 using Newtonsoft.Json;
 using UnityEditor;
+using UnityEngine;
 
 namespace TEngine.Editor.SkillGraph
 {
@@ -104,8 +106,11 @@ namespace TEngine.Editor.SkillGraph
                 {
                     NodeId = index,
                     NodeType = nodeType,
-                    Properties = CopyProperties(nodeData.properties)
+                    Properties = BuildRuntimeProperties(nodeData, nodeType, out errorMessage)
                 };
+
+                if (!string.IsNullOrEmpty(errorMessage))
+                    return false;
 
                 if (!ValidateNode(runtimeNode, out errorMessage))
                     return false;
@@ -180,10 +185,72 @@ namespace TEngine.Editor.SkillGraph
                     errorMessage = $"Delay node {node.NodeId} duration '{duration}' is invalid.";
                     return false;
                 }
+                case RuntimeNodeTypes.Action:
+                {
+                    string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
+                    if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
+                    {
+                        errorMessage = $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.4.";
+                        return false;
+                    }
+
+                    string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
+                    if (string.IsNullOrWhiteSpace(prefabLocation))
+                    {
+                        errorMessage = $"Action node {node.NodeId} prefabLocation cannot be empty.";
+                        return false;
+                    }
+
+                    string speedValue = node.GetPropertyValue(RuntimePropertyKeys.Value, "1");
+                    if (float.TryParse(speedValue, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                        return true;
+
+                    errorMessage = $"Action node {node.NodeId} speed '{speedValue}' is invalid.";
+                    return false;
+                }
                 default:
                     errorMessage = $"Unsupported runtime node type '{node.NodeType}'.";
                     return false;
             }
+        }
+
+        private static List<RuntimeProperty> BuildRuntimeProperties(
+            SkillNodeData nodeData,
+            string nodeType,
+            out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
+            if (!string.Equals(nodeType, RuntimeNodeTypes.Action, StringComparison.Ordinal))
+                return CopyProperties(nodeData.properties);
+
+            List<RuntimeProperty> result = new List<RuntimeProperty>();
+            foreach (SkillNodePropertyData property in nodeData.properties ?? new List<SkillNodePropertyData>())
+            {
+                if (property == null || string.IsNullOrEmpty(property.key))
+                    continue;
+
+                if (string.Equals(property.key, RuntimePropertyKeys.PrefabAssetPath, StringComparison.Ordinal))
+                {
+                    if (!TryConvertPrefabAssetPathToLocation(property.value, out string prefabLocation, out errorMessage))
+                        return new List<RuntimeProperty>();
+
+                    result.Add(new RuntimeProperty
+                    {
+                        Key = RuntimePropertyKeys.PrefabLocation,
+                        Value = prefabLocation
+                    });
+                    continue;
+                }
+
+                result.Add(new RuntimeProperty
+                {
+                    Key = property.key,
+                    Value = property.value ?? string.Empty
+                });
+            }
+
+            return result;
         }
 
         private static List<RuntimeProperty> CopyProperties(IReadOnlyList<SkillNodePropertyData> properties)
@@ -210,6 +277,7 @@ namespace TEngine.Editor.SkillGraph
         private static bool IsSupportedRuntimeNode(string nodeType) =>
             string.Equals(nodeType, RuntimeNodeTypes.Entry, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Debug, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.Action, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Delay, StringComparison.Ordinal);
 
         private static string NormalizeNodeType(string nodeType)
@@ -223,10 +291,77 @@ namespace TEngine.Editor.SkillGraph
             if (string.Equals(nodeType, SkillNodeType.Entry.ToString(), StringComparison.OrdinalIgnoreCase))
                 return RuntimeNodeTypes.Entry;
 
+            if (string.Equals(nodeType, SkillNodeType.Action.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.Action;
+
             if (string.Equals(nodeType, SkillNodeType.Delay.ToString(), StringComparison.OrdinalIgnoreCase))
                 return RuntimeNodeTypes.Delay;
 
             return nodeType.Trim();
+        }
+
+        private static bool TryConvertPrefabAssetPathToLocation(
+            string prefabAssetPath,
+            out string prefabLocation,
+            out string errorMessage)
+        {
+            prefabLocation = string.Empty;
+            errorMessage = string.Empty;
+
+            string normalizedPath = SkillGraphPaths.NormalizePath(prefabAssetPath);
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+            {
+                errorMessage = "PlayAnimation action requires a prefab reference.";
+                return false;
+            }
+
+            const string assetRoot = "Assets/AssetRaw/";
+            if (!normalizedPath.StartsWith(assetRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                errorMessage = $"PlayAnimation prefab must be under {assetRoot}, but got '{normalizedPath}'.";
+                return false;
+            }
+
+            if (!TryValidatePlayAnimationPrefab(normalizedPath, out errorMessage))
+                return false;
+
+            prefabLocation = Path.GetFileNameWithoutExtension(normalizedPath);
+
+            prefabLocation = SkillGraphPaths.NormalizePath(prefabLocation);
+            if (!string.IsNullOrWhiteSpace(prefabLocation))
+                return true;
+
+            errorMessage = $"PlayAnimation prefab path '{normalizedPath}' could not be converted to a runtime location.";
+            return false;
+        }
+
+        private static bool TryValidatePlayAnimationPrefab(string prefabAssetPath, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabAssetPath);
+            if (prefab == null)
+            {
+                errorMessage = $"PlayAnimation prefab '{prefabAssetPath}' could not be loaded.";
+                return false;
+            }
+
+            SkillGraphAnimancerPlayer player = prefab.GetComponentInChildren<SkillGraphAnimancerPlayer>(true);
+            if (player == null)
+            {
+                errorMessage =
+                    $"PlayAnimation prefab '{prefabAssetPath}' must contain {nameof(SkillGraphAnimancerPlayer)}.";
+                return false;
+            }
+
+            if (!player.HasConfiguredClip)
+            {
+                errorMessage =
+                    $"PlayAnimation prefab '{prefabAssetPath}' must assign an AnimationClip on {nameof(SkillGraphAnimancerPlayer)}.";
+                return false;
+            }
+
+            return true;
         }
 
         private static string GetNodeLabel(SkillNodeData nodeData, int index)
