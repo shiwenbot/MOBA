@@ -64,6 +64,7 @@ namespace TEngine.Editor.SkillGraph
 
             runtimeGraph = new RuntimeSkillGraph
             {
+                Version = RuntimeSkillGraph.CurrentVersion,
                 SkillName = skillName,
                 Nodes = new List<RuntimeSkillNode>(nodes.Count),
                 Connections = new List<RuntimeConnection>()
@@ -125,7 +126,26 @@ namespace TEngine.Editor.SkillGraph
                 return false;
             }
 
+            if (!TryBuildConnections(graphData, runtimeGraph, nodeIdsByGuid, out errorMessage))
+                return false;
+
+            if (!ValidateRequiredConnections(runtimeGraph, out errorMessage))
+                return false;
+
+            return true;
+        }
+
+        private static bool TryBuildConnections(
+            SkillGraphData graphData,
+            RuntimeSkillGraph runtimeGraph,
+            IReadOnlyDictionary<string, int> nodeIdsByGuid,
+            out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
             Dictionary<string, RuntimeConnection> outgoingPorts = new Dictionary<string, RuntimeConnection>(StringComparer.Ordinal);
+            Dictionary<string, RuntimeConnection> incomingPorts = new Dictionary<string, RuntimeConnection>(StringComparer.Ordinal);
+
             foreach (SkillEdgeData edgeData in graphData.edges ?? new List<SkillEdgeData>())
             {
                 if (edgeData == null)
@@ -138,11 +158,39 @@ namespace TEngine.Editor.SkillGraph
                     return false;
                 }
 
-                string fromPort = edgeData.outputPortName ?? string.Empty;
-                string connectionKey = $"{fromNodeId}:{fromPort}";
-                if (outgoingPorts.ContainsKey(connectionKey))
+                RuntimeSkillNode fromNode = runtimeGraph.GetNode(fromNodeId);
+                RuntimeSkillNode toNode = runtimeGraph.GetNode(toNodeId);
+                if (fromNode == null || toNode == null)
                 {
-                    errorMessage = $"Node {fromNodeId} port '{fromPort}' has multiple outgoing connections. v0.3 only supports a single sequential chain.";
+                    errorMessage = "Failed to resolve nodes for an exported connection.";
+                    return false;
+                }
+
+                string fromPort = edgeData.outputPortName ?? string.Empty;
+                string inputPort = edgeData.inputPortName ?? string.Empty;
+                if (!IsValidOutputPort(fromNode.NodeType, fromPort))
+                {
+                    errorMessage = $"Node {fromNodeId} type '{fromNode.NodeType}' does not define output port '{fromPort}'.";
+                    return false;
+                }
+
+                if (!IsValidInputPort(toNode.NodeType, inputPort))
+                {
+                    errorMessage = $"Node {toNodeId} type '{toNode.NodeType}' does not define input port '{inputPort}'.";
+                    return false;
+                }
+
+                string outgoingKey = $"{fromNodeId}:{fromPort}";
+                if (outgoingPorts.ContainsKey(outgoingKey))
+                {
+                    errorMessage = $"Node {fromNodeId} port '{fromPort}' has multiple outgoing connections.";
+                    return false;
+                }
+
+                string incomingKey = $"{toNodeId}:{inputPort}";
+                if (incomingPorts.ContainsKey(incomingKey))
+                {
+                    errorMessage = $"Node {toNodeId} port '{inputPort}' has multiple incoming connections.";
                     return false;
                 }
 
@@ -153,8 +201,40 @@ namespace TEngine.Editor.SkillGraph
                     ToNodeId = toNodeId
                 };
 
-                outgoingPorts.Add(connectionKey, connection);
+                outgoingPorts.Add(outgoingKey, connection);
+                incomingPorts.Add(incomingKey, connection);
                 runtimeGraph.Connections.Add(connection);
+            }
+
+            return true;
+        }
+
+        private static bool ValidateRequiredConnections(RuntimeSkillGraph runtimeGraph, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
+            foreach (RuntimeSkillNode node in runtimeGraph.Nodes)
+            {
+                if (node == null)
+                    continue;
+
+                if (string.Equals(node.NodeType, RuntimeNodeTypes.Entry, StringComparison.Ordinal) &&
+                    runtimeGraph.GetNextConnections(node.NodeId, "Next").Count == 0)
+                {
+                    errorMessage = $"Entry node {node.NodeId} must connect to a Next node.";
+                    return false;
+                }
+
+                if (string.Equals(node.NodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
+                    string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal))
+                {
+                    if (runtimeGraph.GetNextConnections(node.NodeId, "True").Count == 0 ||
+                        runtimeGraph.GetNextConnections(node.NodeId, "False").Count == 0)
+                    {
+                        errorMessage = $"{node.NodeType} node {node.NodeId} must connect both True and False outputs.";
+                        return false;
+                    }
+                }
             }
 
             return true;
@@ -163,55 +243,190 @@ namespace TEngine.Editor.SkillGraph
         private static bool ValidateNode(RuntimeSkillNode node, out string errorMessage)
         {
             errorMessage = string.Empty;
+
             switch (node.NodeType)
             {
                 case RuntimeNodeTypes.Entry:
                     return true;
                 case RuntimeNodeTypes.Debug:
-                {
-                    string message = node.GetPropertyValue("message");
-                    if (!string.IsNullOrWhiteSpace(message))
-                        return true;
-
-                    errorMessage = $"Debug node {node.NodeId} message cannot be empty.";
-                    return false;
-                }
+                    return ValidateDebugNode(node, out errorMessage);
                 case RuntimeNodeTypes.Delay:
-                {
-                    string duration = node.GetPropertyValue("duration");
-                    if (float.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
-                        return true;
-
-                    errorMessage = $"Delay node {node.NodeId} duration '{duration}' is invalid.";
-                    return false;
-                }
+                    return ValidateDelayNode(node, out errorMessage);
                 case RuntimeNodeTypes.Action:
-                {
-                    string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
-                    if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
-                    {
-                        errorMessage = $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.4.";
-                        return false;
-                    }
-
-                    string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
-                    if (string.IsNullOrWhiteSpace(prefabLocation))
-                    {
-                        errorMessage = $"Action node {node.NodeId} prefabLocation cannot be empty.";
-                        return false;
-                    }
-
-                    string speedValue = node.GetPropertyValue(RuntimePropertyKeys.Value, "1");
-                    if (float.TryParse(speedValue, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
-                        return true;
-
-                    errorMessage = $"Action node {node.NodeId} speed '{speedValue}' is invalid.";
-                    return false;
-                }
+                    return ValidateActionNode(node, out errorMessage);
+                case RuntimeNodeTypes.Condition:
+                    return ValidateConditionNode(node, out errorMessage);
+                case RuntimeNodeTypes.Branch:
+                    return ValidateBranchNode(node, out errorMessage);
+                case RuntimeNodeTypes.SetVariable:
+                    return ValidateSetVariableNode(node, out errorMessage);
                 default:
                     errorMessage = $"Unsupported runtime node type '{node.NodeType}'.";
                     return false;
             }
+        }
+
+        private static bool ValidateDebugNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string message = node.GetPropertyValue("message");
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Debug node {node.NodeId} message cannot be empty.";
+            return false;
+        }
+
+        private static bool ValidateDelayNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string duration = node.GetPropertyValue("duration");
+            if (float.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Delay node {node.NodeId} duration '{duration}' is invalid.";
+            return false;
+        }
+
+        private static bool ValidateActionNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
+            if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
+            {
+                errorMessage = $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.5.";
+                return false;
+            }
+
+            string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
+            if (string.IsNullOrWhiteSpace(prefabLocation))
+            {
+                errorMessage = $"Action node {node.NodeId} prefabLocation cannot be empty.";
+                return false;
+            }
+
+            string speedValue = node.GetPropertyValue(RuntimePropertyKeys.Value, "1");
+            if (float.TryParse(speedValue, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Action node {node.NodeId} speed '{speedValue}' is invalid.";
+            return false;
+        }
+
+        private static bool ValidateConditionNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                errorMessage = $"Condition node {node.NodeId} key cannot be empty.";
+                return false;
+            }
+
+            string conditionOperator = node.GetPropertyValue(RuntimePropertyKeys.Operator, RuntimeConditionOperators.Exists);
+            if (!IsSupportedConditionOperator(conditionOperator))
+            {
+                errorMessage = $"Condition node {node.NodeId} operator '{conditionOperator}' is invalid.";
+                return false;
+            }
+
+            string valueType = node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.Bool);
+            if (!IsSupportedValueType(valueType))
+            {
+                errorMessage = $"Condition node {node.NodeId} valueType '{valueType}' is invalid.";
+                return false;
+            }
+
+            if (string.Equals(conditionOperator, RuntimeConditionOperators.Exists, StringComparison.OrdinalIgnoreCase))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            if (string.Equals(conditionOperator, RuntimeConditionOperators.IsTrue, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(conditionOperator, RuntimeConditionOperators.IsFalse, StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(valueType, RuntimeValueTypes.Bool, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorMessage = string.Empty;
+                    return true;
+                }
+
+                errorMessage = $"Condition node {node.NodeId} operator '{conditionOperator}' requires Bool valueType.";
+                return false;
+            }
+
+            string rawValue = node.GetPropertyValue(RuntimePropertyKeys.Value);
+            if (string.IsNullOrWhiteSpace(rawValue) && !string.Equals(valueType, RuntimeValueTypes.String, StringComparison.OrdinalIgnoreCase))
+            {
+                errorMessage = $"Condition node {node.NodeId} compare value cannot be empty.";
+                return false;
+            }
+
+            if ((string.Equals(conditionOperator, RuntimeConditionOperators.Greater, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(conditionOperator, RuntimeConditionOperators.GreaterOrEqual, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(conditionOperator, RuntimeConditionOperators.Less, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(conditionOperator, RuntimeConditionOperators.LessOrEqual, StringComparison.OrdinalIgnoreCase)) &&
+                !IsNumericValueType(valueType))
+            {
+                errorMessage = $"Condition node {node.NodeId} numeric operator '{conditionOperator}' requires Int or Float valueType.";
+                return false;
+            }
+
+            if (TryValidateRawValue(valueType, rawValue, out errorMessage))
+                return true;
+
+            errorMessage = $"Condition node {node.NodeId} compare value is invalid: {errorMessage}";
+            return false;
+        }
+
+        private static bool ValidateBranchNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                errorMessage = $"Branch node {node.NodeId} key cannot be empty.";
+                return false;
+            }
+
+            string valueType = node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.Bool);
+            if (string.Equals(valueType, RuntimeValueTypes.Bool, StringComparison.OrdinalIgnoreCase))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Branch node {node.NodeId} only supports Bool valueType, but got '{valueType}'.";
+            return false;
+        }
+
+        private static bool ValidateSetVariableNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                errorMessage = $"SetVariable node {node.NodeId} key cannot be empty.";
+                return false;
+            }
+
+            string valueType = node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.String);
+            if (!IsSupportedValueType(valueType))
+            {
+                errorMessage = $"SetVariable node {node.NodeId} valueType '{valueType}' is invalid.";
+                return false;
+            }
+
+            string rawValue = node.GetPropertyValue(RuntimePropertyKeys.Value);
+            if (TryValidateRawValue(valueType, rawValue, out errorMessage))
+                return true;
+
+            errorMessage = $"SetVariable node {node.NodeId} value is invalid: {errorMessage}";
+            return false;
         }
 
         private static List<RuntimeProperty> BuildRuntimeProperties(
@@ -274,11 +489,73 @@ namespace TEngine.Editor.SkillGraph
             return result;
         }
 
+        private static bool TryValidateRawValue(string valueType, string rawValue, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+
+            if (string.Equals(valueType, RuntimeValueTypes.String, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (string.Equals(valueType, RuntimeValueTypes.Float, StringComparison.OrdinalIgnoreCase))
+            {
+                if (float.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                    return true;
+
+                errorMessage = $"'{rawValue}' is not a valid Float.";
+                return false;
+            }
+
+            if (string.Equals(valueType, RuntimeValueTypes.Int, StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                    return true;
+
+                errorMessage = $"'{rawValue}' is not a valid Int.";
+                return false;
+            }
+
+            if (string.Equals(valueType, RuntimeValueTypes.Bool, StringComparison.OrdinalIgnoreCase))
+            {
+                if (bool.TryParse(rawValue, out _))
+                    return true;
+
+                errorMessage = $"'{rawValue}' is not a valid Bool.";
+                return false;
+            }
+
+            errorMessage = $"Unsupported valueType '{valueType}'.";
+            return false;
+        }
+
         private static bool IsSupportedRuntimeNode(string nodeType) =>
             string.Equals(nodeType, RuntimeNodeTypes.Entry, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Debug, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Action, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.SetVariable, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Delay, StringComparison.Ordinal);
+
+        private static bool IsSupportedValueType(string valueType) =>
+            string.Equals(valueType, RuntimeValueTypes.String, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(valueType, RuntimeValueTypes.Float, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(valueType, RuntimeValueTypes.Int, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(valueType, RuntimeValueTypes.Bool, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsNumericValueType(string valueType) =>
+            string.Equals(valueType, RuntimeValueTypes.Float, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(valueType, RuntimeValueTypes.Int, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsSupportedConditionOperator(string conditionOperator) =>
+            string.Equals(conditionOperator, RuntimeConditionOperators.Exists, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.Equal, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.NotEqual, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.Greater, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.GreaterOrEqual, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.Less, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.LessOrEqual, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.IsTrue, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(conditionOperator, RuntimeConditionOperators.IsFalse, StringComparison.OrdinalIgnoreCase);
 
         private static string NormalizeNodeType(string nodeType)
         {
@@ -294,10 +571,61 @@ namespace TEngine.Editor.SkillGraph
             if (string.Equals(nodeType, SkillNodeType.Action.ToString(), StringComparison.OrdinalIgnoreCase))
                 return RuntimeNodeTypes.Action;
 
+            if (string.Equals(nodeType, SkillNodeType.Condition.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.Condition;
+
+            if (string.Equals(nodeType, SkillNodeType.Branch.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.Branch;
+
+            if (string.Equals(nodeType, SkillNodeType.SetVariable.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.SetVariable;
+
             if (string.Equals(nodeType, SkillNodeType.Delay.ToString(), StringComparison.OrdinalIgnoreCase))
                 return RuntimeNodeTypes.Delay;
 
             return nodeType.Trim();
+        }
+
+        private static bool IsValidInputPort(string nodeType, string portName)
+        {
+            if (string.IsNullOrWhiteSpace(portName))
+                return false;
+
+            switch (nodeType)
+            {
+                case RuntimeNodeTypes.Debug:
+                case RuntimeNodeTypes.Action:
+                case RuntimeNodeTypes.Condition:
+                case RuntimeNodeTypes.Branch:
+                case RuntimeNodeTypes.SetVariable:
+                case RuntimeNodeTypes.Delay:
+                    return string.Equals(portName, "In", StringComparison.Ordinal);
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsValidOutputPort(string nodeType, string portName)
+        {
+            if (string.IsNullOrWhiteSpace(portName))
+                return false;
+
+            switch (nodeType)
+            {
+                case RuntimeNodeTypes.Entry:
+                    return string.Equals(portName, "Next", StringComparison.Ordinal);
+                case RuntimeNodeTypes.Debug:
+                case RuntimeNodeTypes.Action:
+                case RuntimeNodeTypes.SetVariable:
+                case RuntimeNodeTypes.Delay:
+                    return string.Equals(portName, "Out", StringComparison.Ordinal);
+                case RuntimeNodeTypes.Condition:
+                case RuntimeNodeTypes.Branch:
+                    return string.Equals(portName, "True", StringComparison.Ordinal) ||
+                           string.Equals(portName, "False", StringComparison.Ordinal);
+                default:
+                    return false;
+            }
         }
 
         private static bool TryConvertPrefabAssetPathToLocation(
@@ -326,7 +654,6 @@ namespace TEngine.Editor.SkillGraph
                 return false;
 
             prefabLocation = Path.GetFileNameWithoutExtension(normalizedPath);
-
             prefabLocation = SkillGraphPaths.NormalizePath(prefabLocation);
             if (!string.IsNullOrWhiteSpace(prefabLocation))
                 return true;
@@ -349,8 +676,7 @@ namespace TEngine.Editor.SkillGraph
             SkillGraphAnimancerPlayer player = prefab.GetComponentInChildren<SkillGraphAnimancerPlayer>(true);
             if (player == null)
             {
-                errorMessage =
-                    $"PlayAnimation prefab '{prefabAssetPath}' must contain {nameof(SkillGraphAnimancerPlayer)}.";
+                errorMessage = $"PlayAnimation prefab '{prefabAssetPath}' must contain {nameof(SkillGraphAnimancerPlayer)}.";
                 return false;
             }
 
