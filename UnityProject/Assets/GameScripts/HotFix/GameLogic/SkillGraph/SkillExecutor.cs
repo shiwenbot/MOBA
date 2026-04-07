@@ -74,40 +74,49 @@ namespace GameLogic
 
         private async FTask<TextAsset> LoadSkillGraphAsset(string skillName)
         {
-            foreach (string location in GetCandidateLocations(skillName))
-            {
-                TextAsset textAsset = await TryLoadTextAsset(location);
-                if (textAsset != null)
-                    return textAsset;
-            }
-
-            return null;
+            return await TryLoadTextAsset(GetSkillGraphLocation(skillName));
         }
 
-        private static string[] GetCandidateLocations(string skillName)
+        private static string GetSkillGraphLocation(string skillName)
         {
             string normalizedFileName = skillName.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                 ? skillName
                 : $"{skillName}.json";
-            string baseName = Path.GetFileNameWithoutExtension(normalizedFileName);
-
-            return new[]
-            {
-                baseName,
-                normalizedFileName,
-                $"SkillGraphs/{baseName}",
-                $"SkillGraphs/{normalizedFileName}",
-                $"Configs/SkillGraphs/{baseName}",
-                $"Configs/SkillGraphs/{normalizedFileName}",
-                $"Assets/AssetRaw/Configs/SkillGraphs/{normalizedFileName}"
-            };
+            return Path.GetFileNameWithoutExtension(normalizedFileName);
         }
 
         private static async FTask<TextAsset> TryLoadTextAsset(string location)
         {
+            if (string.IsNullOrWhiteSpace(location) || !GameModule.Resource.CheckLocationValid(location))
+                return null;
+
             try
             {
                 return await GameModule.Resource.LoadAssetAsync<TextAsset>(location);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static async FTask<GameObject> LoadSkillPrefabInstance(string prefabLocation)
+        {
+            GameObject instance = await TryLoadPrefabInstance(prefabLocation);
+            if (instance != null)
+                return instance;
+
+            throw new FileNotFoundException($"Skill prefab '{prefabLocation}' was not found in the resource package.");
+        }
+
+        private static async FTask<GameObject> TryLoadPrefabInstance(string location)
+        {
+            if (string.IsNullOrWhiteSpace(location) || !GameModule.Resource.CheckLocationValid(location))
+                return null;
+
+            try
+            {
+                return await GameModule.Resource.LoadGameObjectAsync(location);
             }
             catch (Exception)
             {
@@ -129,6 +138,37 @@ namespace GameLogic
                     throw new InvalidOperationException("GameClient.Scene is not ready for skill graph delay execution.");
 
                 return await FTask.UnityWait(scene, milliseconds, cancellationToken);
+            }
+
+            public async FTask PlayAnimationAsync(
+                SkillContext context,
+                string prefabLocation,
+                float speed,
+                FCancellationToken? cancellationToken = null)
+            {
+                if (cancellationToken != null && cancellationToken.IsCancel)
+                    return;
+
+                GameObject instance = await LoadSkillPrefabInstance(prefabLocation);
+                if (instance == null)
+                    throw new InvalidOperationException($"Failed to instantiate skill prefab '{prefabLocation}'.");
+
+                if (cancellationToken != null && cancellationToken.IsCancel)
+                {
+                    UnityEngine.Object.Destroy(instance);
+                    return;
+                }
+
+                SkillGraphAnimancerPlayer animancerPlayer = instance.GetComponentInChildren<SkillGraphAnimancerPlayer>(true);
+                if (animancerPlayer == null)
+                {
+                    UnityEngine.Object.Destroy(instance);
+                    throw new InvalidOperationException(
+                        $"Skill prefab '{prefabLocation}' is missing {nameof(SkillGraphAnimancerPlayer)}.");
+                }
+
+                animancerPlayer.Play(speed);
+                await FTask.CompletedTask;
             }
         }
     }
