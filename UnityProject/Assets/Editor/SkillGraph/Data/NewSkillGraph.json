@@ -2,44 +2,194 @@
     "graphName": "NewSkillGraph",
     "nodes": [
         {
-            "guid": "7206eac0b80ee2244a4a14d8e7f0ace3",
+            "guid": "ecc357a8351684543b98b8b6b74a1f86",
+            "title": "Debug",
+            "nodeType": "Debug",
+            "position": {
+                "x": 688.0,
+                "y": 126.0
+            },
+            "properties": [
+                {
+                    "key": "message",
+                    "value": "Hello world true"
+                }
+            ]
+        },
+        {
+            "guid": "fd2747ff61d4e18479c246870e2ec39a",
+            "title": "Condition",
+            "nodeType": "Condition",
+            "position": {
+                "x": 210.0,
+                "y": 152.0
+            },
+            "properties": [
+                {
+                    "key": "key",
+                    "value": "Level"
+                },
+                {
+                    "key": "operator",
+                    "value": "Greater"
+                },
+                {
+                    "key": "valueType",
+                    "value": "Int"
+                },
+                {
+                    "key": "value",
+                    "value": "0"
+                }
+            ]
+        },
+        {
+            "guid": "431a69bb3dfa8b940bf516204baecfa7",
+            "title": "Set Variable",
+            "nodeType": "SetVariable",
+            "position": {
+                "x": 7.0,
+                "y": 239.0
+            },
+            "properties": [
+                {
+                    "key": "key",
+                    "value": "Level"
+                },
+                {
+                    "key": "valueType",
+                    "value": "Int"
+                },
+                {
+                    "key": "value",
+                    "value": "100"
+                }
+            ]
+        },
+        {
+            "guid": "fb8614f905be78046988e00cba86d738",
+            "title": "Debug",
+            "nodeType": "Debug",
+            "position": {
+                "x": 406.0,
+                "y": 374.0
+            },
+            "properties": [
+                {
+                    "key": "message",
+                    "value": "Condition false"
+                }
+            ]
+        },
+        {
+            "guid": "7700a972a08936746825ea2d4b601727",
+            "title": "Debug",
+            "nodeType": "Debug",
+            "position": {
+                "x": 684.0,
+                "y": 272.0
+            },
+            "properties": [
+                {
+                    "key": "message",
+                    "value": "Hello world false"
+                }
+            ]
+        },
+        {
+            "guid": "c91f195e9be619a4fbdc3f4d3d02a969",
+            "title": "Set Variable",
+            "nodeType": "SetVariable",
+            "position": {
+                "x": 406.0,
+                "y": -8.0
+            },
+            "properties": [
+                {
+                    "key": "key",
+                    "value": "IsLucky"
+                },
+                {
+                    "key": "valueType",
+                    "value": "Bool"
+                },
+                {
+                    "key": "value",
+                    "value": "true"
+                }
+            ]
+        },
+        {
+            "guid": "9d0964693cbea2b4ca6d193625bd60d4",
             "title": "Entry",
             "nodeType": "Entry",
             "position": {
-                "x": 122.0,
-                "y": 148.0
+                "x": -135.0,
+                "y": 234.0
             },
             "properties": []
         },
         {
-            "guid": "56b9434025b4c50478e002a5bd3412ae",
-            "title": "Action",
-            "nodeType": "Action",
+            "guid": "035f77a4f7c04644397ca5d410b68d68",
+            "title": "Branch",
+            "nodeType": "Branch",
             "position": {
-                "x": 297.0,
-                "y": 148.0
+                "x": 457.0,
+                "y": 163.0
             },
             "properties": [
                 {
-                    "key": "actionType",
-                    "value": "PlayAnimation"
+                    "key": "key",
+                    "value": "IsLucky"
                 },
                 {
-                    "key": "value",
-                    "value": "1"
-                },
-                {
-                    "key": "prefabAssetPath",
-                    "value": "Assets/AssetRaw/Actor/Darius.prefab"
+                    "key": "valueType",
+                    "value": "Bool"
                 }
             ]
         }
     ],
     "edges": [
         {
-            "outputNodeGuid": "7206eac0b80ee2244a4a14d8e7f0ace3",
+            "outputNodeGuid": "9d0964693cbea2b4ca6d193625bd60d4",
             "outputPortName": "Next",
-            "inputNodeGuid": "56b9434025b4c50478e002a5bd3412ae",
+            "inputNodeGuid": "431a69bb3dfa8b940bf516204baecfa7",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
+            "outputPortName": "False",
+            "inputNodeGuid": "7700a972a08936746825ea2d4b601727",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
+            "outputPortName": "True",
+            "inputNodeGuid": "ecc357a8351684543b98b8b6b74a1f86",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "431a69bb3dfa8b940bf516204baecfa7",
+            "outputPortName": "Out",
+            "inputNodeGuid": "fd2747ff61d4e18479c246870e2ec39a",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "fd2747ff61d4e18479c246870e2ec39a",
+            "outputPortName": "False",
+            "inputNodeGuid": "fb8614f905be78046988e00cba86d738",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "fd2747ff61d4e18479c246870e2ec39a",
+            "outputPortName": "True",
+            "inputNodeGuid": "c91f195e9be619a4fbdc3f4d3d02a969",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "c91f195e9be619a4fbdc3f4d3d02a969",
+            "outputPortName": "Out",
+            "inputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
             "inputPortName": "In"
         }
     ]
