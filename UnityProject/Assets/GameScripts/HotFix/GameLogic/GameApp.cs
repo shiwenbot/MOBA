@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using Cysharp.Threading.Tasks;
 using GameLogic;
+using GameShared.SkillGraph;
 #if ENABLE_OBFUZ
 using Obfuz;
 #endif
@@ -44,6 +45,22 @@ public partial class GameApp
             await GameClient.Instance.InitAsync(_hotfixAssembly);
             // GameEvent.Get<ILoginUI>().ShowLoginUI();
             GameModule.UI.ShowUIAsync<LoginUI>();
+            await TriggerStartupSkillGraph();
+        }
+
+        async UniTask TriggerStartupSkillGraph()
+        {
+            await UniTask.Delay(1000);
+
+            try
+            {
+                await SkillExecutor.Instance.CastSkill("NewSkillGraph", new SkillContext());
+                Log.Warning("======= Startup SkillGraph Cast Complete: NewSkillGraph =======");
+            }
+            catch (System.Exception exception)
+            {
+                Log.Error($"Startup SkillGraph Cast Failed: {exception}");
+            }
         }
     }
     
