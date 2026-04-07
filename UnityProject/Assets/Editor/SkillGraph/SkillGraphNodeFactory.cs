@@ -12,6 +12,8 @@ namespace TEngine.Editor.SkillGraph
                 SkillNodeType.Debug => new DebugNode(),
                 SkillNodeType.Action => new ActionNode(),
                 SkillNodeType.Condition => new ConditionNode(),
+                SkillNodeType.Branch => new BranchNode(),
+                SkillNodeType.SetVariable => new SetVariableNode(),
                 SkillNodeType.Delay => new DelayNode(),
                 _ => new ActionNode()
             };

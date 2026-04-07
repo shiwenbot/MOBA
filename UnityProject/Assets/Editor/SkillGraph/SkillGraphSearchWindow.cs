@@ -55,6 +55,18 @@ namespace TEngine.Editor.SkillGraph
                     level = 2,
                     userData = SkillNodeType.Condition
                 },
+                new SearchTreeGroupEntry(new GUIContent("Branch"), 1),
+                new SearchTreeEntry(new GUIContent("Branch Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.Branch
+                },
+                new SearchTreeGroupEntry(new GUIContent("Variables"), 1),
+                new SearchTreeEntry(new GUIContent("Set Variable Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.SetVariable
+                },
                 new SearchTreeGroupEntry(new GUIContent("Delay"), 1),
                 new SearchTreeEntry(new GUIContent("Delay Node", _indentationIcon))
                 {

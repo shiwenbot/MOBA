@@ -110,6 +110,12 @@ namespace TEngine.Editor.SkillGraph
         protected void AddProperty(List<SkillNodePropertyData> properties, string key, float value) =>
             AddProperty(properties, key, value.ToString(CultureInfo.InvariantCulture));
 
+        protected void AddProperty(List<SkillNodePropertyData> properties, string key, int value) =>
+            AddProperty(properties, key, value.ToString(CultureInfo.InvariantCulture));
+
+        protected void AddProperty(List<SkillNodePropertyData> properties, string key, bool value) =>
+            AddProperty(properties, key, value ? "true" : "false");
+
         protected void AddProperty(List<SkillNodePropertyData> properties, string key, Enum value) =>
             AddProperty(properties, key, value.ToString());
 

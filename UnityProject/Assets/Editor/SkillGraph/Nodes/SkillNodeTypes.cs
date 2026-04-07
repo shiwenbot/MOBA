@@ -8,6 +8,8 @@ namespace TEngine.Editor.SkillGraph
         Debug,
         Action,
         Condition,
+        Branch,
+        SetVariable,
         Delay
     }
 
@@ -19,12 +21,25 @@ namespace TEngine.Editor.SkillGraph
         Custom
     }
 
-    internal enum SkillConditionType
+    internal enum SkillBlackboardValueType
     {
-        AlwaysTrue,
-        TargetInRange,
-        ResourceEnough,
-        Custom
+        String,
+        Float,
+        Int,
+        Bool
+    }
+
+    internal enum SkillConditionOperator
+    {
+        Exists,
+        Equal,
+        NotEqual,
+        Greater,
+        GreaterOrEqual,
+        Less,
+        LessOrEqual,
+        IsTrue,
+        IsFalse
     }
 
     internal static class SkillNodeTypeUtility
