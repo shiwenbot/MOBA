@@ -54,8 +54,22 @@ public partial class GameApp
 
             try
             {
-                await SkillExecutor.Instance.CastSkill("NewSkillGraph", new SkillContext());
-                Log.Warning("======= Startup SkillGraph Cast Complete: NewSkillGraph =======");
+                SkillGraphRunResult result = await SkillExecutor.Instance.CastSkill("NewSkillGraph", new SkillContext());
+                if (result.IsSuccess)
+                {
+                    Log.Warning("======= Startup SkillGraph Cast Complete: NewSkillGraph =======");
+                    return;
+                }
+
+                if (result.IsCancelled)
+                {
+                    Log.Warning($"Startup SkillGraph Cast Cancelled: {result.Message}");
+                    return;
+                }
+
+                Log.Error($"Startup SkillGraph Cast Failed: {result.Message}");
+                if (result.Exception != null)
+                    Log.Error(result.Exception.ToString());
             }
             catch (System.Exception exception)
             {
