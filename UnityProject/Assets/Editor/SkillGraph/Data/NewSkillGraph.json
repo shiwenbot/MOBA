@@ -2,21 +2,6 @@
     "graphName": "NewSkillGraph",
     "nodes": [
         {
-            "guid": "ecc357a8351684543b98b8b6b74a1f86",
-            "title": "Debug",
-            "nodeType": "Debug",
-            "position": {
-                "x": 688.0,
-                "y": 126.0
-            },
-            "properties": [
-                {
-                    "key": "message",
-                    "value": "Hello world true"
-                }
-            ]
-        },
-        {
             "guid": "fd2747ff61d4e18479c246870e2ec39a",
             "title": "Condition",
             "nodeType": "Condition",
@@ -82,21 +67,6 @@
             ]
         },
         {
-            "guid": "7700a972a08936746825ea2d4b601727",
-            "title": "Debug",
-            "nodeType": "Debug",
-            "position": {
-                "x": 684.0,
-                "y": 272.0
-            },
-            "properties": [
-                {
-                    "key": "message",
-                    "value": "Hello world false"
-                }
-            ]
-        },
-        {
             "guid": "c91f195e9be619a4fbdc3f4d3d02a969",
             "title": "Set Variable",
             "nodeType": "SetVariable",
@@ -134,8 +104,8 @@
             "title": "Branch",
             "nodeType": "Branch",
             "position": {
-                "x": 457.0,
-                "y": 163.0
+                "x": 562.0,
+                "y": 137.0
             },
             "properties": [
                 {
@@ -145,6 +115,51 @@
                 {
                     "key": "valueType",
                     "value": "Bool"
+                }
+            ]
+        },
+        {
+            "guid": "7700a972a08936746825ea2d4b601727",
+            "title": "Debug",
+            "nodeType": "Debug",
+            "position": {
+                "x": 809.0,
+                "y": 277.0
+            },
+            "properties": [
+                {
+                    "key": "message",
+                    "value": "Hello world false"
+                }
+            ]
+        },
+        {
+            "guid": "8f00add91d53dd8468d4124b8de781c7",
+            "title": "Delay",
+            "nodeType": "Delay",
+            "position": {
+                "x": 843.0,
+                "y": 78.0
+            },
+            "properties": [
+                {
+                    "key": "duration",
+                    "value": "5"
+                }
+            ]
+        },
+        {
+            "guid": "e55286db34b64164b98f6748eaeb2fd1",
+            "title": "Debug",
+            "nodeType": "Debug",
+            "position": {
+                "x": 1067.0,
+                "y": 105.0
+            },
+            "properties": [
+                {
+                    "key": "message",
+                    "value": "Should not run"
                 }
             ]
         }
@@ -160,12 +175,6 @@
             "outputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
             "outputPortName": "False",
             "inputNodeGuid": "7700a972a08936746825ea2d4b601727",
-            "inputPortName": "In"
-        },
-        {
-            "outputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
-            "outputPortName": "True",
-            "inputNodeGuid": "ecc357a8351684543b98b8b6b74a1f86",
             "inputPortName": "In"
         },
         {
@@ -190,6 +199,18 @@
             "outputNodeGuid": "c91f195e9be619a4fbdc3f4d3d02a969",
             "outputPortName": "Out",
             "inputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "035f77a4f7c04644397ca5d410b68d68",
+            "outputPortName": "True",
+            "inputNodeGuid": "8f00add91d53dd8468d4124b8de781c7",
+            "inputPortName": "In"
+        },
+        {
+            "outputNodeGuid": "8f00add91d53dd8468d4124b8de781c7",
+            "outputPortName": "Out",
+            "inputNodeGuid": "e55286db34b64164b98f6748eaeb2fd1",
             "inputPortName": "In"
         }
     ]

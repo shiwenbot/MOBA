@@ -1,19 +1,9 @@
 {
-  "version": "0.5",
+  "version": "0.6",
   "skillName": "NewSkillGraph",
   "nodes": [
     {
       "nodeId": 0,
-      "nodeType": "Debug",
-      "properties": [
-        {
-          "key": "message",
-          "value": "Hello world true"
-        }
-      ]
-    },
-    {
-      "nodeId": 1,
       "nodeType": "Condition",
       "properties": [
         {
@@ -35,7 +25,7 @@
       ]
     },
     {
-      "nodeId": 2,
+      "nodeId": 1,
       "nodeType": "SetVariable",
       "properties": [
         {
@@ -53,7 +43,7 @@
       ]
     },
     {
-      "nodeId": 3,
+      "nodeId": 2,
       "nodeType": "Debug",
       "properties": [
         {
@@ -63,17 +53,7 @@
       ]
     },
     {
-      "nodeId": 4,
-      "nodeType": "Debug",
-      "properties": [
-        {
-          "key": "message",
-          "value": "Hello world false"
-        }
-      ]
-    },
-    {
-      "nodeId": 5,
+      "nodeId": 3,
       "nodeType": "SetVariable",
       "properties": [
         {
@@ -91,12 +71,12 @@
       ]
     },
     {
-      "nodeId": 6,
+      "nodeId": 4,
       "nodeType": "Entry",
       "properties": []
     },
     {
-      "nodeId": 7,
+      "nodeId": 5,
       "nodeType": "Branch",
       "properties": [
         {
@@ -108,43 +88,78 @@
           "value": "Bool"
         }
       ]
+    },
+    {
+      "nodeId": 6,
+      "nodeType": "Debug",
+      "properties": [
+        {
+          "key": "message",
+          "value": "Hello world false"
+        }
+      ]
+    },
+    {
+      "nodeId": 7,
+      "nodeType": "Delay",
+      "properties": [
+        {
+          "key": "duration",
+          "value": "5"
+        }
+      ]
+    },
+    {
+      "nodeId": 8,
+      "nodeType": "Debug",
+      "properties": [
+        {
+          "key": "message",
+          "value": "Should not run"
+        }
+      ]
     }
   ],
   "connections": [
     {
-      "fromNodeId": 6,
+      "fromNodeId": 4,
       "fromPort": "Next",
-      "toNodeId": 2
-    },
-    {
-      "fromNodeId": 7,
-      "fromPort": "False",
-      "toNodeId": 4
-    },
-    {
-      "fromNodeId": 7,
-      "fromPort": "True",
-      "toNodeId": 0
-    },
-    {
-      "fromNodeId": 2,
-      "fromPort": "Out",
       "toNodeId": 1
     },
     {
-      "fromNodeId": 1,
+      "fromNodeId": 5,
       "fromPort": "False",
-      "toNodeId": 3
+      "toNodeId": 6
     },
     {
       "fromNodeId": 1,
+      "fromPort": "Out",
+      "toNodeId": 0
+    },
+    {
+      "fromNodeId": 0,
+      "fromPort": "False",
+      "toNodeId": 2
+    },
+    {
+      "fromNodeId": 0,
       "fromPort": "True",
+      "toNodeId": 3
+    },
+    {
+      "fromNodeId": 3,
+      "fromPort": "Out",
       "toNodeId": 5
     },
     {
       "fromNodeId": 5,
-      "fromPort": "Out",
+      "fromPort": "True",
       "toNodeId": 7
+    },
+    {
+      "fromNodeId": 7,
+      "fromPort": "Out",
+      "toNodeId": 8
     }
   ]
 }
