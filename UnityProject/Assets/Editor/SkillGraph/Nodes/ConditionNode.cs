@@ -1,25 +1,28 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using UnityEditor.UIElements;
 using UnityEngine.UIElements;
 
 namespace TEngine.Editor.SkillGraph
 {
-    internal sealed class ConditionNode : SkillGraphNode
+    internal sealed class ConditionNode : SkillGraphNode, ISkillVariableBindableNode
     {
         private const string KeyProperty = "key";
         private const string OperatorProperty = "operator";
         private const string ValueTypeProperty = "valueType";
         private const string ValueProperty = "value";
+        private const string MissingTypeText = "Missing";
 
-        private readonly TextField _keyField;
+        private readonly PopupField<string> _keyField;
         private readonly EnumField _operatorField;
-        private readonly EnumField _valueTypeField;
+        private readonly Label _valueTypeLabel;
         private readonly TextField _stringValueField;
         private readonly FloatField _floatValueField;
         private readonly IntegerField _intValueField;
         private readonly Toggle _boolValueField;
+        private readonly List<SkillVariableDef> _availableVariables = new List<SkillVariableDef>();
 
         private string _key = string.Empty;
         private SkillConditionOperator _conditionOperator = SkillConditionOperator.Exists;
@@ -36,32 +39,49 @@ namespace TEngine.Editor.SkillGraph
             AddFlowOutput("True");
             AddFlowOutput("False");
 
-            _keyField = new TextField("Key") { value = _key };
-            _keyField.RegisterValueChangedCallback(evt => _key = evt.newValue ?? string.Empty);
+            _keyField = new PopupField<string>("Key", BuildKeyChoices(), 0, FormatVariableName, FormatVariableName);
+            _keyField.RegisterValueChangedCallback(OnKeyChanged);
             AddPropertyField(_keyField);
 
             _operatorField = new EnumField("Operator", _conditionOperator);
             _operatorField.RegisterValueChangedCallback(OnOperatorChanged);
             AddPropertyField(_operatorField);
 
-            _valueTypeField = new EnumField("Value Type", _valueType);
-            _valueTypeField.RegisterValueChangedCallback(OnValueTypeChanged);
-            AddPropertyField(_valueTypeField);
+            _valueTypeLabel = new Label();
+            _valueTypeLabel.style.marginTop = 2f;
+            _valueTypeLabel.style.marginBottom = 2f;
+            AddPropertyField(_valueTypeLabel);
 
             _stringValueField = new TextField("Value") { value = _stringValue };
-            _stringValueField.RegisterValueChangedCallback(evt => _stringValue = evt.newValue ?? string.Empty);
+            _stringValueField.RegisterValueChangedCallback(evt =>
+            {
+                _stringValue = evt.newValue ?? string.Empty;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_stringValueField);
 
             _floatValueField = new FloatField("Value") { value = _floatValue };
-            _floatValueField.RegisterValueChangedCallback(evt => _floatValue = evt.newValue);
+            _floatValueField.RegisterValueChangedCallback(evt =>
+            {
+                _floatValue = evt.newValue;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_floatValueField);
 
             _intValueField = new IntegerField("Value") { value = _intValue };
-            _intValueField.RegisterValueChangedCallback(evt => _intValue = evt.newValue);
+            _intValueField.RegisterValueChangedCallback(evt =>
+            {
+                _intValue = evt.newValue;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_intValueField);
 
             _boolValueField = new Toggle("Value") { value = _boolValue };
-            _boolValueField.RegisterValueChangedCallback(evt => _boolValue = evt.newValue);
+            _boolValueField.RegisterValueChangedCallback(evt =>
+            {
+                _boolValue = evt.newValue;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_boolValueField);
 
             UpdateUi();
@@ -109,9 +129,9 @@ namespace TEngine.Editor.SkillGraph
             if (bool.TryParse(rawValue, out bool parsedBool))
                 _boolValue = parsedBool;
 
-            _keyField.SetValueWithoutNotify(_key);
+            SyncValueTypeFromKey();
+            RefreshKeyField();
             _operatorField.SetValueWithoutNotify(_conditionOperator);
-            _valueTypeField.SetValueWithoutNotify(_valueType);
             _stringValueField.SetValueWithoutNotify(_stringValue);
             _floatValueField.SetValueWithoutNotify(_floatValue);
             _intValueField.SetValueWithoutNotify(_intValue);
@@ -126,38 +146,65 @@ namespace TEngine.Editor.SkillGraph
             {
                 _conditionOperator = parsedOperator;
                 if (_conditionOperator == SkillConditionOperator.IsTrue || _conditionOperator == SkillConditionOperator.IsFalse)
+                {
                     _valueType = SkillBlackboardValueType.Bool;
+                }
+                else if (IsNumericOperator(_conditionOperator) && !IsNumericValueType(_valueType))
+                {
+                    _conditionOperator = SkillConditionOperator.Equal;
+                    _operatorField.SetValueWithoutNotify(_conditionOperator);
+                }
 
-                _valueTypeField.SetValueWithoutNotify(_valueType);
                 UpdateUi();
+                NotifyPropertiesChanged();
             }
         }
 
-        private void OnValueTypeChanged(ChangeEvent<Enum> evt)
+        public void SetAvailableVariables(IReadOnlyList<SkillVariableDef> variables)
         {
-            if (evt.newValue is SkillBlackboardValueType parsedValueType)
+            _availableVariables.Clear();
+            if (variables != null)
             {
-                _valueType = parsedValueType;
-                UpdateUi();
+                foreach (SkillVariableDef variable in variables)
+                {
+                    if (variable == null || string.IsNullOrWhiteSpace(variable.name))
+                        continue;
+
+                    if (_availableVariables.Any(existing => string.Equals(existing.name, variable.name, StringComparison.Ordinal)))
+                        continue;
+
+                    _availableVariables.Add(new SkillVariableDef
+                    {
+                        name = variable.name ?? string.Empty,
+                        type = variable.type,
+                        defaultValue = variable.defaultValue ?? string.Empty
+                    });
+                }
             }
+
+            SyncValueTypeFromKey();
+            RefreshKeyField();
+            UpdateUi();
         }
 
         private void UpdateUi()
         {
             bool showValueType = RequiresValueType();
             bool showCompareValue = RequiresCompareValue();
+            bool hasKey = !string.IsNullOrEmpty(_key);
 
-            _valueTypeField.style.display = showValueType ? DisplayStyle.Flex : DisplayStyle.None;
-            _stringValueField.style.display = showCompareValue && _valueType == SkillBlackboardValueType.String
+            _valueTypeLabel.style.display = showValueType ? DisplayStyle.Flex : DisplayStyle.None;
+            _valueTypeLabel.text = $"Value Type: {GetValueTypeText()}";
+            _stringValueField.style.display = showCompareValue && hasKey && _valueType == SkillBlackboardValueType.String
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
-            _floatValueField.style.display = showCompareValue && _valueType == SkillBlackboardValueType.Float
+            _floatValueField.style.display = showCompareValue && hasKey && _valueType == SkillBlackboardValueType.Float
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
-            _intValueField.style.display = showCompareValue && _valueType == SkillBlackboardValueType.Int
+            _intValueField.style.display = showCompareValue && hasKey && _valueType == SkillBlackboardValueType.Int
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
-            _boolValueField.style.display = showCompareValue && _valueType == SkillBlackboardValueType.Bool
+            _boolValueField.style.display = showCompareValue && hasKey && _valueType == SkillBlackboardValueType.Bool
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
         }
@@ -169,6 +216,15 @@ namespace TEngine.Editor.SkillGraph
             _conditionOperator != SkillConditionOperator.Exists &&
             _conditionOperator != SkillConditionOperator.IsTrue &&
             _conditionOperator != SkillConditionOperator.IsFalse;
+
+        private static bool IsNumericOperator(SkillConditionOperator conditionOperator) =>
+            conditionOperator == SkillConditionOperator.Greater ||
+            conditionOperator == SkillConditionOperator.GreaterOrEqual ||
+            conditionOperator == SkillConditionOperator.Less ||
+            conditionOperator == SkillConditionOperator.LessOrEqual;
+
+        private static bool IsNumericValueType(SkillBlackboardValueType valueType) =>
+            valueType == SkillBlackboardValueType.Float || valueType == SkillBlackboardValueType.Int;
 
         private SkillBlackboardValueType GetEffectiveValueType() =>
             _conditionOperator == SkillConditionOperator.IsTrue || _conditionOperator == SkillConditionOperator.IsFalse
@@ -185,6 +241,95 @@ namespace TEngine.Editor.SkillGraph
                 SkillBlackboardValueType.Bool => _boolValue ? "true" : "false",
                 _ => string.Empty
             };
+        }
+
+        private void OnKeyChanged(ChangeEvent<string> evt)
+        {
+            _key = evt.newValue ?? string.Empty;
+            SyncValueTypeFromKey();
+            RefreshKeyField();
+            UpdateUi();
+            NotifyPropertiesChanged();
+        }
+
+        private void RefreshKeyField()
+        {
+            List<string> choices = BuildKeyChoices();
+            _keyField.choices = choices;
+            _keyField.SetValueWithoutNotify(GetSelectedKey(choices));
+        }
+
+        private List<string> BuildKeyChoices()
+        {
+            List<string> choices = new List<string> { string.Empty };
+            foreach (SkillVariableDef variable in _availableVariables)
+            {
+                string variableName = variable.name;
+                if (choices.Any(existing => string.Equals(existing, variableName, StringComparison.Ordinal)))
+                    continue;
+
+                choices.Add(variableName);
+            }
+
+            if (!string.IsNullOrEmpty(_key) &&
+                !choices.Any(existing => string.Equals(existing, _key, StringComparison.Ordinal)))
+            {
+                choices.Insert(1, _key);
+            }
+
+            return choices;
+        }
+
+        private string GetSelectedKey(IReadOnlyList<string> choices)
+        {
+            if (choices == null || choices.Count == 0)
+                return string.Empty;
+
+            foreach (string choice in choices)
+            {
+                if (string.Equals(choice, _key, StringComparison.Ordinal))
+                    return choice;
+            }
+
+            return choices[0];
+        }
+
+        private string FormatVariableName(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return "<None>";
+
+            bool isKnownVariable = _availableVariables.Any(variable => string.Equals(variable.name, key, StringComparison.Ordinal));
+            return isKnownVariable ? key : $"{key} (Missing)";
+        }
+
+        private void SyncValueTypeFromKey()
+        {
+            SkillVariableDef selectedVariable = _availableVariables.FirstOrDefault(variable =>
+                string.Equals(variable.name, _key, StringComparison.Ordinal));
+            if (selectedVariable != null)
+            {
+                _valueType = selectedVariable.type;
+
+                if (IsNumericOperator(_conditionOperator) && !IsNumericValueType(_valueType))
+                {
+                    _conditionOperator = SkillConditionOperator.Equal;
+                    _operatorField.SetValueWithoutNotify(_conditionOperator);
+                }
+            }
+        }
+
+        private string GetValueTypeText()
+        {
+            if (_conditionOperator == SkillConditionOperator.IsTrue || _conditionOperator == SkillConditionOperator.IsFalse)
+                return SkillBlackboardValueType.Bool.ToString();
+
+            if (string.IsNullOrEmpty(_key))
+                return MissingTypeText;
+
+            SkillVariableDef selectedVariable = _availableVariables.FirstOrDefault(variable =>
+                string.Equals(variable.name, _key, StringComparison.Ordinal));
+            return selectedVariable != null ? selectedVariable.type.ToString() : MissingTypeText;
         }
     }
 }

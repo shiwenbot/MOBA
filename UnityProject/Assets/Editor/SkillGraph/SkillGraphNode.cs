@@ -9,9 +9,15 @@ using UnityEngine.UIElements;
 
 namespace TEngine.Editor.SkillGraph
 {
+    internal interface ISkillVariableBindableNode
+    {
+        void SetAvailableVariables(IReadOnlyList<SkillVariableDef> variables);
+    }
+
     internal abstract class SkillGraphNode : Node
     {
         public static readonly Vector2 DefaultSize = new Vector2(240f, 180f);
+        private bool _isApplyingNodeData;
 
         protected SkillGraphNode(SkillNodeType nodeType, string nodeTitle)
         {
@@ -24,6 +30,8 @@ namespace TEngine.Editor.SkillGraph
         public string Guid { get; private set; }
 
         public string NodeType { get; }
+
+        public event Action PropertiesChanged;
 
         public SkillNodeData GetNodeData()
         {
@@ -51,8 +59,16 @@ namespace TEngine.Editor.SkillGraph
                 title = nodeData.title;
 
             SetPosition(new Rect(nodeData.position, DefaultSize));
-            ReadProperties(nodeData.properties ?? new List<SkillNodePropertyData>());
-            RefreshNode();
+            _isApplyingNodeData = true;
+            try
+            {
+                ReadProperties(nodeData.properties ?? new List<SkillNodePropertyData>());
+                RefreshNode();
+            }
+            finally
+            {
+                _isApplyingNodeData = false;
+            }
         }
 
         public Port GetPort(Direction direction, string portName)
@@ -123,6 +139,14 @@ namespace TEngine.Editor.SkillGraph
         {
             RefreshPorts();
             RefreshExpandedState();
+        }
+
+        protected void NotifyPropertiesChanged()
+        {
+            if (_isApplyingNodeData)
+                return;
+
+            PropertiesChanged?.Invoke();
         }
 
         protected virtual void WriteProperties(List<SkillNodePropertyData> properties)

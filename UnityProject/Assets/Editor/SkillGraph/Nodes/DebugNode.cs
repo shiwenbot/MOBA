@@ -18,7 +18,11 @@ namespace TEngine.Editor.SkillGraph
             AddFlowOutput("Out");
 
             _messageField = new TextField("Message") { value = _message };
-            _messageField.RegisterValueChangedCallback(evt => _message = evt.newValue ?? string.Empty);
+            _messageField.RegisterValueChangedCallback(evt =>
+            {
+                _message = evt.newValue ?? string.Empty;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_messageField);
         }
 

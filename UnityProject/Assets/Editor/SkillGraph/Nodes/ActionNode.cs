@@ -33,7 +33,11 @@ namespace TEngine.Editor.SkillGraph
             AddPropertyField(_actionTypeField);
 
             _valueField = new FloatField("Value") { value = _value };
-            _valueField.RegisterValueChangedCallback(evt => _value = evt.newValue);
+            _valueField.RegisterValueChangedCallback(evt =>
+            {
+                _value = evt.newValue;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_valueField);
 
             _prefabField = new ObjectField("Prefab")
@@ -77,6 +81,7 @@ namespace TEngine.Editor.SkillGraph
             {
                 _actionType = actionType;
                 UpdateActionUi();
+                NotifyPropertiesChanged();
             }
         }
 
@@ -84,6 +89,7 @@ namespace TEngine.Editor.SkillGraph
         {
             _prefab = evt.newValue as GameObject;
             _prefabAssetPath = GetPrefabAssetPath();
+            NotifyPropertiesChanged();
         }
 
         private string GetPrefabAssetPath()

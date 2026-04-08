@@ -18,7 +18,11 @@ namespace TEngine.Editor.SkillGraph
             AddFlowOutput("Out");
 
             _durationField = new FloatField("Duration") { value = _duration };
-            _durationField.RegisterValueChangedCallback(evt => _duration = evt.newValue);
+            _durationField.RegisterValueChangedCallback(evt =>
+            {
+                _duration = evt.newValue;
+                NotifyPropertiesChanged();
+            });
             AddPropertyField(_durationField);
         }
 

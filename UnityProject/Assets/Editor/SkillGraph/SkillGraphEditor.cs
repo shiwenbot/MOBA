@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using UnityEditor;
 using UnityEditor.UIElements;
@@ -9,15 +12,25 @@ namespace TEngine.Editor.SkillGraph
 {
     internal sealed class SkillGraphEditor : EditorWindow
     {
+        private const int UndoRecordDebounceMilliseconds = 200;
+
         [SerializeField]
         private string _currentGraphAssetPath;
 
         [SerializeField]
         private string _currentGraphName = "NewSkillGraph";
 
+        [SerializeField]
+        private List<SkillVariableDef> _variables = new List<SkillVariableDef>();
+
         private SkillGraphView _graphView;
         private SkillGraphSearchWindow _searchWindow;
+        private SkillGraphBlackboardPanel _blackboardPanel;
+        private SkillGraphUndoSystem _undoSystem;
+        private VisualElement _contentRoot;
         private Label _pathLabel;
+        private IVisualElementScheduledItem _pendingRecordSchedule;
+        private bool _isRestoringSnapshot;
 
         [MenuItem("TEngine/Skill Graph Editor", false, 110)]
         public static void OpenWindow()
@@ -33,25 +46,40 @@ namespace TEngine.Editor.SkillGraph
             rootVisualElement.Clear();
             rootVisualElement.style.flexDirection = FlexDirection.Column;
 
+            _undoSystem = new SkillGraphUndoSystem();
+
             CreateToolbar();
+            CreateContentLayout();
+            CreateBlackboardPanel();
             CreateGraphView();
             CreateSearchWindow();
+            RegisterCallbacks();
+            ApplyVariablesToUi();
+            ResetUndoHistoryToCurrentState();
             UpdateWindowState();
         }
 
         private void OnDisable()
         {
-            if (_graphView != null)
-            {
-                rootVisualElement.Remove(_graphView);
-                _graphView = null;
-            }
+            _pendingRecordSchedule?.Pause();
+            _pendingRecordSchedule = null;
+
+            UnregisterCallbacks();
 
             if (_searchWindow != null)
             {
                 DestroyImmediate(_searchWindow);
                 _searchWindow = null;
             }
+
+            if (_contentRoot != null)
+            {
+                rootVisualElement.Remove(_contentRoot);
+                _contentRoot = null;
+            }
+
+            _graphView = null;
+            _blackboardPanel = null;
         }
 
         private void CreateToolbar()
@@ -75,10 +103,24 @@ namespace TEngine.Editor.SkillGraph
             rootVisualElement.Add(toolbar);
         }
 
+        private void CreateContentLayout()
+        {
+            _contentRoot = new VisualElement();
+            _contentRoot.style.flexDirection = FlexDirection.Row;
+            _contentRoot.style.flexGrow = 1f;
+            rootVisualElement.Add(_contentRoot);
+        }
+
+        private void CreateBlackboardPanel()
+        {
+            _blackboardPanel = new SkillGraphBlackboardPanel();
+            _contentRoot.Add(_blackboardPanel);
+        }
+
         private void CreateGraphView()
         {
             _graphView = new SkillGraphView();
-            rootVisualElement.Add(_graphView);
+            _contentRoot.Add(_graphView);
         }
 
         private void CreateSearchWindow()
@@ -90,9 +132,16 @@ namespace TEngine.Editor.SkillGraph
 
         private void CreateNewGraph()
         {
-            _graphView.ClearGraph();
             _currentGraphAssetPath = string.Empty;
             _currentGraphName = "NewSkillGraph";
+
+            SkillGraphData graphData = new SkillGraphData
+            {
+                graphName = _currentGraphName
+            };
+
+            ApplyGraphData(graphData);
+            ResetUndoHistoryToCurrentState();
             UpdateWindowState();
         }
 
@@ -151,13 +200,13 @@ namespace TEngine.Editor.SkillGraph
                 return;
             }
 
-            _graphView.DeserializeGraph(graphData);
-
             _currentGraphAssetPath = SkillGraphPaths.ToProjectRelativePath(absolutePath);
             _currentGraphName = string.IsNullOrEmpty(graphData.graphName)
                 ? Path.GetFileNameWithoutExtension(absolutePath)
                 : graphData.graphName;
 
+            ApplyGraphData(graphData);
+            ResetUndoHistoryToCurrentState();
             UpdateWindowState();
         }
 
@@ -165,7 +214,7 @@ namespace TEngine.Editor.SkillGraph
         {
             string normalizedPath = SkillGraphPaths.NormalizePath(projectRelativePath);
             string graphName = Path.GetFileNameWithoutExtension(normalizedPath);
-            SkillGraphData graphData = _graphView.SerializeGraph(graphName);
+            SkillGraphData graphData = BuildGraphData(graphName);
             string json = JsonUtility.ToJson(graphData, true);
             string absolutePath = SkillGraphPaths.ToAbsolutePath(normalizedPath);
             string directory = Path.GetDirectoryName(absolutePath);
@@ -184,7 +233,7 @@ namespace TEngine.Editor.SkillGraph
         private void ExportGraph()
         {
             string graphName = GetDefaultGraphName();
-            SkillGraphData graphData = _graphView.SerializeGraph(graphName);
+            SkillGraphData graphData = BuildGraphData(graphName);
             if (SkillGraphExporter.Export(graphData, out string exportPath, out string errorMessage))
             {
                 _currentGraphName = graphData.graphName;
@@ -215,6 +264,212 @@ namespace TEngine.Editor.SkillGraph
                     ? "Unsaved"
                     : SkillGraphPaths.NormalizePath(_currentGraphAssetPath);
             }
+        }
+
+        private void RegisterCallbacks()
+        {
+            if (_graphView != null)
+                _graphView.GraphModified += OnGraphModified;
+
+            if (_blackboardPanel != null)
+                _blackboardPanel.VariablesChanged += OnVariablesChanged;
+
+            rootVisualElement.RegisterCallback<KeyDownEvent>(OnRootKeyDown, TrickleDown.TrickleDown);
+        }
+
+        private void UnregisterCallbacks()
+        {
+            if (_graphView != null)
+                _graphView.GraphModified -= OnGraphModified;
+
+            if (_blackboardPanel != null)
+                _blackboardPanel.VariablesChanged -= OnVariablesChanged;
+
+            rootVisualElement.UnregisterCallback<KeyDownEvent>(OnRootKeyDown, TrickleDown.TrickleDown);
+        }
+
+        private void OnGraphModified()
+        {
+            if (_isRestoringSnapshot)
+                return;
+
+            QueueSnapshotRecord();
+        }
+
+        private void OnVariablesChanged()
+        {
+            if (_isRestoringSnapshot)
+                return;
+
+            _variables = _blackboardPanel.GetVariablesSnapshot();
+            _graphView.SetVariables(_variables);
+            QueueSnapshotRecord();
+        }
+
+        private void OnRootKeyDown(KeyDownEvent evt)
+        {
+            if (_isRestoringSnapshot || IsEditingTextInput())
+                return;
+
+            bool isCommandPressed = evt.ctrlKey || evt.commandKey;
+            if (!isCommandPressed)
+                return;
+
+            if (evt.keyCode == KeyCode.Z && !evt.shiftKey)
+            {
+                TryUndo();
+                evt.StopImmediatePropagation();
+                evt.PreventDefault();
+                return;
+            }
+
+            if (evt.keyCode == KeyCode.Y || (evt.keyCode == KeyCode.Z && evt.shiftKey))
+            {
+                TryRedo();
+                evt.StopImmediatePropagation();
+                evt.PreventDefault();
+            }
+        }
+
+        private void TryUndo()
+        {
+            FlushPendingSnapshotRecord();
+            if (_undoSystem == null || !_undoSystem.TryUndo(out string snapshotJson))
+                return;
+
+            RestoreSnapshot(snapshotJson);
+        }
+
+        private void TryRedo()
+        {
+            FlushPendingSnapshotRecord();
+            if (_undoSystem == null || !_undoSystem.TryRedo(out string snapshotJson))
+                return;
+
+            RestoreSnapshot(snapshotJson);
+        }
+
+        private void QueueSnapshotRecord()
+        {
+            if (_isRestoringSnapshot)
+                return;
+
+            _pendingRecordSchedule?.Pause();
+            _pendingRecordSchedule = rootVisualElement.schedule
+                .Execute(RecordSnapshotNow)
+                .StartingIn(UndoRecordDebounceMilliseconds);
+        }
+
+        private void FlushPendingSnapshotRecord()
+        {
+            if (_pendingRecordSchedule == null)
+                return;
+
+            _pendingRecordSchedule.Pause();
+            _pendingRecordSchedule = null;
+            RecordSnapshotNow();
+        }
+
+        private void RecordSnapshotNow()
+        {
+            _pendingRecordSchedule = null;
+            if (_isRestoringSnapshot || _undoSystem == null || _graphView == null)
+                return;
+
+            _undoSystem.Record(CaptureSnapshotJson());
+        }
+
+        private void ResetUndoHistoryToCurrentState()
+        {
+            if (_undoSystem == null)
+                return;
+
+            _undoSystem.Clear();
+            RecordSnapshotNow();
+        }
+
+        private string CaptureSnapshotJson()
+        {
+            SkillGraphData graphData = BuildGraphData(GetDefaultGraphName());
+            return JsonUtility.ToJson(graphData);
+        }
+
+        private SkillGraphData BuildGraphData(string graphName)
+        {
+            SkillGraphData graphData = _graphView.SerializeGraph(graphName);
+            graphData.variables = CloneVariables(_variables);
+            return graphData;
+        }
+
+        private void RestoreSnapshot(string snapshotJson)
+        {
+            SkillGraphData snapshotData = string.IsNullOrEmpty(snapshotJson)
+                ? new SkillGraphData()
+                : JsonUtility.FromJson<SkillGraphData>(snapshotJson) ?? new SkillGraphData();
+
+            ApplyGraphData(snapshotData, false);
+            UpdateWindowState();
+        }
+
+        private void ApplyGraphData(SkillGraphData graphData, bool frameGraph = true)
+        {
+            SkillGraphData safeGraphData = graphData ?? new SkillGraphData();
+            _variables = CloneVariables(safeGraphData.variables);
+
+            if (!string.IsNullOrWhiteSpace(safeGraphData.graphName))
+                _currentGraphName = safeGraphData.graphName;
+
+            _isRestoringSnapshot = true;
+            _graphView.SetRestoring(true);
+            try
+            {
+                ApplyVariablesToUi();
+                _graphView.DeserializeGraph(safeGraphData, frameGraph);
+            }
+            finally
+            {
+                _graphView.SetRestoring(false);
+                _isRestoringSnapshot = false;
+            }
+        }
+
+        private void ApplyVariablesToUi()
+        {
+            _blackboardPanel.SetVariables(_variables);
+            _graphView.SetVariables(_variables);
+        }
+
+        private bool IsEditingTextInput()
+        {
+            VisualElement focusedElement = rootVisualElement?.panel?.focusController?.focusedElement as VisualElement;
+            if (focusedElement == null)
+                return false;
+
+            return focusedElement is TextField ||
+                   focusedElement is IntegerField ||
+                   focusedElement is FloatField ||
+                   focusedElement.GetFirstAncestorOfType<TextField>() != null ||
+                   focusedElement.GetFirstAncestorOfType<IntegerField>() != null ||
+                   focusedElement.GetFirstAncestorOfType<FloatField>() != null;
+        }
+
+        private static List<SkillVariableDef> CloneVariables(IReadOnlyList<SkillVariableDef> variables)
+        {
+            List<SkillVariableDef> clonedVariables = new List<SkillVariableDef>();
+            if (variables == null)
+                return clonedVariables;
+
+            foreach (SkillVariableDef variable in variables.Where(variable => variable != null))
+            {
+                clonedVariables.Add(new SkillVariableDef
+                {
+                    name = variable.name ?? string.Empty,
+                    type = variable.type,
+                    defaultValue = variable.defaultValue ?? string.Empty
+                });
+            }
+
+            return clonedVariables;
         }
     }
 }

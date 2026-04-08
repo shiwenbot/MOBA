@@ -16,7 +16,7 @@
                 },
                 {
                     "key": "operator",
-                    "value": "Greater"
+                    "value": "Equal"
                 },
                 {
                     "key": "valueType",
@@ -25,29 +25,6 @@
                 {
                     "key": "value",
                     "value": "0"
-                }
-            ]
-        },
-        {
-            "guid": "431a69bb3dfa8b940bf516204baecfa7",
-            "title": "Set Variable",
-            "nodeType": "SetVariable",
-            "position": {
-                "x": 7.0,
-                "y": 239.0
-            },
-            "properties": [
-                {
-                    "key": "key",
-                    "value": "Level"
-                },
-                {
-                    "key": "valueType",
-                    "value": "Int"
-                },
-                {
-                    "key": "value",
-                    "value": "100"
                 }
             ]
         },
@@ -162,6 +139,29 @@
                     "value": "Should not run"
                 }
             ]
+        },
+        {
+            "guid": "431a69bb3dfa8b940bf516204baecfa7",
+            "title": "Set Variable",
+            "nodeType": "SetVariable",
+            "position": {
+                "x": -58.0,
+                "y": 175.0
+            },
+            "properties": [
+                {
+                    "key": "key",
+                    "value": "Level"
+                },
+                {
+                    "key": "valueType",
+                    "value": "Int"
+                },
+                {
+                    "key": "value",
+                    "value": "100"
+                }
+            ]
         }
     ],
     "edges": [
@@ -212,6 +212,18 @@
             "outputPortName": "Out",
             "inputNodeGuid": "e55286db34b64164b98f6748eaeb2fd1",
             "inputPortName": "In"
+        }
+    ],
+    "variables": [
+        {
+            "name": "Level",
+            "type": 2,
+            "defaultValue": "0"
+        },
+        {
+            "name": "IsLucky",
+            "type": 3,
+            "defaultValue": "true"
         }
     ]
 }
