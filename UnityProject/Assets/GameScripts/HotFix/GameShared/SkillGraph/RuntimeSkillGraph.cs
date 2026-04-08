@@ -55,7 +55,7 @@ namespace GameShared.SkillGraph
 
     public sealed class RuntimeSkillGraph
     {
-        public const string CurrentVersion = "0.5";
+        public const string CurrentVersion = "0.6";
 
         [JsonProperty("version")]
         public string Version { get; set; } = CurrentVersion;

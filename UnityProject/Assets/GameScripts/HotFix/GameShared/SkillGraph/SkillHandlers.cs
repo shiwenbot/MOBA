@@ -24,7 +24,7 @@ namespace GameShared.SkillGraph
     public sealed class EntryNodeHandler : ISkillNodeHandler
     {
         public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context) =>
-            FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Continue("Next"));
+            FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Next"));
     }
 
     public sealed class DebugNodeHandler : ISkillNodeHandler
@@ -32,7 +32,7 @@ namespace GameShared.SkillGraph
         public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
         {
             context.Runtime.Log(node.GetPropertyValue("message"));
-            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Continue("Out"));
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
         }
     }
 
@@ -40,16 +40,19 @@ namespace GameShared.SkillGraph
     {
         public async FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
         {
+            if (SkillHandlerUtility.IsCancellationRequested(context))
+                return SkillExecuteResult.Cancelled($"Delay node {node.NodeId} was cancelled before it started.");
+
             float durationSeconds = node.GetFloatPropertyValue("duration", 0f);
             int delayMilliseconds = Math.Max(0, (int)(durationSeconds * 1000f));
             bool completed = await context.Runtime!.DelayAsync(delayMilliseconds, context.CancellationToken);
             if (!completed)
             {
-                context.IsCancelled = true;
-                return SkillExecuteResult.Complete();
+                context.MarkCancelled();
+                return SkillExecuteResult.Cancelled($"Delay node {node.NodeId} was cancelled while waiting.");
             }
 
-            return SkillExecuteResult.Continue("Out");
+            return SkillExecuteResult.Success("Out");
         }
     }
 
@@ -57,11 +60,14 @@ namespace GameShared.SkillGraph
     {
         public async FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
         {
+            if (SkillHandlerUtility.IsCancellationRequested(context))
+                return SkillExecuteResult.Cancelled($"Action node {node.NodeId} was cancelled before it started.");
+
             string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
             if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.5.");
+                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.6.");
             }
 
             string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
@@ -69,8 +75,14 @@ namespace GameShared.SkillGraph
                 throw new InvalidOperationException($"Action node {node.NodeId} prefabLocation cannot be empty.");
 
             float speed = node.GetFloatPropertyValue(RuntimePropertyKeys.Value, 1f);
-            await context.Runtime!.PlayAnimationAsync(context, prefabLocation, speed, context.CancellationToken);
-            return SkillExecuteResult.Continue("Out");
+            bool completed = await context.Runtime!.PlayAnimationAsync(context, prefabLocation, speed, context.CancellationToken);
+            if (!completed || SkillHandlerUtility.IsCancellationRequested(context))
+            {
+                context.MarkCancelled();
+                return SkillExecuteResult.Cancelled($"Action node {node.NodeId} was cancelled before completion.");
+            }
+
+            return SkillExecuteResult.Success("Out");
         }
     }
 
@@ -92,7 +104,7 @@ namespace GameShared.SkillGraph
                 valueType,
                 rawValue);
 
-            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Continue(result ? "True" : "False"));
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success(result ? "True" : "False"));
         }
     }
 
@@ -103,7 +115,7 @@ namespace GameShared.SkillGraph
             SkillBlackboard blackboard = SkillHandlerUtility.EnsureBlackboard(context);
             string key = SkillHandlerUtility.RequireProperty(node, RuntimePropertyKeys.Key);
             bool result = SkillBlackboardUtility.GetBool(blackboard, key);
-            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Continue(result ? "True" : "False"));
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success(result ? "True" : "False"));
         }
     }
 
@@ -118,7 +130,7 @@ namespace GameShared.SkillGraph
             string rawValue = node.GetPropertyValue(RuntimePropertyKeys.Value);
 
             SkillBlackboardUtility.SetValue(blackboard, key, valueType, rawValue);
-            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Continue("Out"));
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
         }
     }
 
@@ -348,6 +360,9 @@ namespace GameShared.SkillGraph
 
     internal static class SkillHandlerUtility
     {
+        public static bool IsCancellationRequested(SkillContext context) =>
+            context != null && context.IsCancellationRequested;
+
         public static SkillBlackboard EnsureBlackboard(SkillContext context)
         {
             if (context.Blackboard == null)
