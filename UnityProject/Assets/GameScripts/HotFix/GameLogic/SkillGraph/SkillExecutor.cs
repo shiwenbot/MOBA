@@ -23,20 +23,38 @@ namespace GameLogic
             _runtimeServices = new ClientSkillRuntimeServices();
         }
 
-        public async FTask CastSkill(string skillName, SkillContext context)
+        public async FTask<SkillGraphRunResult> CastSkill(string skillName, SkillContext context)
         {
             if (string.IsNullOrWhiteSpace(skillName))
                 throw new ArgumentException("Skill name cannot be empty.", nameof(skillName));
 
-            RuntimeSkillGraph graph = await LoadSkillGraph(skillName);
+            RuntimeSkillGraph graph;
+            try
+            {
+                graph = await LoadSkillGraph(skillName);
+            }
+            catch (Exception exception)
+            {
+                return SkillGraphRunResult.Failure(
+                    0,
+                    0,
+                    $"Failed to load skill graph '{skillName}': {exception.Message}",
+                    exception);
+            }
+
             if (graph == null)
-                throw new InvalidOperationException($"Failed to load skill graph '{skillName}'.");
+            {
+                return SkillGraphRunResult.Failure(
+                    0,
+                    0,
+                    $"Failed to load skill graph '{skillName}'.");
+            }
 
             SkillContext runtimeContext = context ?? new SkillContext();
             if (runtimeContext.Runtime == null)
                 runtimeContext.Runtime = _runtimeServices;
 
-            await _runner.Run(graph, runtimeContext);
+            return await _runner.Run(graph, runtimeContext);
         }
 
         private async FTask<RuntimeSkillGraph> LoadSkillGraph(string skillName)
@@ -140,14 +158,14 @@ namespace GameLogic
                 return await FTask.UnityWait(scene, milliseconds, cancellationToken);
             }
 
-            public async FTask PlayAnimationAsync(
+            public async FTask<bool> PlayAnimationAsync(
                 SkillContext context,
                 string prefabLocation,
                 float speed,
                 FCancellationToken? cancellationToken = null)
             {
                 if (cancellationToken != null && cancellationToken.IsCancel)
-                    return;
+                    return false;
 
                 GameObject instance = await LoadSkillPrefabInstance(prefabLocation);
                 if (instance == null)
@@ -156,7 +174,7 @@ namespace GameLogic
                 if (cancellationToken != null && cancellationToken.IsCancel)
                 {
                     UnityEngine.Object.Destroy(instance);
-                    return;
+                    return false;
                 }
 
                 SkillGraphAnimancerPlayer animancerPlayer = instance.GetComponentInChildren<SkillGraphAnimancerPlayer>(true);
@@ -169,6 +187,7 @@ namespace GameLogic
 
                 animancerPlayer.Play(speed);
                 await FTask.CompletedTask;
+                return cancellationToken == null || !cancellationToken.IsCancel;
             }
         }
     }

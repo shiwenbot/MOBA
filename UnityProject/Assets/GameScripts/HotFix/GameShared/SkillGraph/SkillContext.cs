@@ -10,7 +10,7 @@ namespace GameShared.SkillGraph
 
         FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null);
 
-        FTask PlayAnimationAsync(
+        FTask<bool> PlayAnimationAsync(
             SkillContext context,
             string prefabLocation,
             float speed,
@@ -27,11 +27,21 @@ namespace GameShared.SkillGraph
 
         public bool IsCancelled { get; set; }
 
+        public int MaxExecutionSteps { get; set; }
+
         public SkillBlackboard Blackboard { get; set; } = new SkillBlackboard();
 
         public ISkillRuntimeServices? Runtime { get; set; }
 
         public FCancellationToken? CancellationToken { get; set; }
+
+        public bool IsCancellationRequested =>
+            IsCancelled || (CancellationToken != null && CancellationToken.IsCancel);
+
+        public void MarkCancelled()
+        {
+            IsCancelled = true;
+        }
     }
 
     public sealed class SkillBlackboard
