@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Fantasy.Async;
+using Newtonsoft.Json;
 
 namespace GameShared.SkillGraph
 {
@@ -84,6 +86,8 @@ namespace GameShared.SkillGraph
 
         public bool IsCancelled => Status == SkillExecutionStatus.Cancelled;
 
+        public bool IsRunning => Status == SkillExecutionStatus.Running;
+
         public static SkillGraphRunResult Running(int lastNodeId, int executedSteps, string message = "")
         {
             return Create(SkillExecutionStatus.Running, lastNodeId, executedSteps, message, null);
@@ -122,6 +126,75 @@ namespace GameShared.SkillGraph
         }
     }
 
+    public static class SkillExecutionEventTypes
+    {
+        public const string NodeEnter = "NodeEnter";
+        public const string NodeExit = "NodeExit";
+        public const string BlackboardSet = "BlackboardSet";
+        public const string BranchTaken = "BranchTaken";
+        public const string CommandIssued = "CommandIssued";
+        public const string ExecutionEnd = "ExecutionEnd";
+    }
+
+    public sealed class SkillExecutionEvent
+    {
+        [JsonProperty("frameIndex")]
+        public int FrameIndex { get; set; }
+
+        [JsonProperty("nodeId")]
+        public int NodeId { get; set; }
+
+        [JsonProperty("eventType")]
+        public string EventType { get; set; } = string.Empty;
+
+        [JsonProperty("payload")]
+        public string Payload { get; set; } = string.Empty;
+    }
+
+    public sealed class SkillStepFrameInput
+    {
+        public int MaxNodesPerStepOverride { get; set; }
+    }
+
+    public sealed class SkillGraphRunnerOptions
+    {
+        public int MaxNodesPerStep { get; set; } = 1;
+
+        public int MaxExecutionSteps { get; set; }
+
+        public float StepDeltaSeconds { get; set; } = 1f / 60f;
+
+        public bool? ForceLockstep { get; set; }
+
+        public bool EnableTrace { get; set; } = true;
+
+        public bool UseLegacyAsyncNodesInLocalOnly { get; set; }
+    }
+
+    public sealed class SkillExecutionSnapshot
+    {
+        [JsonProperty("currentNodeId")]
+        public int CurrentNodeId { get; set; }
+
+        [JsonProperty("status")]
+        public SkillExecutionStatus Status { get; set; }
+
+        [JsonProperty("executedSteps")]
+        public int ExecutedSteps { get; set; }
+
+        [JsonProperty("frameIndex")]
+        public int FrameIndex { get; set; }
+
+        [JsonProperty("message")]
+        public string Message { get; set; } = string.Empty;
+
+        [JsonProperty("blackboard")]
+        public SkillBlackboardSnapshot Blackboard { get; set; } = new SkillBlackboardSnapshot();
+
+        [JsonProperty("delayRemainingFrames")]
+        public Dictionary<int, int> DelayRemainingFrames { get; set; } = new Dictionary<int, int>();
+    }
+
     public sealed class SkillNodeHandlerRegistry
     {
         private readonly Dictionary<string, ISkillNodeHandler> _handlers =
@@ -147,13 +220,34 @@ namespace GameShared.SkillGraph
         private const int MinimumExecutionStepLimit = 16;
 
         private readonly SkillNodeHandlerRegistry _handlerRegistry;
+        private readonly Dictionary<int, int> _delayRemainingFrames = new Dictionary<int, int>();
+        private readonly List<SkillExecutionEvent> _events = new List<SkillExecutionEvent>();
+
+        private RuntimeSkillGraph? _graph;
+        private SkillContext? _context;
+        private SkillGraphRunnerOptions _options = new SkillGraphRunnerOptions();
+
+        private bool _isInitialized;
+        private bool _executionEndEmitted;
+        private int _currentNodeId;
+        private int _executedSteps;
+        private int _maxExecutionSteps;
+        private int _lastFrameIndex;
+        private SkillExecutionStatus _status;
+        private string _lastMessage = string.Empty;
+        private Exception? _lastException;
 
         public SkillGraphRunner(SkillNodeHandlerRegistry handlerRegistry)
         {
             _handlerRegistry = handlerRegistry ?? throw new ArgumentNullException(nameof(handlerRegistry));
         }
 
-        public async FTask<SkillGraphRunResult> Run(RuntimeSkillGraph graph, SkillContext context)
+        public IReadOnlyList<SkillExecutionEvent> ExecutionEvents => _events;
+
+        public SkillGraphRunResult Initialize(
+            RuntimeSkillGraph graph,
+            SkillContext context,
+            SkillGraphRunnerOptions? options = null)
         {
             if (graph == null)
                 throw new ArgumentNullException(nameof(graph));
@@ -164,122 +258,485 @@ namespace GameShared.SkillGraph
             if (context.Runtime == null)
                 throw new InvalidOperationException("SkillContext.Runtime must be assigned before execution.");
 
-            RuntimeSkillNode currentNode = graph.FindEntryNode();
-            if (currentNode == null)
+            RuntimeSkillNode? entryNode = graph.FindEntryNode();
+            if (entryNode == null)
             {
+                _isInitialized = false;
                 return SkillGraphRunResult.Failure(
                     0,
                     0,
                     $"Runtime skill graph '{graph.SkillName}' does not contain an Entry node.");
             }
 
-            int executedSteps = 0;
-            int maxSteps = ResolveMaxExecutionSteps(graph, context);
-            while (currentNode != null)
+            _graph = graph;
+            _context = context;
+            _options = options ?? new SkillGraphRunnerOptions();
+            if (_options.StepDeltaSeconds <= 0f)
+                _options.StepDeltaSeconds = 1f / 60f;
+
+            _currentNodeId = entryNode.NodeId;
+            _executedSteps = 0;
+            _lastFrameIndex = -1;
+            _status = SkillExecutionStatus.Running;
+            _lastMessage = string.Empty;
+            _lastException = null;
+            _executionEndEmitted = false;
+
+            _delayRemainingFrames.Clear();
+            _events.Clear();
+
+            _maxExecutionSteps = ResolveMaxExecutionSteps(graph, context, _options.MaxExecutionSteps);
+            _isInitialized = true;
+
+            if (!TryInitializeBlackboard(graph, context, out string blackboardError))
             {
-                if (context.IsCancellationRequested)
+                _isInitialized = false;
+                return SkillGraphRunResult.Failure(0, 0, blackboardError);
+            }
+
+            return BuildCurrentResult();
+        }
+
+        public async FTask<SkillGraphRunResult> Step(int frameIndex, SkillStepFrameInput? frameInput = null)
+        {
+            if (!_isInitialized || _graph == null || _context == null)
+            {
+                return SkillGraphRunResult.Failure(0, 0, "SkillGraphRunner is not initialized.");
+            }
+
+            _lastFrameIndex = frameIndex;
+            if (_status != SkillExecutionStatus.Running)
+                return BuildCurrentResult();
+
+            int nodesBudget = ResolveStepNodeBudget(frameInput);
+            for (int count = 0; count < nodesBudget; count++)
+            {
+                if (_status != SkillExecutionStatus.Running)
+                    break;
+
+                if (_context.IsCancellationRequested)
                 {
-                    context.MarkCancelled();
-                    return SkillGraphRunResult.Cancelled(
-                        currentNode.NodeId,
-                        executedSteps,
-                        $"Skill graph '{graph.SkillName}' was cancelled before node {currentNode.NodeId} executed.");
+                    _context.MarkCancelled();
+                    return SetCancelled(_currentNodeId, "Skill graph execution was cancelled.");
                 }
 
-                if (!_handlerRegistry.TryGet(currentNode.NodeType, out ISkillNodeHandler? handler) || handler == null)
+                RuntimeSkillNode? currentNode = _graph.GetNode(_currentNodeId);
+                if (currentNode == null)
                 {
-                    return SkillGraphRunResult.Failure(
-                        currentNode.NodeId,
-                        executedSteps,
-                        $"No handler registered for node type '{currentNode.NodeType}'.");
+                    return SetFailure(
+                        _currentNodeId,
+                        $"Node {_currentNodeId} referenced by execution cursor was not found.");
                 }
+
+                EmitEvent(frameIndex, currentNode.NodeId, SkillExecutionEventTypes.NodeEnter, string.Empty);
 
                 SkillExecuteResult result;
                 try
                 {
-                    result = await handler.Execute(currentNode, context);
+                    result = await ExecuteNodeForStep(currentNode, frameIndex);
                 }
                 catch (Exception exception)
                 {
-                    return SkillGraphRunResult.Failure(
+                    return SetFailure(
                         currentNode.NodeId,
-                        executedSteps,
                         $"Node {currentNode.NodeId} ('{currentNode.NodeType}') execution failed: {exception.Message}",
                         exception);
                 }
 
-                executedSteps++;
-                if (executedSteps > maxSteps)
-                {
-                    return SkillGraphRunResult.Failure(
-                        currentNode.NodeId,
-                        executedSteps,
-                        $"Skill graph '{graph.SkillName}' exceeded the v0.6 execution step limit ({maxSteps}).");
-                }
-
                 if (result == null)
                 {
-                    return SkillGraphRunResult.Failure(
+                    return SetFailure(
                         currentNode.NodeId,
-                        executedSteps,
                         $"Node {currentNode.NodeId} ('{currentNode.NodeType}') returned a null execute result.");
                 }
 
                 switch (result.Status)
                 {
                     case SkillExecutionStatus.Running:
-                        return SkillGraphRunResult.Running(currentNode.NodeId, executedSteps, result.Message);
-                    case SkillExecutionStatus.Failure:
-                        return SkillGraphRunResult.Failure(
+                        _lastMessage = result.Message ?? string.Empty;
+                        EmitEvent(
+                            frameIndex,
                             currentNode.NodeId,
-                            executedSteps,
+                            SkillExecutionEventTypes.NodeExit,
+                            $"status=Running;message={_lastMessage}");
+                        return BuildCurrentResult();
+
+                    case SkillExecutionStatus.Failure:
+                        return SetFailure(
+                            currentNode.NodeId,
                             BuildNodeResultMessage(currentNode, result, "failed"),
                             result.Exception);
+
                     case SkillExecutionStatus.Cancelled:
-                        context.MarkCancelled();
-                        return SkillGraphRunResult.Cancelled(
+                        _context.MarkCancelled();
+                        return SetCancelled(
                             currentNode.NodeId,
-                            executedSteps,
                             BuildNodeResultMessage(currentNode, result, "was cancelled"));
+
                     case SkillExecutionStatus.Success:
-                        break;
-                    default:
-                        return SkillGraphRunResult.Failure(
+                        _lastMessage = result.Message ?? string.Empty;
+                        _executedSteps++;
+                        if (_executedSteps > _maxExecutionSteps)
+                        {
+                            return SetFailure(
+                                currentNode.NodeId,
+                                $"Skill graph '{_graph.SkillName}' exceeded the v0.8 execution step limit ({_maxExecutionSteps}).");
+                        }
+
+                        EmitStepSpecificEvents(frameIndex, currentNode, result);
+                        EmitEvent(
+                            frameIndex,
                             currentNode.NodeId,
-                            executedSteps,
+                            SkillExecutionEventTypes.NodeExit,
+                            $"status=Success;nextPort={result.NextPort};message={_lastMessage}");
+
+                        List<RuntimeConnection> nextConnections = _graph.GetNextConnections(currentNode.NodeId, result.NextPort);
+                        if (nextConnections.Count == 0)
+                            return SetSuccess(currentNode.NodeId, _lastMessage);
+
+                        if (nextConnections.Count > 1)
+                        {
+                            return SetFailure(
+                                currentNode.NodeId,
+                                $"Node {currentNode.NodeId} port '{result.NextPort}' has multiple outgoing connections.");
+                        }
+
+                        RuntimeConnection nextConnection = nextConnections[0];
+                        RuntimeSkillNode? nextNode = _graph.GetNode(nextConnection.ToNodeId);
+                        if (nextNode == null)
+                        {
+                            return SetFailure(
+                                nextConnection.ToNodeId,
+                                $"Node {nextConnection.ToNodeId} referenced by connection was not found.");
+                        }
+
+                        _currentNodeId = nextNode.NodeId;
+                        break;
+
+                    default:
+                        return SetFailure(
+                            currentNode.NodeId,
                             $"Node {currentNode.NodeId} ('{currentNode.NodeType}') returned unsupported status '{result.Status}'.");
-                }
-
-                List<RuntimeConnection> nextConnections = graph.GetNextConnections(currentNode.NodeId, result.NextPort);
-                if (nextConnections.Count == 0)
-                {
-                    return SkillGraphRunResult.Success(currentNode.NodeId, executedSteps, result.Message);
-                }
-
-                if (nextConnections.Count > 1)
-                {
-                    return SkillGraphRunResult.Failure(
-                        currentNode.NodeId,
-                        executedSteps,
-                        $"Node {currentNode.NodeId} port '{result.NextPort}' has multiple outgoing connections.");
-                }
-
-                RuntimeConnection nextConnection = nextConnections[0];
-                currentNode = graph.GetNode(nextConnection.ToNodeId);
-                if (currentNode == null)
-                {
-                    return SkillGraphRunResult.Failure(
-                        nextConnection.ToNodeId,
-                        executedSteps,
-                        $"Node {nextConnection.ToNodeId} referenced by connection was not found.");
                 }
             }
 
-            return SkillGraphRunResult.Success(0, executedSteps, $"Skill graph '{graph.SkillName}' completed.");
+            return BuildCurrentResult();
         }
 
-        private static int ResolveMaxExecutionSteps(RuntimeSkillGraph graph, SkillContext context)
+        public SkillExecutionSnapshot GetSnapshot()
         {
+            if (!_isInitialized || _context == null)
+                throw new InvalidOperationException("SkillGraphRunner is not initialized.");
+
+            SkillBlackboard blackboard = _context.Blackboard ?? new SkillBlackboard();
+            _context.Blackboard = blackboard;
+
+            return new SkillExecutionSnapshot
+            {
+                CurrentNodeId = _currentNodeId,
+                Status = _status,
+                ExecutedSteps = _executedSteps,
+                FrameIndex = _lastFrameIndex,
+                Message = _lastMessage ?? string.Empty,
+                Blackboard = blackboard.CaptureSnapshot(),
+                DelayRemainingFrames = new Dictionary<int, int>(_delayRemainingFrames)
+            };
+        }
+
+        public SkillGraphRunResult Restore(SkillExecutionSnapshot snapshot)
+        {
+            if (!_isInitialized || _context == null)
+                throw new InvalidOperationException("SkillGraphRunner is not initialized.");
+
+            if (snapshot == null)
+                throw new ArgumentNullException(nameof(snapshot));
+
+            _currentNodeId = snapshot.CurrentNodeId;
+            _status = snapshot.Status;
+            _executedSteps = snapshot.ExecutedSteps;
+            _lastFrameIndex = snapshot.FrameIndex;
+            _lastMessage = snapshot.Message ?? string.Empty;
+            _lastException = null;
+            _executionEndEmitted = _status != SkillExecutionStatus.Running;
+
+            _delayRemainingFrames.Clear();
+            foreach (KeyValuePair<int, int> pair in snapshot.DelayRemainingFrames ?? new Dictionary<int, int>())
+            {
+                if (pair.Value < 0)
+                    continue;
+
+                _delayRemainingFrames[pair.Key] = pair.Value;
+            }
+
+            SkillBlackboard blackboard = _context.Blackboard ?? new SkillBlackboard();
+            _context.Blackboard = blackboard;
+            blackboard.RestoreSnapshot(snapshot.Blackboard);
+
+            return BuildCurrentResult();
+        }
+
+        public async FTask<SkillGraphRunResult> Run(RuntimeSkillGraph graph, SkillContext context)
+        {
+            int maxSteps = ResolveMaxExecutionSteps(graph, context, 0);
+            SkillGraphRunResult initializeResult = Initialize(
+                graph,
+                context,
+                new SkillGraphRunnerOptions
+                {
+                    MaxNodesPerStep = maxSteps,
+                    MaxExecutionSteps = maxSteps,
+                    StepDeltaSeconds = 1f / 60f,
+                    UseLegacyAsyncNodesInLocalOnly = true
+                });
+
+            if (!initializeResult.IsRunning)
+                return initializeResult;
+
+            int frameIndex = 0;
+            int frameSafetyLimit = Math.Max(MinimumExecutionStepLimit * 32, maxSteps * 4096);
+            while (frameIndex <= frameSafetyLimit)
+            {
+                SkillGraphRunResult stepResult = await Step(frameIndex, null);
+                if (!stepResult.IsRunning)
+                    return stepResult;
+
+                frameIndex++;
+            }
+
+            return SetFailure(
+                _currentNodeId,
+                $"Skill graph '{_graph!.SkillName}' exceeded the v0.8 frame safety limit ({frameSafetyLimit}).");
+        }
+
+        private async FTask<SkillExecuteResult> ExecuteNodeForStep(RuntimeSkillNode node, int frameIndex)
+        {
+            bool isLockstep = IsLockstepMode();
+            bool useLegacyAsyncNodes = !isLockstep && _options.UseLegacyAsyncNodesInLocalOnly;
+
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.Action, StringComparison.Ordinal) && isLockstep)
+                return ExecuteActionNodeInLockstep(node, frameIndex);
+
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.Delay, StringComparison.Ordinal) && !useLegacyAsyncNodes)
+                return ExecuteDelayNodeStep(node);
+
+            if (!_handlerRegistry.TryGet(node.NodeType, out ISkillNodeHandler? handler) || handler == null)
+            {
+                throw new InvalidOperationException($"No handler registered for node type '{node.NodeType}'.");
+            }
+
+            return await handler.Execute(node, _context!);
+        }
+
+        private SkillExecuteResult ExecuteDelayNodeStep(RuntimeSkillNode node)
+        {
+            if (SkillHandlerUtility.IsCancellationRequested(_context!))
+                return SkillExecuteResult.Cancelled($"Delay node {node.NodeId} was cancelled before it started.");
+
+            if (!_delayRemainingFrames.TryGetValue(node.NodeId, out int remainingFrames))
+            {
+                float durationSeconds = node.GetFloatPropertyValue(RuntimePropertyKeys.Duration, 0f);
+                remainingFrames = ConvertSecondsToFrames(durationSeconds);
+                _delayRemainingFrames[node.NodeId] = remainingFrames;
+            }
+
+            if (remainingFrames > 0)
+            {
+                remainingFrames--;
+                _delayRemainingFrames[node.NodeId] = remainingFrames;
+                if (remainingFrames > 0)
+                {
+                    return SkillExecuteResult.Running(
+                        $"Delay node {node.NodeId} waiting {remainingFrames} frame(s).");
+                }
+            }
+
+            _delayRemainingFrames.Remove(node.NodeId);
+            return SkillExecuteResult.Success("Out");
+        }
+
+        private SkillExecuteResult ExecuteActionNodeInLockstep(RuntimeSkillNode node, int frameIndex)
+        {
+            string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
+            if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
+            {
+                return SkillExecuteResult.Failure(
+                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in lockstep mode.");
+            }
+
+            string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
+            float speed = node.GetFloatPropertyValue(RuntimePropertyKeys.Value, 1f);
+            EmitEvent(
+                frameIndex,
+                node.NodeId,
+                SkillExecutionEventTypes.CommandIssued,
+                $"actionType={actionType};prefabLocation={prefabLocation};speed={speed.ToString(CultureInfo.InvariantCulture)}");
+            return SkillExecuteResult.Success("Out");
+        }
+
+        private void EmitStepSpecificEvents(int frameIndex, RuntimeSkillNode node, SkillExecuteResult result)
+        {
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.SetVariable, StringComparison.Ordinal))
+            {
+                string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+                string valueType = node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.String);
+                string value = node.GetPropertyValue(RuntimePropertyKeys.Value);
+                EmitEvent(
+                    frameIndex,
+                    node.NodeId,
+                    SkillExecutionEventTypes.BlackboardSet,
+                    $"key={key};valueType={valueType};value={value}");
+                return;
+            }
+
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
+                string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal))
+            {
+                EmitEvent(
+                    frameIndex,
+                    node.NodeId,
+                    SkillExecutionEventTypes.BranchTaken,
+                    $"nextPort={result.NextPort}");
+            }
+        }
+
+        private bool TryInitializeBlackboard(RuntimeSkillGraph graph, SkillContext context, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            SkillBlackboard blackboard = context.Blackboard ?? new SkillBlackboard();
+            context.Blackboard = blackboard;
+
+            foreach (RuntimeVariableDef variable in graph.Variables ?? new List<RuntimeVariableDef>())
+            {
+                if (variable == null || string.IsNullOrWhiteSpace(variable.Name))
+                    continue;
+
+                try
+                {
+                    SkillBlackboardUtility.SetValue(
+                        blackboard,
+                        variable.Name,
+                        variable.ValueType,
+                        variable.DefaultValue);
+                }
+                catch (Exception exception)
+                {
+                    errorMessage =
+                        $"Failed to initialize blackboard variable '{variable.Name}' from default value '{variable.DefaultValue}': {exception.Message}";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsLockstepMode()
+        {
+            if (_options.ForceLockstep.HasValue)
+                return _options.ForceLockstep.Value;
+
+            return _graph != null &&
+                   string.Equals(_graph.SyncMode, RuntimeSyncModes.Lockstep, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private int ConvertSecondsToFrames(float seconds)
+        {
+            if (float.IsNaN(seconds) || float.IsInfinity(seconds))
+                return 0;
+
+            if (seconds <= 0f)
+                return 0;
+
+            float delta = _options.StepDeltaSeconds <= 0f ? 1f / 60f : _options.StepDeltaSeconds;
+            return Math.Max(1, (int)Math.Ceiling(seconds / delta));
+        }
+
+        private int ResolveStepNodeBudget(SkillStepFrameInput? frameInput)
+        {
+            int budget = _options.MaxNodesPerStep > 0 ? _options.MaxNodesPerStep : 1;
+            if (frameInput != null && frameInput.MaxNodesPerStepOverride > 0)
+                budget = frameInput.MaxNodesPerStepOverride;
+
+            return Math.Max(1, budget);
+        }
+
+        private SkillGraphRunResult BuildCurrentResult()
+        {
+            int lastNodeId = _currentNodeId;
+            switch (_status)
+            {
+                case SkillExecutionStatus.Success:
+                    return SkillGraphRunResult.Success(lastNodeId, _executedSteps, _lastMessage);
+                case SkillExecutionStatus.Failure:
+                    return SkillGraphRunResult.Failure(lastNodeId, _executedSteps, _lastMessage, _lastException);
+                case SkillExecutionStatus.Cancelled:
+                    return SkillGraphRunResult.Cancelled(lastNodeId, _executedSteps, _lastMessage);
+                default:
+                    return SkillGraphRunResult.Running(lastNodeId, _executedSteps, _lastMessage);
+            }
+        }
+
+        private SkillGraphRunResult SetSuccess(int lastNodeId, string message)
+        {
+            _status = SkillExecutionStatus.Success;
+            _currentNodeId = lastNodeId;
+            _lastMessage = message ?? string.Empty;
+            _lastException = null;
+            EmitExecutionEndIfNeeded(lastNodeId);
+            return BuildCurrentResult();
+        }
+
+        private SkillGraphRunResult SetFailure(int lastNodeId, string message, Exception? exception = null)
+        {
+            _status = SkillExecutionStatus.Failure;
+            _currentNodeId = lastNodeId;
+            _lastMessage = message ?? string.Empty;
+            _lastException = exception;
+            EmitExecutionEndIfNeeded(lastNodeId);
+            return BuildCurrentResult();
+        }
+
+        private SkillGraphRunResult SetCancelled(int lastNodeId, string message)
+        {
+            _status = SkillExecutionStatus.Cancelled;
+            _currentNodeId = lastNodeId;
+            _lastMessage = message ?? string.Empty;
+            _lastException = null;
+            EmitExecutionEndIfNeeded(lastNodeId);
+            return BuildCurrentResult();
+        }
+
+        private void EmitExecutionEndIfNeeded(int nodeId)
+        {
+            if (_executionEndEmitted)
+                return;
+
+            _executionEndEmitted = true;
+            EmitEvent(
+                _lastFrameIndex,
+                nodeId,
+                SkillExecutionEventTypes.ExecutionEnd,
+                $"status={_status};message={_lastMessage}");
+        }
+
+        private void EmitEvent(int frameIndex, int nodeId, string eventType, string payload)
+        {
+            if (!_options.EnableTrace)
+                return;
+
+            _events.Add(new SkillExecutionEvent
+            {
+                FrameIndex = frameIndex,
+                NodeId = nodeId,
+                EventType = eventType ?? string.Empty,
+                Payload = payload ?? string.Empty
+            });
+        }
+
+        private static int ResolveMaxExecutionSteps(RuntimeSkillGraph graph, SkillContext context, int overrideValue)
+        {
+            if (overrideValue > 0)
+                return overrideValue;
+
             if (context.MaxExecutionSteps > 0)
                 return context.MaxExecutionSteps;
 

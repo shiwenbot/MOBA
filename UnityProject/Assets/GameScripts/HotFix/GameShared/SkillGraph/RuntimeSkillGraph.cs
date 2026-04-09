@@ -28,6 +28,7 @@ namespace GameShared.SkillGraph
         public const string Operator = "operator";
         public const string Value = "value";
         public const string ValueType = "valueType";
+        public const string Duration = "duration";
         public const string PrefabAssetPath = "prefabAssetPath";
         public const string PrefabLocation = "prefabLocation";
     }
@@ -53,15 +54,30 @@ namespace GameShared.SkillGraph
         public const string IsFalse = "IsFalse";
     }
 
+    public static class RuntimeSyncModes
+    {
+        public const string Lockstep = "Lockstep";
+        public const string LocalOnly = "LocalOnly";
+    }
+
     public sealed class RuntimeSkillGraph
     {
-        public const string CurrentVersion = "0.6";
+        public const string CurrentVersion = "0.8";
 
         [JsonProperty("version")]
         public string Version { get; set; } = CurrentVersion;
 
         [JsonProperty("skillName")]
         public string SkillName { get; set; } = string.Empty;
+
+        [JsonProperty("syncMode")]
+        public string SyncMode { get; set; } = RuntimeSyncModes.LocalOnly;
+
+        [JsonProperty("variables")]
+        public List<RuntimeVariableDef> Variables { get; set; } = new List<RuntimeVariableDef>();
+
+        [JsonProperty("deterministicFlags")]
+        public List<string> DeterministicFlags { get; set; } = new List<string>();
 
         [JsonProperty("nodes")]
         public List<RuntimeSkillNode> Nodes { get; set; } = new List<RuntimeSkillNode>();
@@ -124,6 +140,18 @@ namespace GameShared.SkillGraph
                 _nodeLookup[node.NodeId] = node;
             }
         }
+    }
+
+    public sealed class RuntimeVariableDef
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonProperty("valueType")]
+        public string ValueType { get; set; } = RuntimeValueTypes.String;
+
+        [JsonProperty("defaultValue")]
+        public string DefaultValue { get; set; } = string.Empty;
     }
 
     public sealed class RuntimeSkillNode

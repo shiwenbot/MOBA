@@ -1,6 +1,7 @@
 using Fantasy.Async;
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace GameShared.SkillGraph
 {
@@ -102,10 +103,68 @@ namespace GameShared.SkillGraph
             _bools.Remove(key);
         }
 
+        public SkillBlackboardSnapshot CaptureSnapshot()
+        {
+            return new SkillBlackboardSnapshot
+            {
+                Strings = new Dictionary<string, string>(_strings, StringComparer.Ordinal),
+                Floats = new Dictionary<string, float>(_floats, StringComparer.Ordinal),
+                Ints = new Dictionary<string, int>(_ints, StringComparer.Ordinal),
+                Bools = new Dictionary<string, bool>(_bools, StringComparer.Ordinal)
+            };
+        }
+
+        public void RestoreSnapshot(SkillBlackboardSnapshot snapshot)
+        {
+            _strings.Clear();
+            _floats.Clear();
+            _ints.Clear();
+            _bools.Clear();
+
+            if (snapshot == null)
+                return;
+
+            CopyInto(snapshot.Strings, _strings);
+            CopyInto(snapshot.Floats, _floats);
+            CopyInto(snapshot.Ints, _ints);
+            CopyInto(snapshot.Bools, _bools);
+        }
+
+        private static void CopyInto<TValue>(
+            IReadOnlyDictionary<string, TValue> source,
+            IDictionary<string, TValue> destination)
+        {
+            if (source == null)
+                return;
+
+            foreach (KeyValuePair<string, TValue> pair in source)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key))
+                    continue;
+
+                destination[pair.Key] = pair.Value;
+            }
+        }
+
         private static void ValidateKey(string key)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new ArgumentException("Blackboard key cannot be empty.", nameof(key));
         }
+    }
+
+    public sealed class SkillBlackboardSnapshot
+    {
+        [JsonProperty("strings")]
+        public Dictionary<string, string> Strings { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        [JsonProperty("floats")]
+        public Dictionary<string, float> Floats { get; set; } = new Dictionary<string, float>(StringComparer.Ordinal);
+
+        [JsonProperty("ints")]
+        public Dictionary<string, int> Ints { get; set; } = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        [JsonProperty("bools")]
+        public Dictionary<string, bool> Bools { get; set; } = new Dictionary<string, bool>(StringComparer.Ordinal);
     }
 }

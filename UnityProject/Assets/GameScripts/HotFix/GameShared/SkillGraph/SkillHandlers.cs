@@ -43,7 +43,7 @@ namespace GameShared.SkillGraph
             if (SkillHandlerUtility.IsCancellationRequested(context))
                 return SkillExecuteResult.Cancelled($"Delay node {node.NodeId} was cancelled before it started.");
 
-            float durationSeconds = node.GetFloatPropertyValue("duration", 0f);
+            float durationSeconds = node.GetFloatPropertyValue(RuntimePropertyKeys.Duration, 0f);
             int delayMilliseconds = Math.Max(0, (int)(durationSeconds * 1000f));
             bool completed = await context.Runtime!.DelayAsync(delayMilliseconds, context.CancellationToken);
             if (!completed)
@@ -67,7 +67,7 @@ namespace GameShared.SkillGraph
             if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.6.");
+                    $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.8.");
             }
 
             string prefabLocation = node.GetPropertyValue(RuntimePropertyKeys.PrefabLocation);
