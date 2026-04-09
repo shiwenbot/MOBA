@@ -1,0 +1,5047 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "MOBA-TEngine",
+    "languages": [
+      "csharp"
+    ],
+    "frameworks": [
+      "HybridCLR",
+      "Luban",
+      "TEngine",
+      "UniTask",
+      "Unity",
+      "YooAsset",
+      "Fantasy",
+      "Animancer"
+    ],
+    "description": "MOBA game project built on TEngine framework (HybridCLR + YooAsset + UniTask + Luban). Includes game logic, skill graph editor, network/authentication, and game server.",
+    "analyzedAt": "2026-04-09T15:37:58.855864+00:00",
+    "gitCommitHash": "f473a11200ed20a0f79aaa550cc15bf6e245cbcd"
+  },
+  "nodes": [
+    {
+      "id": "file:GameServer/Server/Entity/AssemblyHelper.cs",
+      "type": "file",
+      "name": "AssemblyHelper.cs",
+      "summary": "静态工具类，负责加载 Entity 程序集和 Hotfix 热重载程序集，支持通过 AssemblyLoadContext 动态卸载和重载 Hotfix.dll。",
+      "tags": [
+        "assembly",
+        "hotreload",
+        "reflection",
+        "server",
+        "entity"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Entity/AssemblyHelper.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/AssemblyHelper.cs:AssemblyHelper",
+      "type": "class",
+      "name": "AssemblyHelper",
+      "summary": "静态类，提供 Initialize、LoadEntityAssembly、LoadHotfixAssembly 方法，管理服务端程序集的加载与热重载。",
+      "tags": [
+        "static",
+        "assembly",
+        "hotreload"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Entity/AssemblyHelper.cs",
+      "lineRange": [
+        6,
+        47
+      ]
+    },
+    {
+      "id": "func:GameServer/Server/Entity/AssemblyHelper.cs:LoadHotfixAssembly",
+      "type": "function",
+      "name": "LoadHotfixAssembly",
+      "summary": "卸载旧的 AssemblyLoadContext，从磁盘读取 Hotfix.dll 和 .pdb，加载到新的可卸载上下文中并触发 ModuleInitializer。",
+      "tags": [
+        "hotreload",
+        "assembly",
+        "reflection"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Entity/AssemblyHelper.cs",
+      "lineRange": [
+        26,
+        45
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs",
+      "type": "file",
+      "name": "AuthenticationComponent.cs",
+      "summary": "鉴权组件实体，持有注册账号的内存缓存字典，键为账号标识，值为 Account 实体。",
+      "tags": [
+        "authentication",
+        "component",
+        "entity",
+        "cache",
+        "server"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/AuthenticationComponent.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs:AuthenticationComponent",
+      "type": "class",
+      "name": "AuthenticationComponent",
+      "summary": "继承 Fantasy.Entitas.Entity，持有 CacheAccountList 字典缓存已注册账号数据。",
+      "tags": [
+        "entity",
+        "authentication",
+        "cache"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/AuthenticationComponent.cs",
+      "lineRange": [
+        3,
+        9
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Authentication/Model/Account.cs",
+      "type": "file",
+      "name": "Account.cs",
+      "summary": "账号实体模型，存储用户名、密码、创建时间和登录时间等基础账号信息。",
+      "tags": [
+        "account",
+        "entity",
+        "model",
+        "authentication",
+        "server"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/Model/Account.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Authentication/Model/Account.cs:Account",
+      "type": "class",
+      "name": "Account",
+      "summary": "继承 Fantasy.Entitas.Entity，包含 Username、Password、CreateTime、LoginTime 属性。",
+      "tags": [
+        "entity",
+        "account",
+        "model"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/Model/Account.cs",
+      "lineRange": [
+        5,
+        26
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs",
+      "type": "file",
+      "name": "AccountCacheInfoTimeOutComponent.cs",
+      "summary": "账号缓存信息超时组件，持有定时器 ID 和缓存键，用于管理账号缓存的过期逻辑。",
+      "tags": [
+        "timeout",
+        "cache",
+        "entity",
+        "authentication",
+        "server"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs:AccountCacheInfoTimeOutComponent",
+      "type": "class",
+      "name": "AccountCacheInfoTimeOutComponent",
+      "summary": "继承 Fantasy.Entitas.Entity，字段 TimeId 存储定时器 ID，Key 存储缓存键。",
+      "tags": [
+        "entity",
+        "timeout",
+        "cache"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs",
+      "lineRange": [
+        5,
+        9
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs",
+      "type": "file",
+      "name": "AccountTimeOutComponent.cs",
+      "summary": "账号超时组件，持有定时器 ID，用于管理账号会话的超时逻辑。",
+      "tags": [
+        "timeout",
+        "entity",
+        "authentication",
+        "server",
+        "timer"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs:AccountTimeOutComponent",
+      "type": "class",
+      "name": "AccountTimeOutComponent",
+      "summary": "继承 Fantasy.Entitas.Entity，字段 TimeId 存储定时器 ID。",
+      "tags": [
+        "entity",
+        "timeout",
+        "timer"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs",
+      "lineRange": [
+        5,
+        8
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/LockType.cs",
+      "type": "file",
+      "name": "LockType.cs",
+      "summary": "定义服务端分布式锁类型枚举，包含鉴权注册锁和鉴权登录锁。",
+      "tags": [
+        "lock",
+        "enum",
+        "authentication",
+        "server",
+        "concurrency"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/LockType.cs"
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Luban/BeanBase.cs",
+      "type": "file",
+      "name": "BeanBase.cs",
+      "summary": "Luban 配置系统的抽象基类，定义 GetTypeId 抽象方法供所有配置 Bean 实现。",
+      "tags": [
+        "luban",
+        "config",
+        "abstract",
+        "base",
+        "server"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Luban/BeanBase.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Luban/BeanBase.cs:BeanBase",
+      "type": "class",
+      "name": "BeanBase",
+      "summary": "Luban 命名空间下的抽象类，声明 GetTypeId() 抽象方法，作为所有 Luban 生成 Bean 的基类。",
+      "tags": [
+        "abstract",
+        "luban",
+        "config"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Luban/BeanBase.cs",
+      "lineRange": [
+        24,
+        28
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Entity/Luban/StringUtil.cs",
+      "type": "file",
+      "name": "StringUtil.cs",
+      "summary": "Luban 配置系统的字符串工具类，提供对象、数组、集合和字典的字符串序列化方法。",
+      "tags": [
+        "luban",
+        "utility",
+        "string",
+        "serialization",
+        "server"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Luban/StringUtil.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Entity/Luban/StringUtil.cs:StringUtil",
+      "type": "class",
+      "name": "StringUtil",
+      "summary": "静态工具类，提供 ToStr、ArrayToString、CollectionToString 等方法用于调试输出 Luban 配置对象。",
+      "tags": [
+        "static",
+        "utility",
+        "string"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Entity/Luban/StringUtil.cs",
+      "lineRange": [
+        27,
+        73
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs",
+      "type": "file",
+      "name": "C2A_LoginRequestHandler.cs",
+      "summary": "处理客户端登录请求的 RPC Handler，调用 AuthenticationHelper.Login 并将结果写入响应，登录成功后向客户端推送欢迎消息。",
+      "tags": [
+        "handler",
+        "login",
+        "rpc",
+        "authentication",
+        "hotfix"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs:C2A_LoginRequestHandler",
+      "type": "class",
+      "name": "C2A_LoginRequestHandler",
+      "summary": "继承 MessageRPC<C2A_LoginRequest, A2C_LoginResponse>，Run 方法调用 AuthenticationHelper.Login 处理登录逻辑。",
+      "tags": [
+        "rpc",
+        "handler",
+        "login"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs",
+      "lineRange": [
+        8,
+        25
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs",
+      "type": "file",
+      "name": "C2A_RegisterRequestHandler.cs",
+      "summary": "处理客户端注册请求的 RPC Handler，调用 AuthenticationHelper.Register 并将错误码写入响应。",
+      "tags": [
+        "handler",
+        "register",
+        "rpc",
+        "authentication",
+        "hotfix"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs:C2A_RegisterRequestHandler",
+      "type": "class",
+      "name": "C2A_RegisterRequestHandler",
+      "summary": "继承 MessageRPC<C2A_RegisterRequest, A2C_RegisterResponse>，Run 方法调用 AuthenticationHelper.Register 处理注册逻辑。",
+      "tags": [
+        "rpc",
+        "handler",
+        "register"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs",
+      "lineRange": [
+        8,
+        15
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+      "type": "file",
+      "name": "OnSceneCreate_Init.cs",
+      "summary": "Fantasy.Net 场景创建事件处理器，根据 SceneType 为 Authentication 场景挂载 AuthenticationComponent，为 Gate 场景打印启动日志。",
+      "tags": [
+        "server",
+        "event-handler",
+        "authentication",
+        "scene-lifecycle",
+        "fantasy-net"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs:OnSceneCreate_Init",
+      "type": "class",
+      "name": "OnSceneCreate_Init",
+      "summary": "异步事件系统处理器，监听 OnCreateScene 事件，按场景类型初始化对应组件。",
+      "tags": [
+        "event-system",
+        "async",
+        "scene-init",
+        "fantasy-net"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+      "lineRange": [
+        7,
+        26
+      ]
+    },
+    {
+      "id": "func:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs:Handler",
+      "type": "function",
+      "name": "Handler",
+      "summary": "根据场景类型分支处理：Authentication 场景添加 AuthenticationComponent，Gate 场景记录调试日志。",
+      "tags": [
+        "async",
+        "scene-type",
+        "component-init"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+      "lineRange": [
+        9,
+        25
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "type": "file",
+      "name": "AuthenticationComponentSystem.cs",
+      "summary": "鉴权组件的扩展方法系统，提供 Login 和 Register 两个异步操作，使用协程锁保证并发安全，并与数据库交互完成账号管理。",
+      "tags": [
+        "server",
+        "authentication",
+        "database",
+        "coroutine-lock",
+        "fantasy-net"
+      ],
+      "complexity": "complex",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:AuthenticationComponentSystem",
+      "type": "class",
+      "name": "AuthenticationComponentSystem",
+      "summary": "静态扩展类，为 AuthenticationComponent 提供 Login 和 Register 业务逻辑，包含协程锁、数据库查询和缓存操作。",
+      "tags": [
+        "extension-methods",
+        "authentication",
+        "async",
+        "database"
+      ],
+      "complexity": "complex",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "lineRange": [
+        13,
+        117
+      ]
+    },
+    {
+      "id": "func:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:Login",
+      "type": "function",
+      "name": "Login",
+      "summary": "验证用户名和密码，通过协程锁保证原子性，查询数据库并在成功时更新登录时间，返回错误码和账号 ID。",
+      "tags": [
+        "async",
+        "login",
+        "database",
+        "coroutine-lock"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "lineRange": [
+        15,
+        60
+      ]
+    },
+    {
+      "id": "func:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:Register",
+      "type": "function",
+      "name": "Register",
+      "summary": "注册新账号，先检查缓存再查数据库，使用协程锁防止重复注册，成功后写入数据库并更新本地缓存。",
+      "tags": [
+        "async",
+        "register",
+        "database",
+        "cache",
+        "coroutine-lock"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "lineRange": [
+        66,
+        116
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs",
+      "type": "file",
+      "name": "AuthenticationHelper.cs",
+      "summary": "鉴权辅助静态类，对外暴露 Login 和 Register 的简洁调用接口，内部委托给 AuthenticationComponentSystem 扩展方法。",
+      "tags": [
+        "server",
+        "authentication",
+        "helper",
+        "facade",
+        "fantasy-net"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs:AuthenticationHelper",
+      "type": "class",
+      "name": "AuthenticationHelper",
+      "summary": "公开静态辅助类，通过 Scene 获取 AuthenticationComponent 并转发 Login/Register 调用。",
+      "tags": [
+        "helper",
+        "facade",
+        "static",
+        "authentication"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs",
+      "lineRange": [
+        7,
+        28
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Main/NLog.cs",
+      "type": "file",
+      "name": "NLog.cs",
+      "summary": "Fantasy.Net ILog 接口的 NLog 实现，封装 NLog Logger，支持 Trace/Debug/Info/Warning/Error/Fatal 各级别日志及格式化重载，并根据 ProcessMode 动态调整日志规则。",
+      "tags": [
+        "server",
+        "logging",
+        "nlog",
+        "fantasy-net",
+        "infrastructure"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Main/NLog.cs"
+    },
+    {
+      "id": "class:GameServer/Server/Main/NLog.cs:NLog",
+      "type": "class",
+      "name": "NLog",
+      "summary": "实现 Fantasy.Net ILog 接口，包装 NLog.Logger，提供完整的多级别日志方法和基于 ProcessMode 的运行时规则配置。",
+      "tags": [
+        "logging",
+        "ilog",
+        "nlog",
+        "process-mode"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Main/NLog.cs",
+      "lineRange": [
+        9,
+        167
+      ]
+    },
+    {
+      "id": "func:GameServer/Server/Main/NLog.cs:Initialize",
+      "type": "function",
+      "name": "Initialize",
+      "summary": "根据 ProcessMode（Develop/Release）移除对应的 NLog 规则，实现开发模式保留控制台输出、发布模式仅保留文件输出的切换。",
+      "tags": [
+        "initialization",
+        "process-mode",
+        "log-rules"
+      ],
+      "complexity": "moderate",
+      "filePath": "GameServer/Server/Main/NLog.cs",
+      "lineRange": [
+        27,
+        51
+      ]
+    },
+    {
+      "id": "file:GameServer/Server/Main/Program.cs",
+      "type": "file",
+      "name": "Program.cs",
+      "summary": "Fantasy.Net 服务器应用程序入口，依次初始化程序集、配置 NLog 日志器，然后启动 Fantasy.Net 框架。",
+      "tags": [
+        "server",
+        "entry-point",
+        "startup",
+        "fantasy-net",
+        "program"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Server/Main/Program.cs"
+    },
+    {
+      "id": "file:GameServer/Tools/ProtocolExportTool/Run.sh",
+      "type": "file",
+      "name": "Run.sh",
+      "summary": "Fantasy 协议导出工具的 Bash 启动脚本，检测 .NET 8+ 运行时版本后以静默模式运行 Fantasy.ProtocolExportTool.dll。",
+      "tags": [
+        "tools",
+        "shell-script",
+        "protocol-export",
+        "dotnet",
+        "fantasy-net"
+      ],
+      "complexity": "simple",
+      "filePath": "GameServer/Tools/ProtocolExportTool/Run.sh"
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs",
+      "type": "file",
+      "name": "SkillEdgeData.cs",
+      "summary": "技能图编辑器中表示节点连线的可序列化数据类，记录输出节点/端口和输入节点/端口的 GUID 与名称。",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "data-model",
+        "serializable",
+        "unity"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs:SkillEdgeData",
+      "type": "class",
+      "name": "SkillEdgeData",
+      "summary": "可序列化的技能图边数据，存储连接两个节点端口所需的四个字段。",
+      "tags": [
+        "data-model",
+        "serializable",
+        "edge",
+        "skill-graph"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs",
+      "lineRange": [
+        6,
+        13
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+      "type": "file",
+      "name": "SkillGraphData.cs",
+      "summary": "技能图的顶层可序列化数据容器，聚合节点列表、边列表和黑板变量定义，并记录图名称和同步模式。",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "data-model",
+        "serializable",
+        "unity"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillGraphData",
+      "type": "class",
+      "name": "SkillGraphData",
+      "summary": "技能图根数据类，包含图名、同步模式、节点集合、边集合和变量定义集合。",
+      "tags": [
+        "data-model",
+        "serializable",
+        "graph-root",
+        "skill-graph"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+      "lineRange": [
+        14,
+        23
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillVariableDef",
+      "type": "class",
+      "name": "SkillVariableDef",
+      "summary": "技能图黑板变量定义，包含变量名、类型（SkillBlackboardValueType）和默认值。",
+      "tags": [
+        "data-model",
+        "serializable",
+        "blackboard",
+        "variable"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+      "lineRange": [
+        7,
+        12
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs",
+      "type": "file",
+      "name": "SkillNodeData.cs",
+      "summary": "技能图节点的可序列化数据类，存储节点 GUID、标题、类型、位置和属性列表。",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "data-model",
+        "serializable",
+        "unity"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs:SkillNodeData",
+      "type": "class",
+      "name": "SkillNodeData",
+      "summary": "可序列化的技能图节点数据，包含唯一标识、显示标题、节点类型、画布位置和键值属性列表。",
+      "tags": [
+        "data-model",
+        "serializable",
+        "node",
+        "skill-graph"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs",
+      "lineRange": [
+        7,
+        15
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs",
+      "type": "file",
+      "name": "SkillNodePropertyData.cs",
+      "summary": "技能图节点属性的键值对数据类，用于存储节点的自定义属性。",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "data-model",
+        "serializable",
+        "unity"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs:SkillNodePropertyData",
+      "type": "class",
+      "name": "SkillNodePropertyData",
+      "summary": "可序列化的节点属性键值对，key 为属性名，value 为属性值字符串。",
+      "tags": [
+        "data-model",
+        "serializable",
+        "property",
+        "key-value"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs",
+      "lineRange": [
+        6,
+        11
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs",
+      "type": "file",
+      "name": "SkillGraphExporter.cs",
+      "summary": "SkillGraphExporter.cs defines class SkillGraphExporter",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs:SkillGraphExporter",
+      "type": "class",
+      "name": "SkillGraphExporter",
+      "summary": "Class SkillGraphExporter in SkillGraphExporter.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        14,
+        64
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs",
+      "type": "file",
+      "name": "ActionNode.cs",
+      "summary": "ActionNode.cs defines class ActionNode (inherits SkillGraphNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs:ActionNode",
+      "type": "class",
+      "name": "ActionNode",
+      "summary": "Class ActionNode in ActionNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        10,
+        60
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs",
+      "type": "file",
+      "name": "BranchNode.cs",
+      "summary": "BranchNode.cs defines class BranchNode (inherits SkillGraphNode, ISkillVariableBindableNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs:BranchNode",
+      "type": "class",
+      "name": "BranchNode",
+      "summary": "Class BranchNode in BranchNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        8,
+        58
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs",
+      "type": "file",
+      "name": "ConditionNode.cs",
+      "summary": "ConditionNode.cs defines class ConditionNode (inherits SkillGraphNode, ISkillVariableBindableNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs:ConditionNode",
+      "type": "class",
+      "name": "ConditionNode",
+      "summary": "Class ConditionNode in ConditionNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        10,
+        60
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs",
+      "type": "file",
+      "name": "DebugNode.cs",
+      "summary": "DebugNode.cs defines class DebugNode (inherits SkillGraphNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs:DebugNode",
+      "type": "class",
+      "name": "DebugNode",
+      "summary": "Class DebugNode in DebugNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        39
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs",
+      "type": "file",
+      "name": "DelayNode.cs",
+      "summary": "DelayNode.cs defines class DelayNode (inherits SkillGraphNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs:DelayNode",
+      "type": "class",
+      "name": "DelayNode",
+      "summary": "Class DelayNode in DelayNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        39
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/EntryNode.cs",
+      "type": "file",
+      "name": "EntryNode.cs",
+      "summary": "EntryNode.cs defines class EntryNode (inherits SkillGraphNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/EntryNode.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs",
+      "type": "file",
+      "name": "SetVariableNode.cs",
+      "summary": "SetVariableNode.cs defines class SetVariableNode (inherits SkillGraphNode, ISkillVariableBindableNode)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs:SetVariableNode",
+      "type": "class",
+      "name": "SetVariableNode",
+      "summary": "Class SetVariableNode in SetVariableNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        10,
+        60
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SkillNodeTypes.cs",
+      "type": "file",
+      "name": "SkillNodeTypes.cs",
+      "summary": "SkillNodeTypes.cs defines enum SkillNodeType",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/Nodes/SkillNodeTypes.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillFlowPort.cs",
+      "type": "file",
+      "name": "SkillFlowPort.cs",
+      "summary": "SkillFlowPort.cs defines class SkillFlowPort",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillFlowPort.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs",
+      "type": "file",
+      "name": "SkillGraphBlackboardPanel.cs",
+      "summary": "SkillGraphBlackboardPanel.cs defines class SkillGraphBlackboardPanel (inherits VisualElement, VisualElement)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs:SkillGraphBlackboardPanel",
+      "type": "class",
+      "name": "SkillGraphBlackboardPanel",
+      "summary": "Class SkillGraphBlackboardPanel in SkillGraphBlackboardPanel.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs:VariableRowElement",
+      "type": "class",
+      "name": "VariableRowElement",
+      "summary": "Class VariableRowElement in SkillGraphBlackboardPanel.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        309,
+        355
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs",
+      "type": "file",
+      "name": "SkillGraphEditor.cs",
+      "summary": "SkillGraphEditor.cs defines class SkillGraphEditor (inherits EditorWindow)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs:SkillGraphEditor",
+      "type": "class",
+      "name": "SkillGraphEditor",
+      "summary": "Class SkillGraphEditor in SkillGraphEditor.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        14,
+        64
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "file",
+      "name": "SkillGraphNode.cs",
+      "summary": "SkillGraphNode.cs defines interface ISkillVariableBindableNode (inherits Node)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs:ISkillVariableBindableNode",
+      "type": "class",
+      "name": "ISkillVariableBindableNode",
+      "summary": "Interface ISkillVariableBindableNode in SkillGraphNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        12,
+        62
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs:SkillGraphNode",
+      "type": "class",
+      "name": "SkillGraphNode",
+      "summary": "Class SkillGraphNode in SkillGraphNode.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        16,
+        66
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs",
+      "type": "file",
+      "name": "SkillGraphNodeFactory.cs",
+      "summary": "SkillGraphNodeFactory.cs defines class SkillGraphNodeFactory",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs:SkillGraphNodeFactory",
+      "type": "class",
+      "name": "SkillGraphNodeFactory",
+      "summary": "Class SkillGraphNodeFactory in SkillGraphNodeFactory.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        5,
+        41
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs",
+      "type": "file",
+      "name": "SkillGraphPaths.cs",
+      "summary": "SkillGraphPaths.cs defines class SkillGraphPaths",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs:SkillGraphPaths",
+      "type": "class",
+      "name": "SkillGraphPaths",
+      "summary": "Class SkillGraphPaths in SkillGraphPaths.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        7,
+        55
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs",
+      "type": "file",
+      "name": "SkillGraphSearchWindow.cs",
+      "summary": "SkillGraphSearchWindow.cs defines class SkillGraphSearchWindow (inherits ScriptableObject, ISearchWindowProvider)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs:SkillGraphSearchWindow",
+      "type": "class",
+      "name": "SkillGraphSearchWindow",
+      "summary": "Class SkillGraphSearchWindow in SkillGraphSearchWindow.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        9,
+        59
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs",
+      "type": "file",
+      "name": "SkillGraphUndoSystem.cs",
+      "summary": "SkillGraphUndoSystem.cs defines class SkillGraphUndoSystem",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs:SkillGraphUndoSystem",
+      "type": "class",
+      "name": "SkillGraphUndoSystem",
+      "summary": "Class SkillGraphUndoSystem in SkillGraphUndoSystem.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        6,
+        56
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs",
+      "type": "file",
+      "name": "SkillGraphView.cs",
+      "summary": "SkillGraphView.cs defines class SkillGraphView (inherits GraphView)",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs:SkillGraphView",
+      "type": "class",
+      "name": "SkillGraphView",
+      "summary": "Class SkillGraphView in SkillGraphView.cs",
+      "tags": [
+        "editor",
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/DisStripCode/DisStripCodeAssemblyCSharp.cs",
+      "type": "file",
+      "name": "DisStripCodeAssemblyCSharp.cs",
+      "summary": "DisStripCodeAssemblyCSharp.cs defines class DisStripCodeAssemblyCSharp",
+      "tags": [
+        "game-logic",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/DisStripCode/DisStripCodeAssemblyCSharp.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs",
+      "type": "file",
+      "name": "ClientConnectWatcher.cs",
+      "summary": "ClientConnectWatcher.cs defines enum ClientConnectWatcherStatus",
+      "tags": [
+        "network",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs:ClientConnectWatcher",
+      "type": "class",
+      "name": "ClientConnectWatcher",
+      "summary": "Class ClientConnectWatcher in ClientConnectWatcher.cs",
+      "tags": [
+        "network",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        43,
+        93
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+      "type": "file",
+      "name": "DataCenterModule.cs",
+      "summary": "定义 IDataCenterModule 接口和泛型基类 DataCenterModule<T>，提供数据中心子模块的生命周期回调（OnInit/OnRoleLogin/OnRoleLogout/OnUpdate/OnMainPlayerMapChange）。",
+      "tags": [
+        "data-center",
+        "interface",
+        "lifecycle",
+        "singleton"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:IDataCenterModule",
+      "type": "class",
+      "name": "IDataCenterModule",
+      "summary": "数据中心模块接口，声明 OnInit/OnRoleLogin/OnRoleLogout/OnUpdate/OnMainPlayerMapChange 五个生命周期方法。",
+      "tags": [
+        "interface",
+        "lifecycle",
+        "data-center"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        3,
+        32
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:DataCenterModule",
+      "type": "class",
+      "name": "DataCenterModule<T>",
+      "summary": "泛型数据中心模块基类，实现 IDataCenterModule，提供静态单例 Instance 属性和各生命周期虚方法的默认空实现。",
+      "tags": [
+        "base-class",
+        "singleton",
+        "generic",
+        "data-center"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        38,
+        71
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "type": "file",
+      "name": "DataCenterSys.cs",
+      "summary": "数据中心系统单例，管理所有 IDataCenterModule 子模块的生命周期，并封装 Register/Login 等网络操作，通过 GameClient 与服务器通信。",
+      "tags": [
+        "data-center",
+        "singleton",
+        "network",
+        "login",
+        "register"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys",
+      "type": "class",
+      "name": "DataCenterSys",
+      "summary": "继承 Singleton<DataCenterSys> 并实现 IUpdate，统一管理数据中心子模块列表，提供 Register/Login 异步网络方法和 ClearClientData 清理方法。",
+      "tags": [
+        "singleton",
+        "update",
+        "network",
+        "data-center"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        12,
+        115
+      ]
+    },
+    {
+      "id": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys.Login",
+      "type": "function",
+      "name": "Login",
+      "summary": "异步连接认证服务器，发送 C2A_LoginRequest，成功后触发 ILoginUI.OnLoginSuccess 事件。",
+      "tags": [
+        "async",
+        "network",
+        "login",
+        "event"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        61,
+        79
+      ]
+    },
+    {
+      "id": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys.Register",
+      "type": "function",
+      "name": "Register",
+      "summary": "异步连接服务器并发送 C2A_RegisterRequest 完成账号注册。",
+      "tags": [
+        "async",
+        "network",
+        "register"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        37,
+        52
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "type": "file",
+      "name": "GameClient.cs",
+      "summary": "封装 Fantasy 网络框架的客户端单例，负责连接/断开/重连/心跳监控，以及消息发送（Call/Send）和消息处理器注册，是所有网络通信的核心入口。",
+      "tags": [
+        "network",
+        "singleton",
+        "fantasy",
+        "kcp",
+        "reconnect",
+        "heartbeat"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClientStatus",
+      "type": "class",
+      "name": "GameClientStatus",
+      "summary": "枚举网络客户端状态：StatusInit/StatusConnected/StatusReconnect/StatusClose/StatusLogin/StatusRegister/StatusEnter。",
+      "tags": [
+        "enum",
+        "network",
+        "status"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        17,
+        53
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient",
+      "type": "class",
+      "name": "GameClient",
+      "summary": "密封单例类，持有 Fantasy Scene，管理 KCP 连接生命周期（Connect/ConnectAsync/Disconnect/Reconnect），提供 Call/Send 消息方法和 RegisterMsgHandler/UnRegisterMsgHandler 消息分发注册。",
+      "tags": [
+        "singleton",
+        "network",
+        "fantasy",
+        "kcp",
+        "sealed"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        55,
+        424
+      ]
+    },
+    {
+      "id": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient.InitAsync",
+      "type": "function",
+      "name": "InitAsync",
+      "summary": "异步初始化 Fantasy 框架，遍历热更程序集调用 EnsureLoaded，然后创建 Fantasy Scene。",
+      "tags": [
+        "async",
+        "init",
+        "fantasy",
+        "hotfix"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        109,
+        125
+      ]
+    },
+    {
+      "id": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient.ConnectAsync",
+      "type": "function",
+      "name": "ConnectAsync",
+      "summary": "异步连接服务器，内部创建 FTask<bool> 等待连接回调完成后返回。",
+      "tags": [
+        "async",
+        "network",
+        "connect"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        160,
+        200
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+      "type": "file",
+      "name": "GameApp.cs",
+      "summary": "热更域入口类，Entrance 方法初始化事件系统、初始化 GameClient（Fantasy 框架），然后显示 LoginUI，是整个热更逻辑的启动点。",
+      "tags": [
+        "entry-point",
+        "hotfix",
+        "startup",
+        "login"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs:GameApp",
+      "type": "class",
+      "name": "GameApp",
+      "summary": "热更入口 partial 类，Entrance 静态方法作为热更主入口，调用 GameClient.InitAsync 后显示 LoginUI，Release 时释放所有单例。",
+      "tags": [
+        "entry-point",
+        "partial",
+        "static",
+        "hotfix"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        17,
+        55
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs",
+      "type": "file",
+      "name": "GameModule.cs",
+      "summary": "全局模块访问门面类，通过懒加载静态属性暴露 TEngine 各框架模块（UI/Resource/Audio/Scene/Timer/Fsm/Procedure/Localization/Debugger）。",
+      "tags": [
+        "module",
+        "facade",
+        "static",
+        "tengine"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs:GameModule",
+      "type": "class",
+      "name": "GameModule",
+      "summary": "静态门面类，为热更代码提供对所有 TEngine 框架模块的统一访问入口，通过 ModuleSystem.GetModule<T>() 懒加载各模块实例。",
+      "tags": [
+        "facade",
+        "static",
+        "module-access",
+        "tengine"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        1,
+        118
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs",
+      "type": "file",
+      "name": "ILoginUI.cs",
+      "summary": "定义登录 UI 事件接口 ILoginUI，属于 EEventGroup.GroupUI 事件组，声明 OnLoginSuccess/ShowLoginUI/CloseLoginUI 三个方法。",
+      "tags": [
+        "event",
+        "interface",
+        "login",
+        "ui"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs:ILoginUI",
+      "type": "class",
+      "name": "ILoginUI",
+      "summary": "登录 UI 事件接口，标注 EventInterface(EEventGroup.GroupUI)，供 GameEvent 系统分发登录相关 UI 事件。",
+      "tags": [
+        "interface",
+        "event",
+        "login",
+        "ui"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        13
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs",
+      "type": "file",
+      "name": "ErrorLogger.cs",
+      "summary": "订阅 Unity Application.logMessageReceived，捕获 Exception 级别日志并通过 UIModule 显示 LogUI 错误弹窗。",
+      "tags": [
+        "error-handling",
+        "logging",
+        "ui",
+        "disposable"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs:ErrorLogger",
+      "type": "class",
+      "name": "ErrorLogger",
+      "summary": "IDisposable 类，构造时注册 Unity 日志回调，捕获异常日志后调用 UIModule.ShowUIAsync<LogUI> 显示错误信息。",
+      "tags": [
+        "disposable",
+        "logging",
+        "error",
+        "ui"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        29
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs",
+      "type": "file",
+      "name": "LogUI.cs",
+      "summary": "系统层 UIWindow，使用 Stack 管理多条错误日志，支持逐条弹出查看，关闭时自动销毁窗口。",
+      "tags": [
+        "ui",
+        "window",
+        "error-log",
+        "stack"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs:LogUI",
+      "type": "class",
+      "name": "LogUI",
+      "summary": "继承 UIWindow 的错误日志弹窗，标注 Window(UILayer.System, fromResources:true)，用 Stack<string> 管理错误消息队列，支持逐条关闭。",
+      "tags": [
+        "ui-window",
+        "system-layer",
+        "error",
+        "stack"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        9,
+        54
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs",
+      "type": "file",
+      "name": "IUIController.cs",
+      "summary": "定义 IUIController 接口，声明 RegUIMessage 方法，用于 UI 窗口注册消息处理器。",
+      "tags": [
+        "interface",
+        "ui",
+        "message"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs:IUIController",
+      "type": "class",
+      "name": "IUIController",
+      "summary": "UI 控制器接口，定义 RegUIMessage() 方法供 UI 窗口实现以注册消息处理器。",
+      "tags": [
+        "interface",
+        "ui",
+        "message-registration"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        12
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs",
+      "type": "file",
+      "name": "IUIResourceLoader.cs",
+      "summary": "定义 IUIResourceLoader 接口和默认实现 UIResourceLoader，封装同步/异步 GameObject 加载，底层委托给 IResourceModule。",
+      "tags": [
+        "interface",
+        "resource",
+        "ui",
+        "async"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:IUIResourceLoader",
+      "type": "class",
+      "name": "IUIResourceLoader",
+      "summary": "UI 资源加载器接口，声明 LoadGameObject（同步）和 LoadGameObjectAsync（异步）两个方法。",
+      "tags": [
+        "interface",
+        "resource-loading",
+        "ui"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        11,
+        33
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:UIResourceLoader",
+      "type": "class",
+      "name": "UIResourceLoader",
+      "summary": "IUIResourceLoader 的默认实现，持有 IResourceModule 实例，将加载请求委托给 TEngine 资源模块。",
+      "tags": [
+        "resource-loading",
+        "ui",
+        "tengine",
+        "delegate"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        38,
+        68
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs",
+      "type": "file",
+      "name": "SetUISafeFitHelper.cs",
+      "summary": "SetUISafeFitHelper.cs defines class SetUISafeFitHelper",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs:SetUISafeFitHelper",
+      "type": "class",
+      "name": "SetUISafeFitHelper",
+      "summary": "Class SetUISafeFitHelper in SetUISafeFitHelper.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        5,
+        55
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+      "type": "file",
+      "name": "BaseChildPage.cs",
+      "summary": "BaseChildPage.cs defines class ChildPageShareData (inherits UIWidget)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs:ChildPageShareData",
+      "type": "class",
+      "name": "ChildPageShareData",
+      "summary": "Class ChildPageShareData in BaseChildPage.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        6,
+        56
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs:BaseChildPage",
+      "type": "class",
+      "name": "BaseChildPage",
+      "summary": "Class BaseChildPage in BaseChildPage.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        43,
+        88
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs",
+      "type": "file",
+      "name": "SwitchPageMgr.cs",
+      "summary": "SwitchPageMgr.cs defines class SwitchPageMgr",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs:SwitchPageMgr",
+      "type": "class",
+      "name": "SwitchPageMgr",
+      "summary": "Class SwitchPageMgr in SwitchPageMgr.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs:TabPageInfo",
+      "type": "class",
+      "name": "TabPageInfo",
+      "summary": "Class TabPageInfo in SwitchPageMgr.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        13,
+        63
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs",
+      "type": "file",
+      "name": "SwitchTabItem.cs",
+      "summary": "SwitchTabItem.cs defines class SwitchTabItem (inherits UIEventItem)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs:SwitchTabItem",
+      "type": "class",
+      "name": "SwitchTabItem",
+      "summary": "Class SwitchTabItem in SwitchTabItem.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        9,
+        59
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+      "type": "file",
+      "name": "UIBase.cs",
+      "summary": "UIBase.cs defines class UIBase",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs:UIBase",
+      "type": "class",
+      "name": "UIBase",
+      "summary": "Class UIBase in UIBase.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        20,
+        70
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs",
+      "type": "file",
+      "name": "UIBindComponent.cs",
+      "summary": "UIBindComponent.cs defines class UIBindComponent (inherits MonoBehaviour)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs:UIBindComponent",
+      "type": "class",
+      "name": "UIBindComponent",
+      "summary": "Class UIBindComponent in UIBindComponent.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        18,
+        39
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs",
+      "type": "file",
+      "name": "UIComponentEditor.cs",
+      "summary": "UIComponentEditor.cs defines class UIBindComponent",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs:UIBindComponent",
+      "type": "class",
+      "name": "UIBindComponent",
+      "summary": "Class UIBindComponent in UIComponentEditor.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        7,
+        32
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs",
+      "type": "file",
+      "name": "UIModule.cs",
+      "summary": "UIModule.cs defines class UIModule (inherits Singleton, IUpdate)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs:UIModule",
+      "type": "class",
+      "name": "UIModule",
+      "summary": "Class UIModule in UIModule.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        15,
+        65
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "type": "file",
+      "name": "UIWidget.cs",
+      "summary": "UIWidget.cs defines class UIWidget (inherits UIBase)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs:UIWidget",
+      "type": "class",
+      "name": "UIWidget",
+      "summary": "Class UIWidget in UIWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        7,
+        57
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+      "type": "file",
+      "name": "UIWindow.cs",
+      "summary": "UIWindow.cs defines class UIWindow (inherits UIBase)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs:UIWindow",
+      "type": "class",
+      "name": "UIWindow",
+      "summary": "Class UIWindow in UIWindow.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs",
+      "type": "file",
+      "name": "EmptyGraph.cs",
+      "summary": "EmptyGraph.cs defines class EmptyGraph (inherits Graphic)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs:EmptyGraph",
+      "type": "class",
+      "name": "EmptyGraph",
+      "summary": "Class EmptyGraph in EmptyGraph.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        7,
+        25
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+      "type": "file",
+      "name": "UIEventItem.cs",
+      "summary": "UIEventItem.cs defines class UIEventItem (inherits UIWidget)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs:UIEventItem",
+      "type": "class",
+      "name": "UIEventItem",
+      "summary": "Class UIEventItem in UIEventItem.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        7,
+        57
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "type": "file",
+      "name": "UIListBase.cs",
+      "summary": "UIListBase.cs defines interface IListDataItem (inherits UIEventItem, IListSelectItem)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IListDataItem",
+      "type": "class",
+      "name": "IListDataItem",
+      "summary": "Interface IListDataItem in UIListBase.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        12,
+        62
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IListSelectItem",
+      "type": "class",
+      "name": "IListSelectItem",
+      "summary": "Interface IListSelectItem in UIListBase.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        20,
+        70
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:SelectItemBase",
+      "type": "class",
+      "name": "SelectItemBase",
+      "summary": "Class SelectItemBase in UIListBase.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        46,
+        96
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IUISelectList",
+      "type": "class",
+      "name": "IUISelectList",
+      "summary": "Interface IUISelectList in UIListBase.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        123,
+        173
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:UIListBase",
+      "type": "class",
+      "name": "UIListBase",
+      "summary": "Class UIListBase in UIListBase.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        132,
+        182
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs",
+      "type": "file",
+      "name": "UILoopGridItemWidget.cs",
+      "summary": "UILoopGridItemWidget.cs defines class UILoopGridItemWidget (inherits SelectItemBase)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs:UILoopGridItemWidget",
+      "type": "class",
+      "name": "UILoopGridItemWidget",
+      "summary": "Class UILoopGridItemWidget in UILoopGridItemWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        5,
+        26
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs",
+      "type": "file",
+      "name": "UILoopGridWidget.cs",
+      "summary": "UILoopGridWidget.cs defines class UILoopGridWidget (inherits UIListBase, TData>)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs:UILoopGridWidget",
+      "type": "class",
+      "name": "UILoopGridWidget",
+      "summary": "Class UILoopGridWidget in UILoopGridWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs",
+      "type": "file",
+      "name": "UILoopItemWidget.cs",
+      "summary": "UILoopItemWidget.cs defines class UILoopItemWidget (inherits SelectItemBase)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs:UILoopItemWidget",
+      "type": "class",
+      "name": "UILoopItemWidget",
+      "summary": "Class UILoopItemWidget in UILoopItemWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        5,
+        26
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs",
+      "type": "file",
+      "name": "UILoopListViewWidget.cs",
+      "summary": "UILoopListViewWidget.cs defines class UILoopListViewWidget (inherits UIWidget)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs:UILoopListViewWidget",
+      "type": "class",
+      "name": "UILoopListViewWidget",
+      "summary": "Class UILoopListViewWidget in UILoopListViewWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        7,
+        57
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs",
+      "type": "file",
+      "name": "UILoopListWidget.cs",
+      "summary": "UILoopListWidget.cs defines class UILoopListWidget (inherits UIListBase, TData>)",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs:UILoopListWidget",
+      "type": "class",
+      "name": "UILoopListWidget",
+      "summary": "Class UILoopListWidget in UILoopListWidget.cs",
+      "tags": [
+        "ui",
+        "widget",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs",
+      "type": "file",
+      "name": "WindowAttribute.cs",
+      "summary": "WindowAttribute.cs defines enum UILayer",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs:WindowAttribute",
+      "type": "class",
+      "name": "WindowAttribute",
+      "summary": "Class WindowAttribute in WindowAttribute.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        21,
+        71
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs",
+      "type": "file",
+      "name": "LoginNetMgr.cs",
+      "summary": "LoginNetMgr.cs defines class LoginNetMgr (inherits DataCenterModule)",
+      "tags": [
+        "network",
+        "authentication",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs:LoginNetMgr",
+      "type": "class",
+      "name": "LoginNetMgr",
+      "summary": "Class LoginNetMgr in LoginNetMgr.cs",
+      "tags": [
+        "network",
+        "authentication",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        6,
+        22
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+      "type": "file",
+      "name": "Singleton.cs",
+      "summary": "Singleton.cs defines class Singleton (inherits ISingleton)",
+      "tags": [
+        "singleton",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs:Singleton",
+      "type": "class",
+      "name": "Singleton",
+      "summary": "Class Singleton in Singleton.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        9,
+        59
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs",
+      "type": "file",
+      "name": "SingletonBehaviour.cs",
+      "summary": "SingletonBehaviour.cs defines class SingletonBehaviour (inherits MonoBehaviour)",
+      "tags": [
+        "singleton",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs:SingletonBehaviour",
+      "type": "class",
+      "name": "SingletonBehaviour",
+      "summary": "Class SingletonBehaviour in SingletonBehaviour.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        10,
+        60
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "type": "file",
+      "name": "SingletonSystem.cs",
+      "summary": "SingletonSystem.cs defines interface ISingleton",
+      "tags": [
+        "singleton",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:ISingleton",
+      "type": "class",
+      "name": "ISingleton",
+      "summary": "Interface ISingleton in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        10,
+        60
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IUpdate",
+      "type": "class",
+      "name": "IUpdate",
+      "summary": "Interface IUpdate in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        22,
+        72
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IFixedUpdate",
+      "type": "class",
+      "name": "IFixedUpdate",
+      "summary": "Interface IFixedUpdate in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        30,
+        80
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:ILateUpdate",
+      "type": "class",
+      "name": "ILateUpdate",
+      "summary": "Interface ILateUpdate in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        38,
+        88
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IDrawGizmos",
+      "type": "class",
+      "name": "IDrawGizmos",
+      "summary": "Interface IDrawGizmos in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        46,
+        96
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IDrawGizmosSelected",
+      "type": "class",
+      "name": "IDrawGizmosSelected",
+      "summary": "Interface IDrawGizmosSelected in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        51,
+        101
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:SingletonSystem",
+      "type": "class",
+      "name": "SingletonSystem",
+      "summary": "Class SingletonSystem in SingletonSystem.cs",
+      "tags": [
+        "singleton",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        60,
+        110
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+      "type": "file",
+      "name": "SkillExecutor.cs",
+      "summary": "SkillExecutor.cs defines class SkillExecutor (inherits Singleton, ISkillRuntimeServices)",
+      "tags": [
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs:SkillExecutor",
+      "type": "class",
+      "name": "SkillExecutor",
+      "summary": "Class SkillExecutor in SkillExecutor.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        12,
+        62
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs:ClientSkillRuntimeServices",
+      "type": "class",
+      "name": "ClientSkillRuntimeServices",
+      "summary": "Class ClientSkillRuntimeServices in SkillExecutor.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        144,
+        194
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs",
+      "type": "file",
+      "name": "SkillGraphAnimancerPlayer.cs",
+      "summary": "SkillGraphAnimancerPlayer.cs defines class SkillGraphAnimancerPlayer (inherits MonoBehaviour)",
+      "tags": [
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs:SkillGraphAnimancerPlayer",
+      "type": "class",
+      "name": "SkillGraphAnimancerPlayer",
+      "summary": "Class SkillGraphAnimancerPlayer in SkillGraphAnimancerPlayer.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        9,
+        59
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs",
+      "type": "file",
+      "name": "BattleMainUI.cs",
+      "summary": "BattleMainUI.cs defines class BattleMainUI (inherits UIWindow)",
+      "tags": [
+        "ui",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs:BattleMainUI",
+      "type": "class",
+      "name": "BattleMainUI",
+      "summary": "Class BattleMainUI in BattleMainUI.cs",
+      "tags": [
+        "ui",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        8,
+        30
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs",
+      "type": "file",
+      "name": "LoginUI.cs",
+      "summary": "LoginUI.cs defines class LoginUI",
+      "tags": [
+        "ui",
+        "authentication",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs:LoginUI",
+      "type": "class",
+      "name": "LoginUI",
+      "summary": "Class LoginUI in LoginUI.cs",
+      "tags": [
+        "ui",
+        "authentication",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        9,
+        39
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UIController/CommonUIController.cs",
+      "type": "file",
+      "name": "CommonUIController.cs",
+      "summary": "CommonUIController.cs defines class CommonUIController (inherits IUIController)",
+      "tags": [
+        "game-logic",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameLogic/UIController/CommonUIController.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/BeanBase.cs",
+      "type": "file",
+      "name": "BeanBase.cs",
+      "summary": "BeanBase.cs defines class BeanBase",
+      "tags": [
+        "serialization",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/BeanBase.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs",
+      "type": "file",
+      "name": "ByteBuf.cs",
+      "summary": "ByteBuf.cs defines enum EDeserializeError (inherits Exception, ICloneable)",
+      "tags": [
+        "serialization",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs:SerializationException",
+      "type": "class",
+      "name": "SerializationException",
+      "summary": "Class SerializationException in ByteBuf.cs",
+      "tags": [
+        "serialization",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        17,
+        67
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs:ByteBuf",
+      "type": "class",
+      "name": "ByteBuf",
+      "summary": "Class ByteBuf in ByteBuf.cs",
+      "tags": [
+        "serialization",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        40,
+        90
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ITypeId.cs",
+      "type": "file",
+      "name": "ITypeId.cs",
+      "summary": "ITypeId.cs defines interface ITypeId",
+      "tags": [
+        "serialization",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ITypeId.cs"
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs",
+      "type": "file",
+      "name": "StringUtil.cs",
+      "summary": "StringUtil.cs defines class StringUtil",
+      "tags": [
+        "serialization",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs:StringUtil",
+      "type": "class",
+      "name": "StringUtil",
+      "summary": "Class StringUtil in StringUtil.cs",
+      "tags": [
+        "serialization",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        6,
+        52
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs",
+      "type": "file",
+      "name": "SharedTest.cs",
+      "summary": "SharedTest.cs defines class SharedTest",
+      "tags": [
+        "test",
+        "csharp"
+      ],
+      "complexity": "simple",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs:SharedTest",
+      "type": "class",
+      "name": "SharedTest",
+      "summary": "Class SharedTest in SharedTest.cs",
+      "tags": [
+        "test",
+        "csharp",
+        "class"
+      ],
+      "complexity": "simple",
+      "lineRange": [
+        7,
+        24
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "type": "file",
+      "name": "RuntimeSkillGraph.cs",
+      "summary": "RuntimeSkillGraph.cs defines class RuntimeNodeTypes",
+      "tags": [
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeNodeTypes",
+      "type": "class",
+      "name": "RuntimeNodeTypes",
+      "summary": "Class RuntimeNodeTypes in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        8,
+        58
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeActionTypes",
+      "type": "class",
+      "name": "RuntimeActionTypes",
+      "summary": "Class RuntimeActionTypes in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        18,
+        68
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimePropertyKeys",
+      "type": "class",
+      "name": "RuntimePropertyKeys",
+      "summary": "Class RuntimePropertyKeys in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        23,
+        73
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeValueTypes",
+      "type": "class",
+      "name": "RuntimeValueTypes",
+      "summary": "Class RuntimeValueTypes in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        35,
+        85
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeConditionOperators",
+      "type": "class",
+      "name": "RuntimeConditionOperators",
+      "summary": "Class RuntimeConditionOperators in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        43,
+        93
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSyncModes",
+      "type": "class",
+      "name": "RuntimeSyncModes",
+      "summary": "Class RuntimeSyncModes in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        56,
+        106
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSkillGraph",
+      "type": "class",
+      "name": "RuntimeSkillGraph",
+      "summary": "Class RuntimeSkillGraph in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        62,
+        112
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeVariableDef",
+      "type": "class",
+      "name": "RuntimeVariableDef",
+      "summary": "Class RuntimeVariableDef in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        144,
+        194
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSkillNode",
+      "type": "class",
+      "name": "RuntimeSkillNode",
+      "summary": "Class RuntimeSkillNode in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        156,
+        206
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeConnection",
+      "type": "class",
+      "name": "RuntimeConnection",
+      "summary": "Class RuntimeConnection in RuntimeSkillGraph.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        187,
+        209
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+      "type": "file",
+      "name": "SkillContext.cs",
+      "summary": "SkillContext.cs defines interface ISkillRuntimeServices",
+      "tags": [
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "moderate",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:ISkillRuntimeServices",
+      "type": "class",
+      "name": "ISkillRuntimeServices",
+      "summary": "Interface ISkillRuntimeServices in SkillContext.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        8,
+        58
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillContext",
+      "type": "class",
+      "name": "SkillContext",
+      "summary": "Class SkillContext in SkillContext.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        20,
+        70
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillBlackboard",
+      "type": "class",
+      "name": "SkillBlackboard",
+      "summary": "Class SkillBlackboard in SkillContext.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        47,
+        97
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillBlackboardSnapshot",
+      "type": "class",
+      "name": "SkillBlackboardSnapshot",
+      "summary": "Class SkillBlackboardSnapshot in SkillContext.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "moderate",
+      "lineRange": [
+        155,
+        171
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "type": "file",
+      "name": "SkillGraphRunner.cs",
+      "summary": "SkillGraphRunner.cs defines enum SkillExecutionStatus",
+      "tags": [
+        "skill-graph",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:ISkillNodeHandler",
+      "type": "class",
+      "name": "ISkillNodeHandler",
+      "summary": "Interface ISkillNodeHandler in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "interface"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        16,
+        66
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecuteResult",
+      "type": "class",
+      "name": "SkillExecuteResult",
+      "summary": "Class SkillExecuteResult in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        21,
+        71
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunResult",
+      "type": "class",
+      "name": "SkillGraphRunResult",
+      "summary": "Class SkillGraphRunResult in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        70,
+        120
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventTypes",
+      "type": "class",
+      "name": "SkillExecutionEventTypes",
+      "summary": "Class SkillExecutionEventTypes in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        128,
+        178
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEvent",
+      "type": "class",
+      "name": "SkillExecutionEvent",
+      "summary": "Class SkillExecutionEvent in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        138,
+        188
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventDiff",
+      "type": "class",
+      "name": "SkillExecutionEventDiff",
+      "summary": "Class SkillExecutionEventDiff in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        153,
+        203
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventComparer",
+      "type": "class",
+      "name": "SkillExecutionEventComparer",
+      "summary": "Class SkillExecutionEventComparer in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        202,
+        252
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillStepFrameInput",
+      "type": "class",
+      "name": "SkillStepFrameInput",
+      "summary": "Class SkillStepFrameInput in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        288,
+        338
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunnerOptions",
+      "type": "class",
+      "name": "SkillGraphRunnerOptions",
+      "summary": "Class SkillGraphRunnerOptions in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        293,
+        343
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionSnapshot",
+      "type": "class",
+      "name": "SkillExecutionSnapshot",
+      "summary": "Class SkillExecutionSnapshot in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        308,
+        358
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillNodeHandlerRegistry",
+      "type": "class",
+      "name": "SkillNodeHandlerRegistry",
+      "summary": "Class SkillNodeHandlerRegistry in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        332,
+        382
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunner",
+      "type": "class",
+      "name": "SkillGraphRunner",
+      "summary": "Class SkillGraphRunner in SkillGraphRunner.cs",
+      "tags": [
+        "skill-graph",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        352,
+        402
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "type": "file",
+      "name": "SkillHandlers.cs",
+      "summary": "SkillHandlers.cs defines class SkillHandlers (inherits ISkillNodeHandler, ISkillNodeHandler)",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillHandlers",
+      "type": "class",
+      "name": "SkillHandlers",
+      "summary": "Class SkillHandlers in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        7,
+        57
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:EntryNodeHandler",
+      "type": "class",
+      "name": "EntryNodeHandler",
+      "summary": "Class EntryNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        23,
+        73
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:DebugNodeHandler",
+      "type": "class",
+      "name": "DebugNodeHandler",
+      "summary": "Class DebugNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        29,
+        79
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:DelayNodeHandler",
+      "type": "class",
+      "name": "DelayNodeHandler",
+      "summary": "Class DelayNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        38,
+        88
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:ActionNodeHandler",
+      "type": "class",
+      "name": "ActionNodeHandler",
+      "summary": "Class ActionNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        58,
+        108
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:ConditionNodeHandler",
+      "type": "class",
+      "name": "ConditionNodeHandler",
+      "summary": "Class ConditionNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        88,
+        138
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:BranchNodeHandler",
+      "type": "class",
+      "name": "BranchNodeHandler",
+      "summary": "Class BranchNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        110,
+        160
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SetVariableNodeHandler",
+      "type": "class",
+      "name": "SetVariableNodeHandler",
+      "summary": "Class SetVariableNodeHandler in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        121,
+        171
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillBlackboardUtility",
+      "type": "class",
+      "name": "SkillBlackboardUtility",
+      "summary": "Class SkillBlackboardUtility in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        136,
+        186
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillHandlerUtility",
+      "type": "class",
+      "name": "SkillHandlerUtility",
+      "summary": "Class SkillHandlerUtility in SkillHandlers.cs",
+      "tags": [
+        "skill-graph",
+        "handler",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        360,
+        384
+      ]
+    },
+    {
+      "id": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs",
+      "type": "file",
+      "name": "SkillGraphRunnerTests.cs",
+      "summary": "SkillGraphRunnerTests.cs defines class SkillGraphRunnerTests (inherits ISkillRuntimeServices)",
+      "tags": [
+        "skill-graph",
+        "test",
+        "csharp"
+      ],
+      "complexity": "complex",
+      "filePath": "UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs"
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs:SkillGraphRunnerTests",
+      "type": "class",
+      "name": "SkillGraphRunnerTests",
+      "summary": "Class SkillGraphRunnerTests in SkillGraphRunnerTests.cs",
+      "tags": [
+        "skill-graph",
+        "test",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        11,
+        61
+      ]
+    },
+    {
+      "id": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs:TestRuntimeServices",
+      "type": "class",
+      "name": "TestRuntimeServices",
+      "summary": "Class TestRuntimeServices in SkillGraphRunnerTests.cs",
+      "tags": [
+        "skill-graph",
+        "test",
+        "csharp",
+        "class"
+      ],
+      "complexity": "complex",
+      "lineRange": [
+        716,
+        760
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:GameServer/Server/Entity/AssemblyHelper.cs",
+      "target": "class:GameServer/Server/Entity/AssemblyHelper.cs:AssemblyHelper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Entity/AssemblyHelper.cs:AssemblyHelper",
+      "target": "func:GameServer/Server/Entity/AssemblyHelper.cs:LoadHotfixAssembly",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs",
+      "target": "class:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs:AuthenticationComponent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs:AuthenticationComponent",
+      "target": "class:GameServer/Server/Entity/Authentication/Model/Account.cs:Account",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Authentication/Model/Account.cs",
+      "target": "class:GameServer/Server/Entity/Authentication/Model/Account.cs:Account",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs",
+      "target": "class:GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs:AccountCacheInfoTimeOutComponent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs",
+      "target": "class:GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs:AccountTimeOutComponent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Luban/BeanBase.cs",
+      "target": "class:GameServer/Server/Entity/Luban/BeanBase.cs:BeanBase",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Entity/Luban/StringUtil.cs",
+      "target": "class:GameServer/Server/Entity/Luban/StringUtil.cs:StringUtil",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs",
+      "target": "class:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs:C2A_LoginRequestHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs",
+      "target": "class:GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs:C2A_RegisterRequestHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+      "target": "class:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs:OnSceneCreate_Init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs:OnSceneCreate_Init",
+      "target": "func:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs:Handler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "target": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:AuthenticationComponentSystem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:AuthenticationComponentSystem",
+      "target": "func:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:Login",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:AuthenticationComponentSystem",
+      "target": "func:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs:Register",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs",
+      "target": "class:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs:AuthenticationHelper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Main/NLog.cs",
+      "target": "class:GameServer/Server/Main/NLog.cs:NLog",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:GameServer/Server/Main/NLog.cs:NLog",
+      "target": "func:GameServer/Server/Main/NLog.cs:Initialize",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs:SkillEdgeData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillGraphData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillVariableDef",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs:SkillNodeData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs:SkillNodePropertyData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:GameServer/Server/Main/Program.cs",
+      "target": "file:GameServer/Server/Main/NLog.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs",
+      "target": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+      "target": "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillGraphData",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs:SkillNodeData",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillGraphData",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs:SkillEdgeData",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillGraphData",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs:SkillVariableDef",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs:SkillNodeData",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs:SkillNodePropertyData",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs:SkillGraphExporter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs:ActionNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs:BranchNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs:ConditionNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs:DebugNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs:DelayNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/EntryNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs:SetVariableNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs",
+      "target": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs:SkillGraphBlackboardPanel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs:VariableRowElement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs:SkillGraphEditor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs:ISkillVariableBindableNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs:SkillGraphNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs:SkillGraphNodeFactory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs:SkillGraphPaths",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs:SkillGraphSearchWindow",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs:SkillGraphUndoSystem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs",
+      "target": "class:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs:SkillGraphView",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs:ClientConnectWatcher",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:IDataCenterModule",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:DataCenterModule",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:DataCenterModule",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs:IDataCenterModule",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys.Login",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs:DataCenterSys.Register",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClientStatus",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "target": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient.InitAsync",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "target": "func:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs:GameClient.ConnectAsync",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs:GameApp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs:GameModule",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs:ILoginUI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs:ErrorLogger",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs:LogUI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs:IUIController",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:IUIResourceLoader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:UIResourceLoader",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:UIResourceLoader",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs:IUIResourceLoader",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs:SetUISafeFitHelper",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs:ChildPageShareData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs:BaseChildPage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs:SwitchPageMgr",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs:TabPageInfo",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs:SwitchTabItem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs:UIBase",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs:UIBindComponent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs:UIBindComponent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs:UIModule",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs:UIWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs:UIWindow",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs:EmptyGraph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs:UIEventItem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IListDataItem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IListSelectItem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:SelectItemBase",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:IUISelectList",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs:UIListBase",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs:UILoopGridItemWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs:UILoopGridWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs:UILoopItemWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs:UILoopListViewWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs:UILoopListWidget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs:WindowAttribute",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs:LoginNetMgr",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs:Singleton",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs:SingletonBehaviour",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:ISingleton",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IUpdate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IFixedUpdate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:ILateUpdate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IDrawGizmos",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:IDrawGizmosSelected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs:SingletonSystem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs:SkillExecutor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs:ClientSkillRuntimeServices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs:SkillGraphAnimancerPlayer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs:BattleMainUI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs:LoginUI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UIController/CommonUIController.cs",
+      "target": "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs",
+      "type": "inherits",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs:SerializationException",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs:ByteBuf",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs:StringUtil",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs:SharedTest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeNodeTypes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeActionTypes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimePropertyKeys",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeValueTypes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeConditionOperators",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSyncModes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSkillGraph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeVariableDef",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeSkillNode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs:RuntimeConnection",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:ISkillRuntimeServices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillContext",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillBlackboard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs:SkillBlackboardSnapshot",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:ISkillNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecuteResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventTypes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEvent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventDiff",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionEventComparer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillStepFrameInput",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunnerOptions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillExecutionSnapshot",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillNodeHandlerRegistry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs:SkillGraphRunner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillHandlers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:EntryNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:DebugNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:DelayNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:ActionNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:ConditionNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:BranchNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SetVariableNodeHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillBlackboardUtility",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs:SkillHandlerUtility",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs:SkillGraphRunnerTests",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs",
+      "target": "class:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs:TestRuntimeServices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:game-server-entity",
+      "name": "Game Server Entity",
+      "description": "Server-side entity definitions including authentication components, data models, and Luban serialization support",
+      "nodeIds": [
+        "file:GameServer/Server/Entity/AssemblyHelper.cs",
+        "file:GameServer/Server/Entity/Authentication/AuthenticationComponent.cs",
+        "file:GameServer/Server/Entity/Authentication/Model/Account.cs",
+        "file:GameServer/Server/Entity/Authentication/TimeOut/AccountCacheInfoTimeOutComponent.cs",
+        "file:GameServer/Server/Entity/Authentication/TimeOut/AccountTimeOutComponent.cs",
+        "file:GameServer/Server/Entity/LockType.cs",
+        "file:GameServer/Server/Entity/Luban/BeanBase.cs",
+        "file:GameServer/Server/Entity/Luban/StringUtil.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/BeanBase.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ByteBuf.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/ITypeId.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameProto/LubanLib/StringUtil.cs"
+      ]
+    },
+    {
+      "id": "layer:game-server-hotfix",
+      "name": "Game Server Hotfix",
+      "description": "Server-side hotfix logic including authentication handlers, request processing, and server initialization",
+      "nodeIds": [
+        "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs",
+        "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_RegisterRequestHandler.cs",
+        "file:GameServer/Server/Hotfix/Authentication/OnSceneCreate_Init.cs",
+        "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+        "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationHelper.cs"
+      ]
+    },
+    {
+      "id": "layer:game-server-main",
+      "name": "Game Server Main",
+      "description": "Server entry point and infrastructure including Program.cs, logging, and protocol export tools",
+      "nodeIds": [
+        "file:GameServer/Server/Main/NLog.cs",
+        "file:GameServer/Server/Main/Program.cs",
+        "file:GameServer/Tools/ProtocolExportTool/Run.sh"
+      ]
+    },
+    {
+      "id": "layer:skill-graph-editor",
+      "name": "Skill Graph Editor",
+      "description": "Unity Editor tool for visual skill graph editing with node types, blackboard, undo system, and export functionality",
+      "nodeIds": [
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodePropertyData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DebugNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/DelayNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/EntryNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SetVariableNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/SkillNodeTypes.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillFlowPort.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphBlackboardPanel.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphPaths.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphSearchWindow.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphUndoSystem.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs"
+      ]
+    },
+    {
+      "id": "layer:game-logic-core",
+      "name": "Game Logic Core",
+      "description": "Core game application entry point, module system, singleton management, and data center for network communication",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/DisStripCode/DisStripCodeAssemblyCSharp.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterSys.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/IEvent/ILoginUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/NetworkMgr/LoginNetMgr.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs"
+      ]
+    },
+    {
+      "id": "layer:ui-framework",
+      "name": "UI Framework",
+      "description": "Complete UI system with UIBase/UIWindow/UIWidget hierarchy, UIModule management, page switching, and reusable widget components",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/ErrorLogger.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/ErrorLogger/LogUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIController.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/IUIResourceLoader.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SetUISafeFitHelper.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIBindComponent.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBindComponent/UIComponentEditor.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/EmptyGraph.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridItemWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopItemWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListViewWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/WindowAttribute.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UIController/CommonUIController.cs"
+      ]
+    },
+    {
+      "id": "layer:skill-graph-runtime",
+      "name": "Skill Graph Runtime",
+      "description": "Shared skill graph execution engine with step-based runner, context management, handlers, and comprehensive tests",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SharedTest.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/Tests/SkillGraphRunnerTests.cs"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Application Entry Point",
+      "description": "GameApp.cs is the hotfix entry point that initializes all game modules. GameModule.cs provides static accessors to all registered modules via GameModule.XXX pattern, serving as the central service locator.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameApp.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/GameModule.cs"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "UI Framework Foundation",
+      "description": "UIBase is the abstract base class for all UI elements. UIWindow represents full-screen windows, UIWidget represents reusable sub-components. UIModule manages the lifecycle of all UI windows including creation, showing, hiding, and destruction.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIBase.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWindow.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/UIModule.cs"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "UI Widget Components",
+      "description": "Reusable UI widget components for lists, grids, and event items. UIListBase provides base list functionality, while UILoopListWidget and UILoopGridWidget implement virtualized scrolling for performance. These widgets compose into complex UI layouts.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIListBase.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopListWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UILoopGridWidget.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/Widget/UIEventItem.cs"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Page Switching System",
+      "description": "SwitchPageMgr manages tab-based page navigation within UI windows. BaseChildPage defines the interface for child pages, and SwitchTabItem handles individual tab button behavior. This enables complex multi-tab interfaces.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchPageMgr.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/BaseChildPage.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/Module/UIModule/SwitchPage/SwitchTabItem.cs"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "Concrete UI Screens",
+      "description": "LoginUI handles the login screen with authentication flow. BattleMainUI is the main battle HUD. CommonUIController provides shared UI control logic. These demonstrate how to build screens using the UI framework.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/LoginUI/LoginUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UI/BattleMainUI/BattleMainUI.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/UIController/CommonUIController.cs"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Network & Data Center",
+      "description": "DataCenterModule and DataCenterSys manage client-server data synchronization. GameClient handles the network connection lifecycle. ClientConnectWatcher monitors connection state and handles reconnection. LoginNetMgr processes login-specific network messages.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/DataCenterModule.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "Singleton System",
+      "description": "SingletonSystem provides a managed singleton lifecycle with automatic creation and destruction. Singleton<T> is for pure C# singletons, SingletonBehaviour<T> for MonoBehaviour-based singletons. This avoids the common Unity singleton anti-patterns.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonSystem.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/Singleton.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SingletonSystem/SingletonBehaviour.cs"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "Skill Graph Editor",
+      "description": "SkillGraphEditor is the main EditorWindow for visual skill graph editing. SkillGraphView renders the graph canvas. SkillGraphNode represents individual nodes. SkillGraphNodeFactory creates node instances. The editor supports undo, search, and blackboard variable management.",
+      "nodeIds": [
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphEditor.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphView.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/SkillGraphNodeFactory.cs"
+      ]
+    },
+    {
+      "order": 9,
+      "title": "Skill Graph Node Types",
+      "description": "The editor defines several node types: ActionNode for skill actions, BranchNode for flow branching, ConditionNode for conditional logic, DelayNode for timing, DebugNode for debugging, and SetVariableNode for blackboard manipulation. EntryNode marks the graph start.",
+      "nodeIds": [
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ActionNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/BranchNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/ConditionNode.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Nodes/EntryNode.cs"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "Skill Graph Export & Data",
+      "description": "SkillGraphExporter converts the editor graph into runtime JSON format. SkillGraphData, SkillNodeData, and SkillEdgeData define the serializable data structures. This bridges the editor and runtime skill systems.",
+      "nodeIds": [
+        "file:UnityProject/Assets/Editor/SkillGraph/Export/SkillGraphExporter.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillGraphData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillNodeData.cs",
+        "file:UnityProject/Assets/Editor/SkillGraph/Data/SkillEdgeData.cs"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "Skill Graph Runtime Engine",
+      "description": "SkillGraphRunner is the core runtime engine that executes skill graphs with step-based processing and snapshot/restore support. RuntimeSkillGraph defines the runtime data model. SkillContext holds execution state. SkillHandlers implement the actual skill behaviors.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillGraphRunner.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/RuntimeSkillGraph.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillContext.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/SkillHandlers.cs"
+      ]
+    },
+    {
+      "order": 12,
+      "title": "Skill Graph Client Integration",
+      "description": "SkillExecutor bridges the runtime skill graph engine to the Unity game client. SkillGraphAnimancerPlayer integrates with the Animancer animation system to play skill animations. These connect the shared runtime to the client-side game logic.",
+      "nodeIds": [
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillExecutor.cs",
+        "file:UnityProject/Assets/GameScripts/HotFix/GameLogic/SkillGraph/SkillGraphAnimancerPlayer.cs"
+      ]
+    },
+    {
+      "order": 13,
+      "title": "Game Server Architecture",
+      "description": "The server uses Fantasy framework with Entity/Hotfix separation. Program.cs is the entry point. AuthenticationComponentSystem handles login/register logic. Request handlers process client messages. The server shares protocol definitions with the client.",
+      "nodeIds": [
+        "file:GameServer/Server/Main/Program.cs",
+        "file:GameServer/Server/Hotfix/Authentication/System/AuthenticationComponentSystem.cs",
+        "file:GameServer/Server/Hotfix/Authentication/Handler/C2A_LoginRequestHandler.cs"
+      ]
+    }
+  ]
+}
