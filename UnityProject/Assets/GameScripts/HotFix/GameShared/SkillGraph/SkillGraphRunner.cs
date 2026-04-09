@@ -151,6 +151,141 @@ namespace GameShared.SkillGraph
         public string Payload { get; set; } = string.Empty;
     }
 
+    public sealed class SkillExecutionEventDiff
+    {
+        public bool IsMatch { get; private set; }
+
+        public int EventIndex { get; private set; } = -1;
+
+        public int FrameIndex { get; private set; } = -1;
+
+        public int NodeId { get; private set; } = -1;
+
+        public string FieldName { get; private set; } = string.Empty;
+
+        public string Message { get; private set; } = string.Empty;
+
+        public SkillExecutionEvent? ExpectedEvent { get; private set; }
+
+        public SkillExecutionEvent? ActualEvent { get; private set; }
+
+        public static SkillExecutionEventDiff Match()
+        {
+            return new SkillExecutionEventDiff
+            {
+                IsMatch = true,
+                Message = "Execution events are identical."
+            };
+        }
+
+        public static SkillExecutionEventDiff Mismatch(
+            int eventIndex,
+            string fieldName,
+            string message,
+            SkillExecutionEvent? expectedEvent,
+            SkillExecutionEvent? actualEvent)
+        {
+            SkillExecutionEvent? anchorEvent = expectedEvent ?? actualEvent;
+            return new SkillExecutionEventDiff
+            {
+                IsMatch = false,
+                EventIndex = eventIndex,
+                FrameIndex = anchorEvent?.FrameIndex ?? -1,
+                NodeId = anchorEvent?.NodeId ?? -1,
+                FieldName = fieldName ?? string.Empty,
+                Message = message ?? string.Empty,
+                ExpectedEvent = expectedEvent,
+                ActualEvent = actualEvent
+            };
+        }
+    }
+
+    public static class SkillExecutionEventComparer
+    {
+        public static SkillExecutionEventDiff Compare(
+            IReadOnlyList<SkillExecutionEvent> expectedEvents,
+            IReadOnlyList<SkillExecutionEvent> actualEvents)
+        {
+            IReadOnlyList<SkillExecutionEvent> safeExpected = expectedEvents ?? Array.Empty<SkillExecutionEvent>();
+            IReadOnlyList<SkillExecutionEvent> safeActual = actualEvents ?? Array.Empty<SkillExecutionEvent>();
+
+            int compareCount = Math.Min(safeExpected.Count, safeActual.Count);
+            for (int index = 0; index < compareCount; index++)
+            {
+                SkillExecutionEvent expected = safeExpected[index];
+                SkillExecutionEvent actual = safeActual[index];
+                if (!EqualsValue(expected?.FrameIndex ?? 0, actual?.FrameIndex ?? 0))
+                {
+                    return SkillExecutionEventDiff.Mismatch(
+                        index,
+                        "frameIndex",
+                        BuildMessage(index, "frameIndex", expected?.FrameIndex.ToString(CultureInfo.InvariantCulture), actual?.FrameIndex.ToString(CultureInfo.InvariantCulture)),
+                        expected,
+                        actual);
+                }
+
+                if (!EqualsValue(expected?.NodeId ?? 0, actual?.NodeId ?? 0))
+                {
+                    return SkillExecutionEventDiff.Mismatch(
+                        index,
+                        "nodeId",
+                        BuildMessage(index, "nodeId", expected?.NodeId.ToString(CultureInfo.InvariantCulture), actual?.NodeId.ToString(CultureInfo.InvariantCulture)),
+                        expected,
+                        actual);
+                }
+
+                string expectedType = expected?.EventType ?? string.Empty;
+                string actualType = actual?.EventType ?? string.Empty;
+                if (!string.Equals(expectedType, actualType, StringComparison.Ordinal))
+                {
+                    return SkillExecutionEventDiff.Mismatch(
+                        index,
+                        "eventType",
+                        BuildMessage(index, "eventType", expectedType, actualType),
+                        expected,
+                        actual);
+                }
+
+                string expectedPayload = expected?.Payload ?? string.Empty;
+                string actualPayload = actual?.Payload ?? string.Empty;
+                if (!string.Equals(expectedPayload, actualPayload, StringComparison.Ordinal))
+                {
+                    return SkillExecutionEventDiff.Mismatch(
+                        index,
+                        "payload",
+                        BuildMessage(index, "payload", expectedPayload, actualPayload),
+                        expected,
+                        actual);
+                }
+            }
+
+            if (safeExpected.Count != safeActual.Count)
+            {
+                SkillExecutionEvent? expectedOverflow = safeExpected.Count > compareCount ? safeExpected[compareCount] : null;
+                SkillExecutionEvent? actualOverflow = safeActual.Count > compareCount ? safeActual[compareCount] : null;
+                return SkillExecutionEventDiff.Mismatch(
+                    compareCount,
+                    "count",
+                    $"Event count mismatch at index {compareCount}: expected {safeExpected.Count}, actual {safeActual.Count}.",
+                    expectedOverflow,
+                    actualOverflow);
+            }
+
+            return SkillExecutionEventDiff.Match();
+        }
+
+        private static bool EqualsValue<TValue>(TValue left, TValue right)
+        {
+            return EqualityComparer<TValue>.Default.Equals(left, right);
+        }
+
+        private static string BuildMessage(int index, string fieldName, string expectedValue, string actualValue)
+        {
+            return
+                $"Event mismatch at index {index} field '{fieldName}': expected '{expectedValue ?? string.Empty}', actual '{actualValue ?? string.Empty}'.";
+        }
+    }
+
     public sealed class SkillStepFrameInput
     {
         public int MaxNodesPerStepOverride { get; set; }

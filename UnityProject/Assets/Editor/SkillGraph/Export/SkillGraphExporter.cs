@@ -13,6 +13,13 @@ namespace TEngine.Editor.SkillGraph
 {
     internal static class SkillGraphExporter
     {
+        private static readonly string[] LockstepDeterministicFlags =
+        {
+            "Delay.FrameStep",
+            "Action.CommandOnly",
+            "Trace.ExecutionEventsV1"
+        };
+
         public static bool Export(SkillGraphData graphData, out string exportPath, out string errorMessage)
         {
             exportPath = string.Empty;
@@ -43,6 +50,20 @@ namespace TEngine.Editor.SkillGraph
             return true;
         }
 
+        internal static IReadOnlyList<string> CollectLockstepRiskMessages(SkillGraphData graphData)
+        {
+            if (graphData == null)
+                return new[] { "Skill graph data is null." };
+
+            if (!string.Equals(NormalizeSyncMode(graphData.syncMode), RuntimeSyncModes.Lockstep, StringComparison.Ordinal))
+                return Array.Empty<string>();
+
+            if (!TryBuildRuntimeGraph(graphData, out RuntimeSkillGraph runtimeGraph, out string errorMessage))
+                return new[] { errorMessage };
+
+            return AnalyzeLockstepRisks(runtimeGraph);
+        }
+
         private static bool TryBuildRuntimeGraph(
             SkillGraphData graphData,
             out RuntimeSkillGraph runtimeGraph,
@@ -66,9 +87,15 @@ namespace TEngine.Editor.SkillGraph
             {
                 Version = RuntimeSkillGraph.CurrentVersion,
                 SkillName = skillName,
+                SyncMode = NormalizeSyncMode(graphData.syncMode),
+                DeterministicFlags = new List<string>(),
+                Variables = new List<RuntimeVariableDef>(),
                 Nodes = new List<RuntimeSkillNode>(nodes.Count),
                 Connections = new List<RuntimeConnection>()
             };
+
+            if (!TryBuildRuntimeVariables(graphData, runtimeGraph, out errorMessage))
+                return false;
 
             Dictionary<string, int> nodeIdsByGuid = new Dictionary<string, int>(StringComparer.Ordinal);
             int entryNodeCount = 0;
@@ -131,6 +158,59 @@ namespace TEngine.Editor.SkillGraph
 
             if (!ValidateRequiredConnections(runtimeGraph, out errorMessage))
                 return false;
+
+            if (!ValidateLockstepSafety(runtimeGraph, out errorMessage))
+                return false;
+
+            runtimeGraph.DeterministicFlags = BuildDeterministicFlags(runtimeGraph.SyncMode);
+
+            return true;
+        }
+
+        private static bool TryBuildRuntimeVariables(
+            SkillGraphData graphData,
+            RuntimeSkillGraph runtimeGraph,
+            out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            runtimeGraph.Variables.Clear();
+
+            HashSet<string> variableNames = new HashSet<string>(StringComparer.Ordinal);
+            IReadOnlyList<SkillVariableDef> variables = graphData.variables ?? new List<SkillVariableDef>();
+            for (int index = 0; index < variables.Count; index++)
+            {
+                SkillVariableDef variable = variables[index];
+                if (variable == null)
+                    continue;
+
+                string variableName = (variable.name ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(variableName))
+                {
+                    errorMessage = $"Variable at index {index} has an empty name.";
+                    return false;
+                }
+
+                if (!variableNames.Add(variableName))
+                {
+                    errorMessage = $"Variable '{variableName}' is duplicated.";
+                    return false;
+                }
+
+                string valueType = NormalizeVariableValueType(variable.type);
+                string defaultValue = variable.defaultValue ?? string.Empty;
+                if (!TryValidateRawValue(valueType, defaultValue, out string variableError))
+                {
+                    errorMessage = $"Variable '{variableName}' defaultValue is invalid: {variableError}";
+                    return false;
+                }
+
+                runtimeGraph.Variables.Add(new RuntimeVariableDef
+                {
+                    Name = variableName,
+                    ValueType = valueType,
+                    DefaultValue = defaultValue
+                });
+            }
 
             return true;
         }
@@ -281,14 +361,17 @@ namespace TEngine.Editor.SkillGraph
 
         private static bool ValidateDelayNode(RuntimeSkillNode node, out string errorMessage)
         {
-            string duration = node.GetPropertyValue("duration");
-            if (float.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            string duration = node.GetPropertyValue(RuntimePropertyKeys.Duration);
+            if (float.TryParse(duration, NumberStyles.Float, CultureInfo.InvariantCulture, out float durationSeconds) &&
+                !float.IsNaN(durationSeconds) &&
+                !float.IsInfinity(durationSeconds) &&
+                durationSeconds >= 0f)
             {
                 errorMessage = string.Empty;
                 return true;
             }
 
-            errorMessage = $"Delay node {node.NodeId} duration '{duration}' is invalid.";
+            errorMessage = $"Delay node {node.NodeId} duration '{duration}' is invalid. Expected a non-negative finite number.";
             return false;
         }
 
@@ -297,7 +380,7 @@ namespace TEngine.Editor.SkillGraph
             string actionType = node.GetPropertyValue(RuntimePropertyKeys.ActionType);
             if (!string.Equals(actionType, RuntimeActionTypes.PlayAnimation, StringComparison.OrdinalIgnoreCase))
             {
-                errorMessage = $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.5.";
+                errorMessage = $"Action node {node.NodeId} actionType '{actionType}' is not supported in v0.8.";
                 return false;
             }
 
@@ -556,6 +639,192 @@ namespace TEngine.Editor.SkillGraph
             string.Equals(conditionOperator, RuntimeConditionOperators.LessOrEqual, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(conditionOperator, RuntimeConditionOperators.IsTrue, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(conditionOperator, RuntimeConditionOperators.IsFalse, StringComparison.OrdinalIgnoreCase);
+
+        private static bool ValidateLockstepSafety(RuntimeSkillGraph runtimeGraph, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            if (!string.Equals(runtimeGraph.SyncMode, RuntimeSyncModes.Lockstep, StringComparison.Ordinal))
+                return true;
+
+            List<string> risks = AnalyzeLockstepRisks(runtimeGraph);
+            if (risks.Count == 0)
+                return true;
+
+            StringBuilder builder = new StringBuilder();
+            builder.AppendLine("Lockstep export validation failed:");
+            foreach (string risk in risks)
+            {
+                builder.Append(" - ");
+                builder.AppendLine(risk);
+            }
+
+            errorMessage = builder.ToString().TrimEnd();
+            return false;
+        }
+
+        private static List<string> AnalyzeLockstepRisks(RuntimeSkillGraph runtimeGraph)
+        {
+            Dictionary<string, string> variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (RuntimeVariableDef variable in runtimeGraph.Variables ?? new List<RuntimeVariableDef>())
+            {
+                if (variable == null || string.IsNullOrWhiteSpace(variable.Name))
+                    continue;
+
+                variableTypes[variable.Name] = NormalizeRuntimeValueType(variable.ValueType);
+            }
+
+            List<string> risks = new List<string>();
+            foreach (RuntimeSkillNode node in runtimeGraph.Nodes ?? new List<RuntimeSkillNode>())
+            {
+                if (node == null)
+                    continue;
+
+                if (string.Equals(node.NodeType, RuntimeNodeTypes.SetVariable, StringComparison.Ordinal))
+                {
+                    ValidateLockstepSetVariableNode(node, variableTypes, risks);
+                    continue;
+                }
+
+                if (string.Equals(node.NodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal))
+                {
+                    ValidateLockstepConditionNode(node, variableTypes, risks);
+                    continue;
+                }
+
+                if (string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal))
+                {
+                    ValidateLockstepBranchNode(node, variableTypes, risks);
+                }
+            }
+
+            return risks;
+        }
+
+        private static void ValidateLockstepSetVariableNode(
+            RuntimeSkillNode node,
+            IReadOnlyDictionary<string, string> variableTypes,
+            IList<string> risks)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (!TryGetDeclaredVariableType(variableTypes, key, out string declaredType))
+            {
+                risks.Add(
+                    $"SetVariable node {node.NodeId} writes '{key}', but this variable is not declared in blackboard definitions.");
+                return;
+            }
+
+            string writeType = NormalizeRuntimeValueType(
+                node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.String));
+            if (!string.Equals(writeType, declaredType, StringComparison.Ordinal))
+            {
+                risks.Add(
+                    $"SetVariable node {node.NodeId} writes '{key}' as {writeType}, but variable is declared as {declaredType}.");
+            }
+        }
+
+        private static void ValidateLockstepConditionNode(
+            RuntimeSkillNode node,
+            IReadOnlyDictionary<string, string> variableTypes,
+            IList<string> risks)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (!TryGetDeclaredVariableType(variableTypes, key, out string declaredType))
+            {
+                risks.Add(
+                    $"Condition node {node.NodeId} reads '{key}', but this variable is not declared in blackboard definitions.");
+                return;
+            }
+
+            string conditionOperator = node.GetPropertyValue(RuntimePropertyKeys.Operator, RuntimeConditionOperators.Exists);
+            if (string.Equals(conditionOperator, RuntimeConditionOperators.Exists, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            string readType = NormalizeRuntimeValueType(
+                node.GetPropertyValue(RuntimePropertyKeys.ValueType, RuntimeValueTypes.Bool));
+            if (!string.Equals(readType, declaredType, StringComparison.Ordinal))
+            {
+                risks.Add(
+                    $"Condition node {node.NodeId} reads '{key}' as {readType}, but variable is declared as {declaredType}.");
+            }
+        }
+
+        private static void ValidateLockstepBranchNode(
+            RuntimeSkillNode node,
+            IReadOnlyDictionary<string, string> variableTypes,
+            IList<string> risks)
+        {
+            string key = node.GetPropertyValue(RuntimePropertyKeys.Key);
+            if (!TryGetDeclaredVariableType(variableTypes, key, out string declaredType))
+            {
+                risks.Add(
+                    $"Branch node {node.NodeId} reads '{key}', but this variable is not declared in blackboard definitions.");
+                return;
+            }
+
+            if (!string.Equals(declaredType, RuntimeValueTypes.Bool, StringComparison.Ordinal))
+            {
+                risks.Add(
+                    $"Branch node {node.NodeId} requires Bool variable '{key}', but it is declared as {declaredType}.");
+            }
+        }
+
+        private static bool TryGetDeclaredVariableType(
+            IReadOnlyDictionary<string, string> variableTypes,
+            string key,
+            out string declaredType)
+        {
+            declaredType = string.Empty;
+            if (string.IsNullOrWhiteSpace(key))
+                return false;
+
+            return variableTypes.TryGetValue(key, out declaredType);
+        }
+
+        private static string NormalizeRuntimeValueType(string valueType)
+        {
+            if (string.Equals(valueType, RuntimeValueTypes.Float, StringComparison.OrdinalIgnoreCase))
+                return RuntimeValueTypes.Float;
+
+            if (string.Equals(valueType, RuntimeValueTypes.Int, StringComparison.OrdinalIgnoreCase))
+                return RuntimeValueTypes.Int;
+
+            if (string.Equals(valueType, RuntimeValueTypes.Bool, StringComparison.OrdinalIgnoreCase))
+                return RuntimeValueTypes.Bool;
+
+            return RuntimeValueTypes.String;
+        }
+
+        private static List<string> BuildDeterministicFlags(string syncMode)
+        {
+            if (!string.Equals(syncMode, RuntimeSyncModes.Lockstep, StringComparison.Ordinal))
+                return new List<string>();
+
+            return new List<string>(LockstepDeterministicFlags);
+        }
+
+        private static string NormalizeSyncMode(string syncMode)
+        {
+            if (string.Equals(syncMode, RuntimeSyncModes.Lockstep, StringComparison.OrdinalIgnoreCase))
+                return RuntimeSyncModes.Lockstep;
+
+            return RuntimeSyncModes.LocalOnly;
+        }
+
+        private static string NormalizeVariableValueType(SkillBlackboardValueType variableType)
+        {
+            switch (variableType)
+            {
+                case SkillBlackboardValueType.Float:
+                    return RuntimeValueTypes.Float;
+                case SkillBlackboardValueType.Int:
+                    return RuntimeValueTypes.Int;
+                case SkillBlackboardValueType.Bool:
+                    return RuntimeValueTypes.Bool;
+                case SkillBlackboardValueType.String:
+                default:
+                    return RuntimeValueTypes.String;
+            }
+        }
 
         private static string NormalizeNodeType(string nodeType)
         {

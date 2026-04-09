@@ -41,6 +41,9 @@ public partial class GameApp
         {
             await GameClient.Instance.InitAsync(_hotfixAssembly);
             GameModule.UI.ShowUIAsync<LoginUI>();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            SkillGraphStepBSmokeTest.Run();
+#endif
         }
     }
 

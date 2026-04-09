@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using GameShared.SkillGraph;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
@@ -23,12 +24,23 @@ namespace TEngine.Editor.SkillGraph
         [SerializeField]
         private List<SkillVariableDef> _variables = new List<SkillVariableDef>();
 
+        [SerializeField]
+        private string _currentSyncMode = RuntimeSyncModes.LocalOnly;
+
+        private static readonly List<string> SyncModeOptions = new List<string>
+        {
+            RuntimeSyncModes.LocalOnly,
+            RuntimeSyncModes.Lockstep
+        };
+
         private SkillGraphView _graphView;
         private SkillGraphSearchWindow _searchWindow;
         private SkillGraphBlackboardPanel _blackboardPanel;
         private SkillGraphUndoSystem _undoSystem;
         private VisualElement _contentRoot;
         private Label _pathLabel;
+        private PopupField<string> _syncModePopup;
+        private HelpBox _lockstepRiskHelpBox;
         private IVisualElementScheduledItem _pendingRecordSchedule;
         private bool _isRestoringSnapshot;
 
@@ -57,6 +69,7 @@ namespace TEngine.Editor.SkillGraph
             ApplyVariablesToUi();
             ResetUndoHistoryToCurrentState();
             UpdateWindowState();
+            UpdateLockstepRiskHint();
         }
 
         private void OnDisable()
@@ -80,6 +93,8 @@ namespace TEngine.Editor.SkillGraph
 
             _graphView = null;
             _blackboardPanel = null;
+            _syncModePopup = null;
+            _lockstepRiskHelpBox = null;
         }
 
         private void CreateToolbar()
@@ -90,6 +105,10 @@ namespace TEngine.Editor.SkillGraph
             toolbar.Add(new ToolbarButton(SaveGraphAs) { text = "Save As" });
             toolbar.Add(new ToolbarButton(LoadGraph) { text = "Load" });
             toolbar.Add(new ToolbarButton(ExportGraph) { text = "Export" });
+            _syncModePopup = new PopupField<string>("Sync", SyncModeOptions, ResolveSyncModeIndex(_currentSyncMode));
+            _syncModePopup.style.minWidth = 170f;
+            _syncModePopup.RegisterValueChangedCallback(OnSyncModeChanged);
+            toolbar.Add(_syncModePopup);
 
             VisualElement spacer = new VisualElement();
             spacer.style.flexGrow = 1f;
@@ -105,6 +124,10 @@ namespace TEngine.Editor.SkillGraph
 
         private void CreateContentLayout()
         {
+            _lockstepRiskHelpBox = new HelpBox(string.Empty, HelpBoxMessageType.Warning);
+            _lockstepRiskHelpBox.style.display = DisplayStyle.None;
+            rootVisualElement.Add(_lockstepRiskHelpBox);
+
             _contentRoot = new VisualElement();
             _contentRoot.style.flexDirection = FlexDirection.Row;
             _contentRoot.style.flexGrow = 1f;
@@ -137,7 +160,8 @@ namespace TEngine.Editor.SkillGraph
 
             SkillGraphData graphData = new SkillGraphData
             {
-                graphName = _currentGraphName
+                graphName = _currentGraphName,
+                syncMode = RuntimeSyncModes.LocalOnly
             };
 
             ApplyGraphData(graphData);
@@ -204,6 +228,7 @@ namespace TEngine.Editor.SkillGraph
             _currentGraphName = string.IsNullOrEmpty(graphData.graphName)
                 ? Path.GetFileNameWithoutExtension(absolutePath)
                 : graphData.graphName;
+            _currentSyncMode = NormalizeSyncMode(graphData.syncMode);
 
             ApplyGraphData(graphData);
             ResetUndoHistoryToCurrentState();
@@ -294,6 +319,7 @@ namespace TEngine.Editor.SkillGraph
                 return;
 
             QueueSnapshotRecord();
+            UpdateLockstepRiskHint();
         }
 
         private void OnVariablesChanged()
@@ -304,6 +330,17 @@ namespace TEngine.Editor.SkillGraph
             _variables = _blackboardPanel.GetVariablesSnapshot();
             _graphView.SetVariables(_variables);
             QueueSnapshotRecord();
+            UpdateLockstepRiskHint();
+        }
+
+        private void OnSyncModeChanged(ChangeEvent<string> evt)
+        {
+            _currentSyncMode = NormalizeSyncMode(evt.newValue);
+            if (_isRestoringSnapshot)
+                return;
+
+            QueueSnapshotRecord();
+            UpdateLockstepRiskHint();
         }
 
         private void OnRootKeyDown(KeyDownEvent evt)
@@ -397,6 +434,7 @@ namespace TEngine.Editor.SkillGraph
         private SkillGraphData BuildGraphData(string graphName)
         {
             SkillGraphData graphData = _graphView.SerializeGraph(graphName);
+            graphData.syncMode = NormalizeSyncMode(_currentSyncMode);
             graphData.variables = CloneVariables(_variables);
             return graphData;
         }
@@ -415,6 +453,7 @@ namespace TEngine.Editor.SkillGraph
         {
             SkillGraphData safeGraphData = graphData ?? new SkillGraphData();
             _variables = CloneVariables(safeGraphData.variables);
+            _currentSyncMode = NormalizeSyncMode(safeGraphData.syncMode);
 
             if (!string.IsNullOrWhiteSpace(safeGraphData.graphName))
                 _currentGraphName = safeGraphData.graphName;
@@ -431,6 +470,9 @@ namespace TEngine.Editor.SkillGraph
                 _graphView.SetRestoring(false);
                 _isRestoringSnapshot = false;
             }
+
+            UpdateSyncModePopup();
+            UpdateLockstepRiskHint();
         }
 
         private void ApplyVariablesToUi()
@@ -470,6 +512,62 @@ namespace TEngine.Editor.SkillGraph
             }
 
             return clonedVariables;
+        }
+
+        private void UpdateSyncModePopup()
+        {
+            if (_syncModePopup == null)
+                return;
+
+            string syncMode = SyncModeOptions[ResolveSyncModeIndex(_currentSyncMode)];
+            _syncModePopup.SetValueWithoutNotify(syncMode);
+        }
+
+        private void UpdateLockstepRiskHint()
+        {
+            if (_lockstepRiskHelpBox == null || _graphView == null || _blackboardPanel == null)
+                return;
+
+            if (!string.Equals(_currentSyncMode, RuntimeSyncModes.Lockstep, StringComparison.Ordinal))
+            {
+                _lockstepRiskHelpBox.style.display = DisplayStyle.None;
+                _lockstepRiskHelpBox.text = string.Empty;
+                return;
+            }
+
+            SkillGraphData graphData = BuildGraphData(GetDefaultGraphName());
+            IReadOnlyList<string> riskMessages = SkillGraphExporter.CollectLockstepRiskMessages(graphData);
+            if (riskMessages.Count == 0)
+            {
+                _lockstepRiskHelpBox.messageType = HelpBoxMessageType.Info;
+                _lockstepRiskHelpBox.text = "Lockstep static checks passed.";
+                _lockstepRiskHelpBox.style.display = DisplayStyle.Flex;
+                return;
+            }
+
+            StringBuilder builder = new StringBuilder();
+            builder.AppendLine("Lockstep risks:");
+            foreach (string message in riskMessages)
+                builder.AppendLine($"- {message}");
+
+            _lockstepRiskHelpBox.messageType = HelpBoxMessageType.Warning;
+            _lockstepRiskHelpBox.text = builder.ToString().TrimEnd();
+            _lockstepRiskHelpBox.style.display = DisplayStyle.Flex;
+        }
+
+        private static int ResolveSyncModeIndex(string syncMode)
+        {
+            string normalized = NormalizeSyncMode(syncMode);
+            int index = SyncModeOptions.IndexOf(normalized);
+            return index < 0 ? 0 : index;
+        }
+
+        private static string NormalizeSyncMode(string syncMode)
+        {
+            if (string.Equals(syncMode, RuntimeSyncModes.Lockstep, StringComparison.OrdinalIgnoreCase))
+                return RuntimeSyncModes.Lockstep;
+
+            return RuntimeSyncModes.LocalOnly;
         }
     }
 }

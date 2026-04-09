@@ -1,6 +1,24 @@
 {
-  "version": "0.6",
+  "version": "0.8",
   "skillName": "NewSkillGraph",
+  "syncMode": "Lockstep",
+  "variables": [
+    {
+      "name": "Level",
+      "valueType": "Int",
+      "defaultValue": "0"
+    },
+    {
+      "name": "IsLucky",
+      "valueType": "Bool",
+      "defaultValue": "true"
+    }
+  ],
+  "deterministicFlags": [
+    "Delay.FrameStep",
+    "Action.CommandOnly",
+    "Trace.ExecutionEventsV1"
+  ],
   "nodes": [
     {
       "nodeId": 0,
@@ -12,7 +30,7 @@
         },
         {
           "key": "operator",
-          "value": "Greater"
+          "value": "Equal"
         },
         {
           "key": "valueType",
@@ -20,12 +38,71 @@
         },
         {
           "key": "value",
-          "value": "0"
+          "value": "100"
         }
       ]
     },
     {
       "nodeId": 1,
+      "nodeType": "Debug",
+      "properties": [
+        {
+          "key": "message",
+          "value": "Condition false"
+        }
+      ]
+    },
+    {
+      "nodeId": 2,
+      "nodeType": "Entry",
+      "properties": []
+    },
+    {
+      "nodeId": 3,
+      "nodeType": "Branch",
+      "properties": [
+        {
+          "key": "key",
+          "value": "IsLucky"
+        },
+        {
+          "key": "valueType",
+          "value": "Bool"
+        }
+      ]
+    },
+    {
+      "nodeId": 4,
+      "nodeType": "Debug",
+      "properties": [
+        {
+          "key": "message",
+          "value": "Hello world false"
+        }
+      ]
+    },
+    {
+      "nodeId": 5,
+      "nodeType": "Delay",
+      "properties": [
+        {
+          "key": "duration",
+          "value": "5"
+        }
+      ]
+    },
+    {
+      "nodeId": 6,
+      "nodeType": "Debug",
+      "properties": [
+        {
+          "key": "message",
+          "value": "Should not run"
+        }
+      ]
+    },
+    {
+      "nodeId": 7,
       "nodeType": "SetVariable",
       "properties": [
         {
@@ -43,17 +120,7 @@
       ]
     },
     {
-      "nodeId": 2,
-      "nodeType": "Debug",
-      "properties": [
-        {
-          "key": "message",
-          "value": "Condition false"
-        }
-      ]
-    },
-    {
-      "nodeId": 3,
+      "nodeId": 8,
       "nodeType": "SetVariable",
       "properties": [
         {
@@ -69,97 +136,48 @@
           "value": "true"
         }
       ]
-    },
-    {
-      "nodeId": 4,
-      "nodeType": "Entry",
-      "properties": []
-    },
-    {
-      "nodeId": 5,
-      "nodeType": "Branch",
-      "properties": [
-        {
-          "key": "key",
-          "value": "IsLucky"
-        },
-        {
-          "key": "valueType",
-          "value": "Bool"
-        }
-      ]
-    },
-    {
-      "nodeId": 6,
-      "nodeType": "Debug",
-      "properties": [
-        {
-          "key": "message",
-          "value": "Hello world false"
-        }
-      ]
-    },
-    {
-      "nodeId": 7,
-      "nodeType": "Delay",
-      "properties": [
-        {
-          "key": "duration",
-          "value": "5"
-        }
-      ]
-    },
-    {
-      "nodeId": 8,
-      "nodeType": "Debug",
-      "properties": [
-        {
-          "key": "message",
-          "value": "Should not run"
-        }
-      ]
     }
   ],
   "connections": [
     {
-      "fromNodeId": 4,
+      "fromNodeId": 2,
       "fromPort": "Next",
-      "toNodeId": 1
+      "toNodeId": 7
     },
     {
-      "fromNodeId": 5,
+      "fromNodeId": 3,
       "fromPort": "False",
-      "toNodeId": 6
+      "toNodeId": 4
     },
     {
-      "fromNodeId": 1,
+      "fromNodeId": 7,
       "fromPort": "Out",
       "toNodeId": 0
     },
     {
       "fromNodeId": 0,
       "fromPort": "False",
-      "toNodeId": 2
+      "toNodeId": 1
     },
     {
       "fromNodeId": 0,
       "fromPort": "True",
+      "toNodeId": 8
+    },
+    {
+      "fromNodeId": 8,
+      "fromPort": "Out",
       "toNodeId": 3
     },
     {
       "fromNodeId": 3,
-      "fromPort": "Out",
+      "fromPort": "True",
       "toNodeId": 5
     },
     {
       "fromNodeId": 5,
-      "fromPort": "True",
-      "toNodeId": 7
-    },
-    {
-      "fromNodeId": 7,
       "fromPort": "Out",
-      "toNodeId": 8
+      "toNodeId": 6
     }
   ]
 }

@@ -15,6 +15,7 @@ namespace TEngine.Editor.SkillGraph
     internal sealed class SkillGraphData
     {
         public string graphName;
+        public string syncMode = "LocalOnly";
         public List<SkillNodeData> nodes = new List<SkillNodeData>();
         public List<SkillEdgeData> edges = new List<SkillEdgeData>();
         public List<SkillVariableDef> variables = new List<SkillVariableDef>();

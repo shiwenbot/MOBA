@@ -1,5 +1,6 @@
 {
     "graphName": "NewSkillGraph",
+    "syncMode": "Lockstep",
     "nodes": [
         {
             "guid": "fd2747ff61d4e18479c246870e2ec39a",
@@ -24,7 +25,7 @@
                 },
                 {
                     "key": "value",
-                    "value": "0"
+                    "value": "100"
                 }
             ]
         },
@@ -40,29 +41,6 @@
                 {
                     "key": "message",
                     "value": "Condition false"
-                }
-            ]
-        },
-        {
-            "guid": "c91f195e9be619a4fbdc3f4d3d02a969",
-            "title": "Set Variable",
-            "nodeType": "SetVariable",
-            "position": {
-                "x": 406.0,
-                "y": -8.0
-            },
-            "properties": [
-                {
-                    "key": "key",
-                    "value": "IsLucky"
-                },
-                {
-                    "key": "valueType",
-                    "value": "Bool"
-                },
-                {
-                    "key": "value",
-                    "value": "true"
                 }
             ]
         },
@@ -160,6 +138,29 @@
                 {
                     "key": "value",
                     "value": "100"
+                }
+            ]
+        },
+        {
+            "guid": "c91f195e9be619a4fbdc3f4d3d02a969",
+            "title": "Set Variable",
+            "nodeType": "SetVariable",
+            "position": {
+                "x": 406.0,
+                "y": -8.0
+            },
+            "properties": [
+                {
+                    "key": "key",
+                    "value": "IsLucky"
+                },
+                {
+                    "key": "valueType",
+                    "value": "Bool"
+                },
+                {
+                    "key": "value",
+                    "value": "true"
                 }
             ]
         }
