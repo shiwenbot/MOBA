@@ -2,13 +2,11 @@ using System.Collections.Generic;
 using System.Reflection;
 using Cysharp.Threading.Tasks;
 using GameLogic;
-using GameShared.SkillGraph;
 #if ENABLE_OBFUZ
 using Obfuz;
 #endif
 using TEngine;
 #pragma warning disable CS0436
-
 
 /// <summary>
 /// 游戏App。
@@ -34,50 +32,18 @@ public partial class GameApp
         Log.Warning("======= StartGameLogic =======");
         StartGameLogic();
     }
-    
+
     private static void StartGameLogic()
     {
         Init().Forget();
 
         async UniTaskVoid Init()
         {
-            // 初始化 Fantasy 网络模块
             await GameClient.Instance.InitAsync(_hotfixAssembly);
-            // GameEvent.Get<ILoginUI>().ShowLoginUI();
             GameModule.UI.ShowUIAsync<LoginUI>();
-            await TriggerStartupSkillGraph();
-        }
-
-        async UniTask TriggerStartupSkillGraph()
-        {
-            await UniTask.Delay(1000);
-
-            try
-            {
-                SkillGraphRunResult result = await SkillExecutor.Instance.CastSkill("NewSkillGraph", new SkillContext());
-                if (result.IsSuccess)
-                {
-                    Log.Warning("======= Startup SkillGraph Cast Complete: NewSkillGraph =======");
-                    return;
-                }
-
-                if (result.IsCancelled)
-                {
-                    Log.Warning($"Startup SkillGraph Cast Cancelled: {result.Message}");
-                    return;
-                }
-
-                Log.Error($"Startup SkillGraph Cast Failed: {result.Message}");
-                if (result.Exception != null)
-                    Log.Error(result.Exception.ToString());
-            }
-            catch (System.Exception exception)
-            {
-                Log.Error($"Startup SkillGraph Cast Failed: {exception}");
-            }
         }
     }
-    
+
     private static void Release()
     {
         SingletonSystem.Release();
