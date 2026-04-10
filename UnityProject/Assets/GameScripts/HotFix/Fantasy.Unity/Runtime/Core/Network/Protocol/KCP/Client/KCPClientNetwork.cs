@@ -227,6 +227,7 @@ namespace Fantasy.Network.KCP
                     MemoryMarshal.TryGetArray(memory, out ArraySegment<byte> arraySegment);
                     var result = await _socket.ReceiveFromAsync(arraySegment, SocketFlags.None, _ipEndPoint);
                     _pipe.Writer.Advance(result.ReceivedBytes);
+                    DrainReceiveBacklog();
                     await _pipe.Writer.FlushAsync();
 #else
                     var result = await _socket.ReceiveAsync(memory, SocketFlags.None, _cancellationTokenSource.Token);
@@ -262,6 +263,38 @@ namespace Fantasy.Network.KCP
 
             await _pipe.Writer.CompleteAsync();
         }
+
+#if FANTASY_UNITY
+        private void DrainReceiveBacklog()
+        {
+            while (_socket.Available > 0)
+            {
+                var memory = _pipe.Writer.GetMemory(8192);
+                if (!MemoryMarshal.TryGetArray(memory, out ArraySegment<byte> arraySegment))
+                {
+                    break;
+                }
+
+                EndPoint endPoint = _ipEndPoint;
+                int receivedBytes;
+                try
+                {
+                    receivedBytes = _socket.ReceiveFrom(arraySegment.Array, arraySegment.Offset, arraySegment.Count, SocketFlags.None, ref endPoint);
+                }
+                catch (SocketException socketException) when (socketException.SocketErrorCode == SocketError.WouldBlock)
+                {
+                    break;
+                }
+
+                if (receivedBytes <= 0)
+                {
+                    break;
+                }
+
+                _pipe.Writer.Advance(receivedBytes);
+            }
+        }
+#endif
         
         #endregion
 

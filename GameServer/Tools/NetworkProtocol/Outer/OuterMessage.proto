@@ -1,60 +1,47 @@
-syntax = "proto3";
+﻿syntax = "proto3";
 package Fantasy.Network.Message;
 
-// 协议分为:
-// ProtoBuf:可以在Outer和Inner文件里使用。
-// MemoryPack:可以在Outer和Inner文件里使用。
+// 鍗忚鍒嗕负:
+// ProtoBuf:鍙互鍦∣uter鍜孖nner鏂囦欢閲屼娇鐢ㄣ€?
+// MemoryPack:鍙互鍦∣uter鍜孖nner鏂囦欢閲屼娇鐢ㄣ€?
 
-// 目前工具支持以下几种特殊用法:
-// 在message协议上方添加// Protocol+空格+协议名字
-// 例如: // Protocol ProtoBuf 或 // Protocol MemoryPack
+// 鐩墠宸ュ叿鏀寔浠ヤ笅鍑犵鐗规畩鐢ㄦ硶:
+// 鍦╩essage鍗忚涓婃柟娣诲姞// Protocol+绌烘牸+鍗忚鍚嶅瓧
+// 渚嬪: // Protocol ProtoBuf 鎴?// Protocol MemoryPack
 
-// 分别代表使用Protobuf序列化或使用MemoryPack序列化
-// 通过添加 // using 导出时添加自定义命名空间
-// 例如: // using System.Runtime // using System.Reflection
+// 鍒嗗埆浠ｈ〃浣跨敤Protobuf搴忓垪鍖栨垨浣跨敤MemoryPack搴忓垪鍖?
+// 閫氳繃娣诲姞 // using 瀵煎嚭鏃舵坊鍔犺嚜瀹氫箟鍛藉悕绌洪棿
+// 渚嬪: // using System.Runtime // using System.Reflection
 
-// 注册账号协议
+// 娉ㄥ唽璐﹀彿鍗忚
 message C2A_RegisterRequest // IRequest,A2C_RegisterResponse
 {
 	string UserName = 1;
 	string Password = 2;
 }
-// 注册账号协议返回
+// 娉ㄥ唽璐﹀彿鍗忚杩斿洖
 message A2C_RegisterResponse // IResponse
 {
 }
 
-// 登录协议
+// 鐧诲綍鍗忚
 message C2A_LoginRequest // IRequest,A2C_LoginResponse
 {
 	string UserName = 1;
 	string Password = 2;
 	uint32 LoginType = 3;
 }
-// 登录协议返回
+// 鐧诲綍鍗忚杩斿洖
 message A2C_LoginResponse // IResponse
 {
 	string Token = 1;
 }
 
-// 测试登录成功直接服务器下发数据
+// 娴嬭瘯鐧诲綍鎴愬姛鐩存帴鏈嶅姟鍣ㄤ笅鍙戞暟鎹?
 message G2C_LoginMessage // IMessage
 {
 	string Msg = 1;
 }
 
-// Battle 输入测试消息（客户端 -> 服务端）
-message C2B_TestInput // IMessage
-{
-	uint32 Seq = 1;
-	int64 ClientSendTimeMs = 2;
-}
 
-// Battle 状态广播消息（服务端 -> 客户端）
-message B2C_TestState // IMessage
-{
-	uint32 Seq = 1;
-	int64 ClientSendTimeMs = 2;
-	int64 ServerRecvTimeMs = 3;
-	int64 ServerSendTimeMs = 4;
-}
+

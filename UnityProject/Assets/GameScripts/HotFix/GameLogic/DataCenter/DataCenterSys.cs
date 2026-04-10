@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Fantasy;
 using Fantasy.Async;
 using TEngine;
@@ -7,13 +7,11 @@ using Log = TEngine.Log;
 namespace GameLogic
 {
     /// <summary>
-    /// 数据中心模块
+    /// 鏁版嵁涓績妯″潡
     /// </summary>
     public partial class DataCenterSys : Singleton<DataCenterSys>, IUpdate
     {
         private readonly List<IDataCenterModule> m_dataCenterModuleList = new List<IDataCenterModule>();
-        private readonly BattleNetTestRunner m_battleNetTestRunner = new BattleNetTestRunner();
-        public bool IsBattleTestRunning => m_battleNetTestRunner.IsRunning;
 
         protected override void OnInit()
         {
@@ -27,15 +25,15 @@ namespace GameLogic
 
         }
 
-        #region 网络操作
+        #region 缃戠粶鎿嶄綔
 
         /// <summary>
-        /// 注册新账号。
+        /// 娉ㄥ唽鏂拌处鍙枫€?
         /// </summary>
-        /// <param name="address">服务器地址</param>
-        /// <param name="port">服务器端口</param>
-        /// <param name="userName">用户名</param>
-        /// <param name="password">密码</param>
+        /// <param name="address">鏈嶅姟鍣ㄥ湴鍧€</param>
+        /// <param name="port">鏈嶅姟鍣ㄧ鍙?/param>
+        /// <param name="userName">鐢ㄦ埛鍚?/param>
+        /// <param name="password">瀵嗙爜</param>
         public async FTask Register(string address, int port, string userName, string password)
         {
             await GameClient.Instance.ConnectAsync(address, port);
@@ -54,12 +52,12 @@ namespace GameLogic
         }
 
         /// <summary>
-        /// 登录账号并连接到 Gate 服务器。
+        /// 鐧诲綍璐﹀彿骞惰繛鎺ュ埌 Gate 鏈嶅姟鍣ㄣ€?
         /// </summary>
-        /// <param name="address">认证服务器地址</param>
-        /// <param name="port">认证服务器端口</param>
-        /// <param name="userName">用户名</param>
-        /// <param name="password">密码</param>
+        /// <param name="address">璁よ瘉鏈嶅姟鍣ㄥ湴鍧€</param>
+        /// <param name="port">璁よ瘉鏈嶅姟鍣ㄧ鍙?/param>
+        /// <param name="userName">鐢ㄦ埛鍚?/param>
+        /// <param name="password">瀵嗙爜</param>
         public async FTask Login(string address, int port, string userName, string password)
         {
             await GameClient.Instance.ConnectAsync(address, port);
@@ -80,36 +78,9 @@ namespace GameLogic
             GameEvent.Get<ILoginUI>().OnLoginSuccess();
         }
 
-        /// <summary>
-        /// 连接 Battle 场景并启动 30Hz 消息收发压测。
-        /// </summary>
-        /// <param name="address">Battle 服务器地址</param>
-        /// <param name="port">Battle 服务器端口</param>
-        /// <param name="durationSeconds">持续时间（秒）</param>
-        /// <param name="hz">发送频率（Hz）</param>
-        public async FTask StartBattleTest(string address = "127.0.0.1", int port = 20101, int durationSeconds = 300, int hz = 30)
-        {
-            GameClient.Instance.Disconnect();
-            var connected = await GameClient.Instance.ConnectAsync(address, port);
-            if (!connected)
-            {
-                Log.Warning($"[BattleTest] Connect failed: {address}:{port}");
-                return;
-            }
-
-            GameClient.Instance.Status = GameClientStatus.StatusEnter;
-            GameClient.Instance.StartHeartbeat();
-            m_battleNetTestRunner.Start(durationSeconds, hz);
-        }
-
-        public void StopBattleTest()
-        {
-            m_battleNetTestRunner.StopManual();
-        }
-
         #endregion
 
-        #region Module相关
+        #region Module鐩稿叧
 
         private void InitOtherModule()
         {
@@ -120,7 +91,7 @@ namespace GameLogic
         #endregion
 
         /// <summary>
-        /// 每帧更新所有已注册的模块。
+        /// 姣忓抚鏇存柊鎵€鏈夊凡娉ㄥ唽鐨勬ā鍧椼€?
         /// </summary>
         public void OnUpdate()
         {
@@ -131,11 +102,10 @@ namespace GameLogic
         }
 
         /// <summary>
-        /// 清除客户端数据，关闭所有窗口并通知所有模块角色登出。
+        /// 娓呴櫎瀹㈡埛绔暟鎹紝鍏抽棴鎵€鏈夌獥鍙ｅ苟閫氱煡鎵€鏈夋ā鍧楄鑹茬櫥鍑恒€?
         /// </summary>
         public void ClearClientData()
         {
-            m_battleNetTestRunner.StopManual();
             UIModule.Instance.CloseAll();
             for (int i = 0; i < m_dataCenterModuleList.Count; i++)
             {

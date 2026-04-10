@@ -171,20 +171,28 @@ namespace Fantasy.Network.Interface
 #if FANTASY_UNITY
             // 先触发通过 GameClient RegisterMsgHandler 注册的回调
             // 方便客户端通过 GameClient 和协议号直接监听服务器数据的下发
-            if (MsgHandles.TryGetValue(protocolCode, out var handlers))
+            if (MsgHandles.TryGetValue(protocolCode, out var handlers) && handlers.Count > 0)
             {
-                for (int i = handlers.Count - 1; i >= 0; i--)
+                try
                 {
-                    var handler = handlers[i];
-                    try
+                    for (int i = handlers.Count - 1; i >= 0; i--)
                     {
-                        handler.Invoke((IMessage)message);
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Error($"MsgHandler error, protocolCode:{protocolCode}, error:{e}");
+                        var handler = handlers[i];
+                        try
+                        {
+                            handler.Invoke((IMessage)message);
+                        }
+                        catch (Exception e)
+                        {
+                            Log.Error($"MsgHandler error, protocolCode:{protocolCode}, error:{e}");
+                        }
                     }
                 }
+                finally
+                {
+                    (message as IMessage)?.Dispose();
+                }
+
                 return;
             }
 #endif
