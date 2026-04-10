@@ -42,3 +42,19 @@ message G2C_LoginMessage // IMessage
 {
 	string Msg = 1;
 }
+
+// Battle 输入测试消息（客户端 -> 服务端）
+message C2B_TestInput // IMessage
+{
+	uint32 Seq = 1;
+	int64 ClientSendTimeMs = 2;
+}
+
+// Battle 状态广播消息（服务端 -> 客户端）
+message B2C_TestState // IMessage
+{
+	uint32 Seq = 1;
+	int64 ClientSendTimeMs = 2;
+	int64 ServerRecvTimeMs = 3;
+	int64 ServerSendTimeMs = 4;
+}
