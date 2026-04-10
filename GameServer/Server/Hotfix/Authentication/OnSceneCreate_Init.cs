@@ -19,6 +19,14 @@ public class OnSceneCreate_Init : AsyncEventSystem<OnCreateScene>
             case SceneType.Gate:
                 Log.Debug("Gate服务器启动成功");
                 break;
+            default:
+                if (Scene.SceneTypeDictionary.TryGetValue("Battle", out var battleSceneType) &&
+                    scene.SceneType == battleSceneType)
+                {
+                    scene.AddComponent<BattleRoomComponent>();
+                    Log.Debug("Battle服务器启动成功");
+                }
+                break;
         }
 
         await FTask.CompletedTask;
