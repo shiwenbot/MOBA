@@ -12,6 +12,8 @@ namespace GameLogic
     public partial class DataCenterSys : Singleton<DataCenterSys>, IUpdate
     {
         private readonly List<IDataCenterModule> m_dataCenterModuleList = new List<IDataCenterModule>();
+        private readonly BattleNetTestRunner m_battleNetTestRunner = new BattleNetTestRunner();
+        public bool IsBattleTestRunning => m_battleNetTestRunner.IsRunning;
 
         protected override void OnInit()
         {
@@ -78,6 +80,33 @@ namespace GameLogic
             GameEvent.Get<ILoginUI>().OnLoginSuccess();
         }
 
+        /// <summary>
+        /// 连接 Battle 场景并启动 30Hz 消息收发压测。
+        /// </summary>
+        /// <param name="address">Battle 服务器地址</param>
+        /// <param name="port">Battle 服务器端口</param>
+        /// <param name="durationSeconds">持续时间（秒）</param>
+        /// <param name="hz">发送频率（Hz）</param>
+        public async FTask StartBattleTest(string address = "127.0.0.1", int port = 20101, int durationSeconds = 300, int hz = 30)
+        {
+            GameClient.Instance.Disconnect();
+            var connected = await GameClient.Instance.ConnectAsync(address, port);
+            if (!connected)
+            {
+                Log.Warning($"[BattleTest] Connect failed: {address}:{port}");
+                return;
+            }
+
+            GameClient.Instance.Status = GameClientStatus.StatusEnter;
+            GameClient.Instance.StartHeartbeat();
+            m_battleNetTestRunner.Start(durationSeconds, hz);
+        }
+
+        public void StopBattleTest()
+        {
+            m_battleNetTestRunner.StopManual();
+        }
+
         #endregion
 
         #region Module相关
@@ -106,6 +135,7 @@ namespace GameLogic
         /// </summary>
         public void ClearClientData()
         {
+            m_battleNetTestRunner.StopManual();
             UIModule.Instance.CloseAll();
             for (int i = 0; i < m_dataCenterModuleList.Count; i++)
             {
