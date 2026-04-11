@@ -21,3 +21,9 @@ obj
 
 #openspec
 openspec/
+
+#Claude settings
+.claude/settings.local.json
+
+#ParrelSync clones
+UnityProject_clone_*/
