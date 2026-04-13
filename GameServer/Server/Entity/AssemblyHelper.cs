@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.Loader;
 using Fantasy.Helper;
 
@@ -11,7 +12,7 @@ namespace Fantasy
         public static void Initialize()
         {
             LoadEntityAssembly();
-            LoadHotfixAssembly();
+            LoadHotfixAssemblyPreferDefaultContext();
         }
 
         private static void LoadEntityAssembly()
@@ -42,6 +43,35 @@ namespace Fantasy
             // 拿到Assembly就用EnsureLoaded()方法强制触发
             assembly.EnsureLoaded();
             return assembly;
+        }
+
+        private static void LoadHotfixAssemblyPreferDefaultContext()
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (string.Equals(assembly.GetName().Name, HotfixDll, StringComparison.OrdinalIgnoreCase))
+                {
+                    assembly.EnsureLoaded();
+                    return;
+                }
+            }
+
+            try
+            {
+                var defaultContextAssembly = global::System.Reflection.Assembly.Load(HotfixDll);
+                defaultContextAssembly.EnsureLoaded();
+                return;
+            }
+            catch (FileNotFoundException)
+            {
+                // fall through
+            }
+            catch (FileLoadException)
+            {
+                // fall through
+            }
+
+            LoadHotfixAssembly();
         }
     }
 }

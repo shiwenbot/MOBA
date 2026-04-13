@@ -13,11 +13,25 @@ public class OnSceneCreate_Init : AsyncEventSystem<OnCreateScene>
         {
             case SceneType.Authentication:
                 // 用于鉴权服务器注册和登录相关逻辑的组件
-                scene.AddComponent<AuthenticationComponent>();
+                if (!scene.HasComponent<AuthenticationComponent>())
+                {
+                    scene.AddComponent<AuthenticationComponent>();
+                }
+
+                if (!scene.HasComponent<ServerTickDriver>())
+                {
+                    scene.AddComponent<ServerTickDriver>();
+                }
+
                 break;
 
             case SceneType.Gate:
-                Log.Debug("Gate服务器启动成功");
+                if (!scene.HasComponent<ServerTickDriver>())
+                {
+                    scene.AddComponent<ServerTickDriver>();
+                }
+
+                Log.Debug($"Gate服务器启动成功 SceneConfigId={scene.SceneConfigId} ProcessConfigId={scene.Process.Id}");
                 break;
         }
 
