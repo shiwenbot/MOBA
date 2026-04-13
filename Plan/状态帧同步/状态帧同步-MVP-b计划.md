@@ -98,9 +98,10 @@ C2B_JoinBattle
   → 无额外字段
 
 C2B_JoinBattleResponse
-  playerId: long    // 服务端分配的玩家 ID
-  x: float          // 初始位置 X
-  y: float          // 初始位置 Y
+  playerId: long        // 服务端分配的玩家 ID
+  x: float              // 初始位置 X
+  y: float              // 初始位置 Y
+  serverFrameIndex: uint // 服务端当前帧号，客户端从此帧开始接收快照，避免初始帧对不齐
 ```
 
 ### C2B_PlayerInput（Message，单向）
@@ -110,8 +111,10 @@ C2B_JoinBattleResponse
 ```
 C2B_PlayerInput
   frameIndex: uint  // 客户端当前帧号
+  inputSeq: uint    // 客户端递增序号，服务端按玩家取最新 seq，防止乱序覆盖
   dx: float         // 摇杆 X 方向 [-1, 1]
   dy: float         // 摇杆 Y 方向 [-1, 1]
+  // 注：MoveSystem 内部对 (dx, dy) 做归一化，消除斜向 √2 速度问题
 ```
 
 ### S2C_FrameSnapshot（Message，服务端广播）
@@ -190,18 +193,23 @@ UnityProject/Assets/GameScripts/HotFix/GameLogic/
 
 ### 服务端 BattleComponent
 
-- 维护 `Dictionary<long, PlayerState>` 和 `Dictionary<long, Queue<C2B_PlayerInput>>` 当帧输入队列。
+- 维护 `Dictionary<long, PlayerState>`、`Dictionary<long, Session>` 会话映射、`Dictionary<long, (uint seq, C2B_PlayerInput input)>` 当帧最新输入。
 - 实现 `ITickable.Tick(uint frameIndex, float dt)`：
-  1. 遍历所有玩家，取当帧最后一条输入（无输入则 dx=dy=0）。
+  1. 遍历所有玩家，取当帧 inputSeq 最大的输入（无输入则 dx=dy=0）。
   2. 调用 `MoveSystem.Apply(state, dx, dy, dt)` 更新位置。
-  3. 清空当帧输入队列。
+  3. 清空当帧输入缓存。
   4. 构造 `S2C_FrameSnapshot` 广播给所有在线 Session。
 - 注册到 `ServerTickDriver.Dispatcher`。
+- **会话生命周期**：玩家断线时（Session Disconnect 事件）从会话映射和玩家状态中移除，下一帧广播不再包含该玩家，避免"幽灵玩家"。
+- **线程安全**：Fantasy Battle Scene 使用 MultiThread 模式，消息 Handler 与 Tick 运行在同一 Scene 线程，输入队列无需额外加锁。
 
 ### GameShared MoveSystem
 
 ```
 MoveSystem.Apply(PlayerState state, float dx, float dy, float dt)
+  // 归一化，消除斜向 √2 速度问题
+  float len = sqrt(dx*dx + dy*dy)
+  if len > 1.0f: dx /= len; dy /= len
   state.x += dx * MoveSpeed * dt
   state.y += dy * MoveSpeed * dt
 ```
@@ -210,9 +218,12 @@ MoveSystem.Apply(PlayerState state, float dx, float dy, float dt)
 
 ### 客户端 BattleClientController
 
-- 启动时发送 `C2B_JoinBattle`，收到响应后记录 `selfPlayerId` 和初始位置。
-- 注册为 `ITickable`，在 `Tick` 中读取 `JoystickWidget.Direction`，发送 `C2B_PlayerInput`。
-- 注册 `S2C_FrameSnapshot` 消息回调，遍历 `players`，按 `playerId` 更新对应 Capsule 的 `transform.position`。
+- 启动时发送 `C2B_JoinBattle`，收到响应后记录 `selfPlayerId`、初始位置和 `serverFrameIndex`。
+- 注册为 `ITickable`，在 `Tick` 中读取 `JoystickWidget.Direction`，发送 `C2B_PlayerInput`（携带递增 `inputSeq`）。
+- 注册 `S2C_FrameSnapshot` 消息回调：
+  - `snapshot.frameIndex <= lastAppliedFrame` 直接丢弃（防止乱序包导致位置回退）。
+  - 否则遍历 `players`，按 `playerId` 更新对应 Capsule 的 `transform.position`；快照中不存在的 playerId 对应 Capsule 隐藏（玩家已离线）。
+- **状态门禁**：收到 `JoinBattleResponse` 前不发送 `C2B_PlayerInput`，避免服务端收到无效输入。
 
 ### Fantasy.config 新增 Battle Scene
 
@@ -248,6 +259,8 @@ case SceneType.Battle:
 - 服务端日志：每 Tick 打印 `[Battle] Frame=N, Players=2, Broadcast`。
 - 客户端日志：收到 `S2C_FrameSnapshot` 时打印 `[Battle] ApplySnapshot Frame=N`。
 - 帧号连续：客户端收到的 `frameIndex` 严格递增，无跳帧。
+- 稳定性：连续运行 10 分钟无异常断链、空引用或 NullReferenceException。
+- 帧延迟：`serverFrameIndex - clientAppliedFrameIndex` 的 P95 不超过 10 帧（约 333ms），超出则记录警告。
 
 ### 确定性验证
 
