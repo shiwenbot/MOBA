@@ -11,5 +11,9 @@ namespace Fantasy
         public const uint C2A_LoginRequest = 268445458;
         public const uint A2C_LoginResponse = 402663186;
         public const uint G2C_LoginMessage = 134227729;
+        public const uint C2B_JoinBattle = 268445459;
+        public const uint C2B_JoinBattleResponse = 402663187;
+        public const uint C2B_PlayerInput = 134227730;
+        public const uint S2C_FrameSnapshot = 134227731;
     }
 }

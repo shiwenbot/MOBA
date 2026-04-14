@@ -75,7 +75,26 @@ namespace GameLogic
                 return;
             }
             Log.Info("Login Successfully");
+            GameClient.Instance.Status = GameClientStatus.StatusEnter;
             GameEvent.Get<ILoginUI>().OnLoginSuccess();
+        }
+
+        /// <summary>
+        /// 直接连接战斗场景（MVP 阶段硬连接，不经过大厅/匹配）。
+        /// </summary>
+        public async FTask<bool> ConnectBattle(string address, int port)
+        {
+            GameClient.Instance.Disconnect();
+            bool connected = await GameClient.Instance.ConnectAsync(address, port);
+            if (!connected)
+            {
+                Log.Warning($"Connect battle failed: {address}:{port}");
+                return false;
+            }
+
+            GameClient.Instance.Status = GameClientStatus.StatusEnter;
+            Log.Info($"Connected battle: {address}:{port}");
+            return true;
         }
 
         #endregion

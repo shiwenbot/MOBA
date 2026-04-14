@@ -43,5 +43,42 @@ message G2C_LoginMessage // IMessage
 	string Msg = 1;
 }
 
+// 客户端请求加入战斗场景
+message C2B_JoinBattle // IRequest,C2B_JoinBattleResponse
+{
+}
+
+// 加入战斗响应
+message C2B_JoinBattleResponse // IResponse
+{
+	int64 PlayerId = 1;
+	float X = 2;
+	float Y = 3;
+	uint32 ServerFrameIndex = 4;
+}
+
+// 客户端逐帧输入（单向消息）
+message C2B_PlayerInput // IMessage
+{
+	uint32 FrameIndex = 1;
+	uint32 InputSeq = 2;
+	float Dx = 3;
+	float Dy = 4;
+}
+
+message PlayerSnapshot
+{
+	int64 PlayerId = 1;
+	float X = 2;
+	float Y = 3;
+}
+
+// 服务端每帧广播快照
+message S2C_FrameSnapshot // IMessage
+{
+	uint32 FrameIndex = 1;
+	repeated PlayerSnapshot Players = 2;
+}
+
 
 

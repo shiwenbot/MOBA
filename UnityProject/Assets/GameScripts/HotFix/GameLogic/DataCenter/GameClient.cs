@@ -339,7 +339,7 @@ namespace GameLogic
                 return;
             }
 
-            if (IsStatusCanSendMsg(rpcID))
+            if (IsStatusCanSendMsg(message.OpCode()))
             {
                 Scene.Session.Send(message, rpcID, routeID);
             }

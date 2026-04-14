@@ -47,6 +47,45 @@ namespace Fantasy
 			G2C_LoginMessage_message.Msg = msg;
 			session.Send(G2C_LoginMessage_message);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<C2B_JoinBattleResponse> C2B_JoinBattle(this Session session, C2B_JoinBattle C2B_JoinBattle_request)
+		{
+			return (C2B_JoinBattleResponse)await session.Call(C2B_JoinBattle_request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<C2B_JoinBattleResponse> C2B_JoinBattle(this Session session)
+		{
+			using var C2B_JoinBattle_request = Fantasy.C2B_JoinBattle.Create();
+			return (C2B_JoinBattleResponse)await session.Call(C2B_JoinBattle_request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_PlayerInput(this Session session, C2B_PlayerInput C2B_PlayerInput_message)
+		{
+			session.Send(C2B_PlayerInput_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_PlayerInput(this Session session, uint frameIndex, uint inputSeq, float dx, float dy)
+		{
+			using var C2B_PlayerInput_message = Fantasy.C2B_PlayerInput.Create();
+			C2B_PlayerInput_message.FrameIndex = frameIndex;
+			C2B_PlayerInput_message.InputSeq = inputSeq;
+			C2B_PlayerInput_message.Dx = dx;
+			C2B_PlayerInput_message.Dy = dy;
+			session.Send(C2B_PlayerInput_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_FrameSnapshot(this Session session, S2C_FrameSnapshot S2C_FrameSnapshot_message)
+		{
+			session.Send(S2C_FrameSnapshot_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_FrameSnapshot(this Session session, uint frameIndex, List<PlayerSnapshot> players)
+		{
+			using var S2C_FrameSnapshot_message = Fantasy.S2C_FrameSnapshot.Create();
+			S2C_FrameSnapshot_message.FrameIndex = frameIndex;
+			S2C_FrameSnapshot_message.Players = players;
+			session.Send(S2C_FrameSnapshot_message);
+		}
 
    }
 }
