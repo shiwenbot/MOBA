@@ -138,8 +138,6 @@ namespace GameLogic
             GameObject selfCapsule = GetOrCreateCapsule(_selfPlayerId, true);
             selfCapsule.transform.position = ToWorldPosition(response.X, response.Y);
             selfCapsule.SetActive(true);
-
-            Log.Info($"[Battle] JoinBattle success: playerId={_selfPlayerId}, serverFrame={response.ServerFrameIndex}");
         }
 
         private void RegisterSnapshotHandler()
@@ -187,8 +185,6 @@ namespace GameLogic
                     pair.Value.SetActive(false);
                 }
             }
-
-            Log.Info($"[Battle] ApplySnapshot Frame={snapshot.FrameIndex}");
         }
 
         private GameObject GetOrCreateCapsule(long playerId, bool isSelf)

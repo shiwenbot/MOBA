@@ -1979,6 +1979,7 @@ GameObject:
   - component: {fileID: 7952108263235082332}
   - component: {fileID: 7952108263234884538}
   - component: {fileID: 5474247446795850362}
+  - component: {fileID: 7611658210722453271}
   m_Layer: 5
   m_Name: BattleMainUI
   m_TagString: Untagged
@@ -2048,6 +2049,31 @@ MonoBehaviour:
   m_BlockingMask:
     serializedVersion: 2
     m_Bits: 4294967295
+--- !u!114 &7611658210722453271
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7952108263221729084}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: da5b4f8f74fed5b43b4b4c25dc3eac22, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_components:
+  - {fileID: 8698606123473647882}
+  - {fileID: 5192741498669658133}
+  - {fileID: 903328087501069275}
+  - {fileID: 3637759682347523401}
+  - {fileID: 7286735321098001806}
+  genCodePath: Assets/GameScripts/HotFix/GameLogic/UI/Gen
+  className: BattleMainUI
+  widgetTypeName: 
+  dataTypeName: 
+  impCodePath: Assets/GameScripts/HotFix/GameLogic/UI
+  isGenImpClass: 0
+  uiType: UIWindow
 --- !u!1 &8208085210453758733
 GameObject:
   m_ObjectHideFlags: 0
