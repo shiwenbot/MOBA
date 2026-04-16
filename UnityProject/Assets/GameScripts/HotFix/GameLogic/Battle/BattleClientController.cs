@@ -15,6 +15,7 @@ namespace GameLogic
     {
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
+        private const int SnapshotLogInterval = 300;
 
         private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
@@ -27,6 +28,8 @@ namespace GameLogic
         private long _selfPlayerId;
         private uint _inputSeq;
         private uint _lastAppliedFrame;
+        private uint _serverFrameOffset;
+        private int _snapshotCount;
 
         public int Priority => 0;
 
@@ -62,6 +65,8 @@ namespace GameLogic
             _isJoined = false;
             _inputSeq = 0;
             _lastAppliedFrame = 0;
+            _serverFrameOffset = 0;
+            _snapshotCount = 0;
             _selfPlayerId = 0;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
@@ -84,9 +89,10 @@ namespace GameLogic
             }
 
             Vector2 direction = ReadKeyboardDirection();
+            uint predictedServerFrame = ToPredictedServerFrame(frameIndex);
             GameClient.Instance.Send(new C2B_PlayerInput
             {
-                FrameIndex = frameIndex,
+                FrameIndex = predictedServerFrame,
                 InputSeq = ++_inputSeq,
                 Dx = direction.x,
                 Dy = direction.y
@@ -133,7 +139,12 @@ namespace GameLogic
 
             _selfPlayerId = response.PlayerId;
             _lastAppliedFrame = response.ServerFrameIndex;
+            uint localFrameAtJoin = _tickDriver != null ? _tickDriver.Dispatcher.CurrentFrame : 0;
+            _serverFrameOffset = unchecked(response.ServerFrameIndex - localFrameAtJoin);
             _isJoined = true;
+
+            Log.Debug(
+                $"[Battle] JoinBattle success. PlayerId={_selfPlayerId}, ServerFrame={response.ServerFrameIndex}, LocalFrame={localFrameAtJoin}, FrameOffset={_serverFrameOffset}");
 
             GameObject selfCapsule = GetOrCreateCapsule(_selfPlayerId, true);
             selfCapsule.transform.position = ToWorldPosition(response.X, response.Y);
@@ -165,6 +176,7 @@ namespace GameLogic
             }
 
             _lastAppliedFrame = snapshot.FrameIndex;
+            _snapshotCount++;
             _activePlayers.Clear();
 
             for (int i = 0; i < snapshot.Players.Count; i++)
@@ -185,6 +197,20 @@ namespace GameLogic
                     pair.Value.SetActive(false);
                 }
             }
+
+            if (_snapshotCount % SnapshotLogInterval == 0)
+            {
+                uint localFrame = _tickDriver != null ? _tickDriver.Dispatcher.CurrentFrame : 0;
+                uint predictedServerFrame = ToPredictedServerFrame(localFrame);
+                int frameDelta = unchecked((int)(snapshot.FrameIndex - predictedServerFrame));
+                Log.Debug(
+                    $"[Battle][ClientFrameDelta] SnapshotCount={_snapshotCount}, SnapshotFrame={snapshot.FrameIndex}, PredictedServerFrame={predictedServerFrame}, LocalFrame={localFrame}, FrameDelta={frameDelta}, FrameOffset={_serverFrameOffset}");
+            }
+        }
+
+        private uint ToPredictedServerFrame(uint localFrame)
+        {
+            return unchecked(localFrame + _serverFrameOffset);
         }
 
         private GameObject GetOrCreateCapsule(long playerId, bool isSelf)
