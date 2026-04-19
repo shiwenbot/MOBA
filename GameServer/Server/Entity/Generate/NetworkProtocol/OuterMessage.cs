@@ -477,4 +477,86 @@ namespace Fantasy
         [ProtoMember(2)]
         public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     }
+    [Serializable]
+    [ProtoContract]
+    public partial class C2B_Ping : AMessage, IMessage
+    {
+        public static C2B_Ping Create(bool autoReturn = true)
+        {
+            var c2B_Ping = MessageObjectPool<C2B_Ping>.Rent();
+            c2B_Ping.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                c2B_Ping.SetIsPool(false);
+            }
+            
+            return c2B_Ping;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            SendTimestampMs = default;
+            MessageObjectPool<C2B_Ping>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2B_Ping; } 
+        [ProtoMember(1)]
+        public ulong SendTimestampMs { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class S2C_Pong : AMessage, IMessage
+    {
+        public static S2C_Pong Create(bool autoReturn = true)
+        {
+            var s2C_Pong = MessageObjectPool<S2C_Pong>.Rent();
+            s2C_Pong.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                s2C_Pong.SetIsPool(false);
+            }
+            
+            return s2C_Pong;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            SendTimestampMs = default;
+            MessageObjectPool<S2C_Pong>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.S2C_Pong; } 
+        [ProtoMember(1)]
+        public ulong SendTimestampMs { get; set; }
+    }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using GameShared.FrameSync.Determinism;
 
 namespace GameShared.FrameSync.Core
 {
@@ -65,14 +66,38 @@ namespace GameShared.FrameSync.Core
             int tickCount = _tickAccumulator.Accumulate(deltaTime);
             for (int tickIndex = 0; tickIndex < tickCount; tickIndex++)
             {
-                _isTicking = true;
+                ExecuteTick(_tickAccumulator.FixedDeltaTime);
+            }
 
+            if (!_isTicking && _pendingOperations.Count > 0)
+            {
+                ApplyPendingOperations();
+            }
+        }
+
+        public void TickOnce()
+        {
+            ExecuteTick(_tickAccumulator.FixedDeltaTime);
+
+            if (!_isTicking && _pendingOperations.Count > 0)
+            {
+                ApplyPendingOperations();
+            }
+        }
+
+        private void ExecuteTick(float fixedDeltaTime)
+        {
+            DeterminismRules.AssertFixedDt(fixedDeltaTime);
+
+            _isTicking = true;
+            try
+            {
                 for (int i = 0; i < _entries.Count; i++)
                 {
                     TickableEntry entry = _entries[i];
                     try
                     {
-                        entry.Tickable.Tick(_currentFrame, _tickAccumulator.FixedDeltaTime);
+                        entry.Tickable.Tick(_currentFrame, fixedDeltaTime);
                     }
                     catch (Exception exception)
                     {
@@ -81,16 +106,14 @@ namespace GameShared.FrameSync.Core
                             $"Tick failed. Tickable={entry.Tickable.GetType().FullName}, Frame={_currentFrame}.");
                     }
                 }
-
-                _isTicking = false;
-                ApplyPendingOperations();
-                _currentFrame++;
             }
-
-            if (!_isTicking && _pendingOperations.Count > 0)
+            finally
             {
-                ApplyPendingOperations();
+                _isTicking = false;
             }
+
+            ApplyPendingOperations();
+            _currentFrame++;
         }
 
         private void ApplyPendingOperations()

@@ -86,6 +86,30 @@ namespace Fantasy
 			S2C_FrameSnapshot_message.Players = players;
 			session.Send(S2C_FrameSnapshot_message);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_Ping(this Session session, C2B_Ping C2B_Ping_message)
+		{
+			session.Send(C2B_Ping_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_Ping(this Session session, ulong sendTimestampMs)
+		{
+			using var C2B_Ping_message = Fantasy.C2B_Ping.Create();
+			C2B_Ping_message.SendTimestampMs = sendTimestampMs;
+			session.Send(C2B_Ping_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_Pong(this Session session, S2C_Pong S2C_Pong_message)
+		{
+			session.Send(S2C_Pong_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_Pong(this Session session, ulong sendTimestampMs)
+		{
+			using var S2C_Pong_message = Fantasy.S2C_Pong.Create();
+			S2C_Pong_message.SendTimestampMs = sendTimestampMs;
+			session.Send(S2C_Pong_message);
+		}
 
    }
 }

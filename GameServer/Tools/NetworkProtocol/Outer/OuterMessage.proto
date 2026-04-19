@@ -80,5 +80,17 @@ message S2C_FrameSnapshot // IMessage
 	repeated PlayerSnapshot Players = 2;
 }
 
+// 客户端 Ping（单向消息，用于 RTT 测量）
+message C2B_Ping // IMessage
+{
+	uint64 SendTimestampMs = 1;
+}
+
+// 服务端 Pong（原样回传时间戳）
+message S2C_Pong // IMessage
+{
+	uint64 SendTimestampMs = 1;
+}
+
 
 

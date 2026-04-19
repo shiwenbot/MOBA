@@ -15,5 +15,7 @@ namespace Fantasy
         public const uint C2B_JoinBattleResponse = 402663187;
         public const uint C2B_PlayerInput = 134227730;
         public const uint S2C_FrameSnapshot = 134227731;
+        public const uint C2B_Ping = 134227732;
+        public const uint S2C_Pong = 134227733;
     }
 }

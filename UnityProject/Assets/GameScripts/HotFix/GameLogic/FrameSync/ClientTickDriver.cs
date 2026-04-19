@@ -8,6 +8,8 @@ namespace GameLogic.FrameSync
 {
     public sealed class ClientTickDriver : MonoBehaviour
     {
+        private const int MaxCatchUpTicksPerFrame = 8;
+
         [SerializeField]
         private bool autoStart = true;
 
@@ -17,6 +19,7 @@ namespace GameLogic.FrameSync
         private TickDispatcher _dispatcher;
         private FrameTimerService _timerService;
         private UnityFrameSyncLogger _logger;
+        private uint _targetFrame;
 
         public TickDispatcher Dispatcher => _dispatcher;
         public FrameTimerService TimerService => _timerService;
@@ -51,6 +54,11 @@ namespace GameLogic.FrameSync
             IsRunning = false;
         }
 
+        public void SetTargetFrame(uint targetFrame)
+        {
+            _targetFrame = targetFrame;
+        }
+
         private void Update()
         {
             if (!IsRunning || _dispatcher == null)
@@ -59,6 +67,19 @@ namespace GameLogic.FrameSync
             }
 
             _dispatcher.Update(Time.deltaTime);
+
+            uint currentFrame = _dispatcher.CurrentFrame;
+            int frameGap = unchecked((int)(_targetFrame - currentFrame));
+            if (frameGap <= 0)
+            {
+                return;
+            }
+
+            int catchUpCount = Math.Min(frameGap, MaxCatchUpTicksPerFrame);
+            for (int i = 0; i < catchUpCount; i++)
+            {
+                _dispatcher.TickOnce();
+            }
         }
 
         private void EnsureInitialized()

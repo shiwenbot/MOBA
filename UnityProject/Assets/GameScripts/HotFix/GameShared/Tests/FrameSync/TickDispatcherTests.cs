@@ -82,6 +82,21 @@ namespace GameShared.FrameSync.Tests
             Assert.That(logger.Errors.Count, Is.EqualTo(1));
         }
 
+        [Test]
+        public void TickOnce_AdvancesFrameWithFixedDeltaTime()
+        {
+            TickDispatcher dispatcher = new TickDispatcher();
+            CaptureDtTickable tickable = new CaptureDtTickable(0);
+
+            dispatcher.Register(tickable);
+            dispatcher.TickOnce();
+
+            Assert.That(dispatcher.CurrentFrame, Is.EqualTo(1));
+            Assert.That(tickable.Frames, Is.EqualTo(new[] { 0u }));
+            Assert.That(tickable.Dts.Count, Is.EqualTo(1));
+            Assert.That(tickable.Dts[0], Is.EqualTo(TickAccumulator.DefaultFixedDeltaTime));
+        }
+
         private sealed class MockTickable : ITickable
         {
             private readonly string _name;
@@ -132,6 +147,24 @@ namespace GameShared.FrameSync.Tests
             public void Tick(uint frameIndex, float fixedDt)
             {
                 throw new InvalidOperationException("Tick failed.");
+            }
+        }
+
+        private sealed class CaptureDtTickable : ITickable
+        {
+            public CaptureDtTickable(int priority)
+            {
+                Priority = priority;
+            }
+
+            public int Priority { get; }
+            public List<uint> Frames { get; } = new List<uint>();
+            public List<float> Dts { get; } = new List<float>();
+
+            public void Tick(uint frameIndex, float fixedDt)
+            {
+                Frames.Add(frameIndex);
+                Dts.Add(fixedDt);
             }
         }
 
