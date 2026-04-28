@@ -13,6 +13,14 @@ using Fantasy;
 
 try
 {
+    if (Array.Exists(args, static arg =>
+            arg.Equals("--test", StringComparison.OrdinalIgnoreCase) ||
+            arg.Equals("--mode=test", StringComparison.OrdinalIgnoreCase)))
+    {
+        Environment.Exit(TestRunner.RunAll());
+        return;
+    }
+
     // 初始化引用的程序集，确保 ModuleInitializer 执行
     // .NET 采用延迟加载机制 - 仅当类型被引用时才加载程序集
     // 通过访问 AssemblyMarker 强制加载程序集并调用 ModuleInitializer

@@ -1,6 +1,8 @@
 using System;
+using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Snapshot;
 using GameShared.FrameSync.Timer;
 using UnityEngine;
 
@@ -9,6 +11,7 @@ namespace GameLogic.FrameSync
     public sealed class ClientTickDriver : MonoBehaviour
     {
         private const int MaxCatchUpTicksPerFrame = 8;
+        private const int SnapshotBufferCapacity = 24;
 
         [SerializeField]
         private bool autoStart = true;
@@ -18,11 +21,16 @@ namespace GameLogic.FrameSync
 
         private TickDispatcher _dispatcher;
         private FrameTimerService _timerService;
+        private BattleWorldState _worldState;
+        private SnapshotManager _snapshotManager;
         private UnityFrameSyncLogger _logger;
         private uint _targetFrame;
 
         public TickDispatcher Dispatcher => _dispatcher;
         public FrameTimerService TimerService => _timerService;
+        public BattleWorldState WorldState => _worldState;
+        public SnapshotManager SnapshotManager => _snapshotManager;
+        public IFrameSyncLogger Logger => _logger;
         public bool IsRunning { get; private set; }
 
         private void Awake()
@@ -95,8 +103,14 @@ namespace GameLogic.FrameSync
                 TickAccumulator.DefaultMaxDeltaTime,
                 _logger);
 
+            _worldState = new BattleWorldState();
             _timerService = new FrameTimerService(timerPriority, _logger);
+            _snapshotManager = new SnapshotManager(
+                _worldState,
+                new SnapshotBuffer<BattleWorldSnapshot>(SnapshotBufferCapacity),
+                timerPriority);
             _dispatcher.Register(_timerService);
+            _dispatcher.Register(_snapshotManager);
         }
 
         private sealed class UnityFrameSyncLogger : IFrameSyncLogger

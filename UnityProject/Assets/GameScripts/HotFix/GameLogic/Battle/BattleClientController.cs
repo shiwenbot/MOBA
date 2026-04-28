@@ -4,8 +4,8 @@ using Fantasy;
 using Fantasy.Async;
 using Fantasy.Network.Interface;
 using GameLogic.FrameSync;
+using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
-using GameShared.FrameSync.Determinism;
 using TEngine;
 using UnityEngine;
 using Log = TEngine.Log;
@@ -16,31 +16,20 @@ namespace GameLogic
     {
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
-        private const int PingIntervalFrames = 30;
-        private const float InitialRttEmaMs = 100f;
-        private const float RttEmaAlpha = 0.2f;
-        private const int MaxLeadFrames = 8;
-        private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
+        private static bool s_archTestExecuted;
 
         private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
 
         private ClientTickDriver _tickDriver;
+        private BattleSimulation _simulation;
         private Action<IMessage> _snapshotHandler;
         private Action<IMessage> _pongHandler;
         private bool _snapshotRegistered;
         private bool _pongRegistered;
         private bool _isInitialized;
-        private bool _isJoined;
-        private bool _hasRttSample;
-        private long _selfPlayerId;
-        private uint _inputSeq;
-        private uint _lastAppliedFrame;
-        private uint _lastSentFrameIndex;
-        private uint _serverFrameOffset;
-        private uint _leadFrames = 1;
-        private float _rttEmaMs = InitialRttEmaMs;
-        private int _pingCount;
+        private float _cachedDx;
+        private float _cachedDy;
 
         public int Priority => 0;
 
@@ -53,6 +42,7 @@ namespace GameLogic
 
             _isInitialized = true;
             EnsureTickDriver();
+            EnsureSimulation();
             RegisterSnapshotHandler();
             JoinBattleAsync().Coroutine();
         }
@@ -79,17 +69,10 @@ namespace GameLogic
             _pongRegistered = false;
             _snapshotHandler = null;
             _pongHandler = null;
+            _simulation = null;
             _isInitialized = false;
-            _isJoined = false;
-            _hasRttSample = false;
-            _inputSeq = 0;
-            _lastAppliedFrame = 0;
-            _lastSentFrameIndex = 0;
-            _serverFrameOffset = 0;
-            _leadFrames = 1;
-            _rttEmaMs = InitialRttEmaMs;
-            _pingCount = 0;
-            _selfPlayerId = 0;
+            _cachedDx = 0.0f;
+            _cachedDy = 0.0f;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
             {
@@ -103,31 +86,38 @@ namespace GameLogic
             _activePlayers.Clear();
         }
 
-        public void Tick(uint frameIndex, float fixedDt)
+        private void Update()
         {
-            if (!_isJoined)
+            if (!_isInitialized)
             {
                 return;
             }
 
-            SendPingIfNeeded();
+            ReadKeyboardDirection(out _cachedDx, out _cachedDy);
+        }
 
-            Vector2 direction = ReadKeyboardDirection();
-            uint predictedServerFrame = ToPredictedServerFrame(frameIndex);
-            uint sendFrame = predictedServerFrame;
-            uint minFrame = unchecked(_lastSentFrameIndex + 1);
-            if (sendFrame < minFrame)
+        public void Tick(uint frameIndex, float fixedDt)
+        {
+            if (_simulation == null || !_simulation.IsJoined)
             {
-                sendFrame = minFrame;
+                return;
             }
-            _lastSentFrameIndex = sendFrame;
-            GameClient.Instance.Send(new C2B_PlayerInput
+
+            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, _cachedDx, _cachedDy);
+            if (tickResult.SnapshotApplied)
             {
-                FrameIndex = sendFrame,
-                InputSeq = ++_inputSeq,
-                Dx = direction.x,
-                Dy = direction.y
-            });
+                SyncRendering();
+            }
+
+            if (tickResult.CatchUpFrames > 0 && _tickDriver != null)
+            {
+                _tickDriver.SetTargetFrame(unchecked(frameIndex + (uint)tickResult.CatchUpFrames));
+            }
+        }
+
+        public void RollBack(uint targetFrame)
+        {
+            _simulation?.RollBack(targetFrame);
         }
 
         private void OnDestroy()
@@ -145,6 +135,37 @@ namespace GameLogic
             }
 
             _tickDriver.Dispatcher.Register(this);
+        }
+
+        private void EnsureSimulation()
+        {
+            if (_simulation != null || _tickDriver == null)
+            {
+                return;
+            }
+
+            _simulation = new BattleSimulation(
+                _tickDriver.WorldState,
+                SendInputCommand,
+                SendPingCommand,
+                _tickDriver.Logger);
+
+            if (s_archTestExecuted)
+            {
+                return;
+            }
+
+            s_archTestExecuted = true;
+            string failedCase;
+            bool passed = BattleSimulation.RunSelfTest(out failedCase);
+            if (passed)
+            {
+                Log.Info("[ArchTest] ALL PASS");
+            }
+            else
+            {
+                Log.Warning($"[ArchTest] FAIL: {failedCase}");
+            }
         }
 
         private async FTask JoinBattleAsync()
@@ -168,16 +189,9 @@ namespace GameLogic
                 return;
             }
 
-            _selfPlayerId = response.PlayerId;
-            _lastAppliedFrame = response.ServerFrameIndex;
             uint localFrameAtJoin = _tickDriver != null ? _tickDriver.Dispatcher.CurrentFrame : 0;
-            _serverFrameOffset = unchecked(response.ServerFrameIndex - localFrameAtJoin);
-            _lastSentFrameIndex = 0;
-            _isJoined = true;
-
-            GameObject selfCapsule = GetOrCreateCapsule(_selfPlayerId, true);
-            selfCapsule.transform.position = ToWorldPosition(response.X, response.Y);
-            selfCapsule.SetActive(true);
+            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, localFrameAtJoin, response.X, response.Y);
+            SyncRendering();
         }
 
         private void RegisterSnapshotHandler()
@@ -202,43 +216,7 @@ namespace GameLogic
                 return;
             }
 
-            if (snapshot.FrameIndex <= _lastAppliedFrame)
-            {
-                return;
-            }
-
-            _lastAppliedFrame = snapshot.FrameIndex;
-            _activePlayers.Clear();
-
-            for (int i = 0; i < snapshot.Players.Count; i++)
-            {
-                PlayerSnapshot player = snapshot.Players[i];
-                _activePlayers.Add(player.PlayerId);
-
-                bool isSelf = player.PlayerId == _selfPlayerId;
-                GameObject capsule = GetOrCreateCapsule(player.PlayerId, isSelf);
-                capsule.transform.position = ToWorldPosition(player.X, player.Y);
-                capsule.SetActive(true);
-            }
-
-            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
-            {
-                if (!_activePlayers.Contains(pair.Key) && pair.Value != null)
-                {
-                    pair.Value.SetActive(false);
-                }
-            }
-
-            uint currentLocalFrame = _tickDriver != null ? _tickDriver.Dispatcher.CurrentFrame : 0;
-            uint predictedServerFrame = ToPredictedServerFrame(currentLocalFrame);
-            uint targetServerFrame = unchecked(snapshot.FrameIndex + _leadFrames);
-            int frameDeltaToTarget = unchecked((int)(targetServerFrame - predictedServerFrame));
-            uint targetLocalFrame = frameDeltaToTarget > 0
-                ? unchecked(currentLocalFrame + (uint)frameDeltaToTarget)
-                : currentLocalFrame;
-
-            _serverFrameOffset = unchecked(targetServerFrame - currentLocalFrame);
-            _tickDriver?.SetTargetFrame(targetLocalFrame);
+            _simulation?.EnqueueServerSnapshot(ConvertSnapshot(snapshot));
         }
 
         private void OnPongMessage(IMessage message)
@@ -255,38 +233,97 @@ namespace GameLogic
                 return;
             }
 
-            if (!_hasRttSample)
-            {
-                _rttEmaMs = rttMs;
-                _hasRttSample = true;
-            }
-            else
-            {
-                _rttEmaMs = (RttEmaAlpha * rttMs) + ((1.0f - RttEmaAlpha) * _rttEmaMs);
-            }
-
-            int leadFrames = Mathf.CeilToInt(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
-            _leadFrames = (uint)Mathf.Clamp(leadFrames, 1, MaxLeadFrames);
+            _simulation?.ProcessPong(rttMs);
         }
 
-        private void SendPingIfNeeded()
+        private void SyncRendering()
         {
-            _pingCount++;
-            if (_pingCount < PingIntervalFrames)
+            BattleWorldState worldState = _tickDriver?.WorldState;
+            if (worldState == null || _simulation == null)
             {
                 return;
             }
 
-            _pingCount = 0;
-            GameClient.Instance.Send(new C2B_Ping
+            _activePlayers.Clear();
+            foreach (PlayerState player in worldState.Players)
             {
-                SendTimestampMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                _activePlayers.Add(player.PlayerId);
+                bool isSelf = player.PlayerId == _simulation.SelfPlayerId;
+                GameObject capsule = GetOrCreateCapsule(player.PlayerId, isSelf);
+                capsule.transform.position = ToWorldPosition(player.X, player.Y);
+                capsule.SetActive(true);
+            }
+
+            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
+            {
+                if (_activePlayers.Contains(pair.Key))
+                {
+                    continue;
+                }
+
+                if (pair.Value != null)
+                {
+                    pair.Value.SetActive(false);
+                }
+            }
+        }
+
+        private static BattleWorldSnapshot ConvertSnapshot(S2C_FrameSnapshot snapshot)
+        {
+            PlayerStateSnapshot[] players = new PlayerStateSnapshot[snapshot.Players.Count];
+            for (int i = 0; i < snapshot.Players.Count; i++)
+            {
+                PlayerSnapshot player = snapshot.Players[i];
+                players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y);
+            }
+
+            Array.Sort(players, PlayerSnapshotComparer.Instance);
+            return new BattleWorldSnapshot(snapshot.FrameIndex, players, null);
+        }
+
+        private static void ReadKeyboardDirection(out float dx, out float dy)
+        {
+            dx = 0.0f;
+            dy = 0.0f;
+
+            if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow))
+            {
+                dx -= 1.0f;
+            }
+
+            if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow))
+            {
+                dx += 1.0f;
+            }
+
+            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow))
+            {
+                dy -= 1.0f;
+            }
+
+            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow))
+            {
+                dy += 1.0f;
+            }
+        }
+
+        private static void SendInputCommand(uint frameIndex, uint inputSeq, float dx, float dy)
+        {
+            GameClient.Instance.Send(new C2B_PlayerInput
+            {
+                FrameIndex = frameIndex,
+                InputSeq = inputSeq,
+                Dx = dx,
+                Dy = dy
             });
         }
 
-        private uint ToPredictedServerFrame(uint localFrame)
+        private static void SendPingCommand(ulong sendTimestampMs)
         {
-            return unchecked(localFrame + _serverFrameOffset);
+            GameClient.Instance.Send(new C2B_Ping
+            {
+                SendTimestampMs = sendTimestampMs
+            });
         }
 
         private GameObject GetOrCreateCapsule(long playerId, bool isSelf)
@@ -315,38 +352,14 @@ namespace GameLogic
             return new Vector3(x, 0.5f, y);
         }
 
-        private static Vector2 ReadKeyboardDirection()
+        private sealed class PlayerSnapshotComparer : IComparer<PlayerStateSnapshot>
         {
-            float dx = 0.0f;
-            float dy = 0.0f;
+            public static readonly PlayerSnapshotComparer Instance = new PlayerSnapshotComparer();
 
-            if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow))
+            public int Compare(PlayerStateSnapshot x, PlayerStateSnapshot y)
             {
-                dx -= 1.0f;
+                return x.PlayerId.CompareTo(y.PlayerId);
             }
-
-            if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow))
-            {
-                dx += 1.0f;
-            }
-
-            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow))
-            {
-                dy -= 1.0f;
-            }
-
-            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow))
-            {
-                dy += 1.0f;
-            }
-
-            Vector2 direction = new Vector2(dx, dy);
-            if (direction.sqrMagnitude > 1.0f)
-            {
-                direction.Normalize();
-            }
-
-            return direction;
         }
     }
 }
