@@ -104,10 +104,7 @@ namespace GameLogic
             }
 
             TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, _cachedDx, _cachedDy);
-            if (tickResult.SnapshotApplied)
-            {
-                SyncRendering();
-            }
+            SyncRendering();
 
             if (tickResult.CatchUpFrames > 0 && _tickDriver != null)
             {
@@ -160,11 +157,11 @@ namespace GameLogic
             bool passed = BattleSimulation.RunSelfTest(out failedCase);
             if (passed)
             {
-                Log.Info("[ArchTest] ALL PASS");
+                Log.Info("[PredictTest] ALL PASS");
             }
             else
             {
-                Log.Warning($"[ArchTest] FAIL: {failedCase}");
+                Log.Warning($"[PredictTest] FAIL: {failedCase}");
             }
         }
 
@@ -189,8 +186,12 @@ namespace GameLogic
                 return;
             }
 
-            uint localFrameAtJoin = _tickDriver != null ? _tickDriver.Dispatcher.CurrentFrame : 0;
-            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, localFrameAtJoin, response.X, response.Y);
+            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, response.X, response.Y);
+            if (_tickDriver != null && _simulation != null)
+            {
+                _tickDriver.AlignToFrame(_simulation.InitialAlignedFrame);
+            }
+
             SyncRendering();
         }
 

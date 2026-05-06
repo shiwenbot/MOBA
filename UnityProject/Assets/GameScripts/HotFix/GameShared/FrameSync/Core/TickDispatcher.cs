@@ -85,6 +85,20 @@ namespace GameShared.FrameSync.Core
             }
         }
 
+        public void SetCurrentFrame(uint frameIndex, bool resetAccumulator = false)
+        {
+            if (_isTicking)
+            {
+                throw new InvalidOperationException("Cannot change current frame while ticking.");
+            }
+
+            _currentFrame = frameIndex;
+            if (resetAccumulator)
+            {
+                _tickAccumulator.Reset();
+            }
+        }
+
         private void ExecuteTick(float fixedDeltaTime)
         {
             DeterminismRules.AssertFixedDt(fixedDeltaTime);

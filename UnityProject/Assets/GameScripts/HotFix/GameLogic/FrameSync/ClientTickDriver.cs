@@ -67,6 +67,13 @@ namespace GameLogic.FrameSync
             _targetFrame = targetFrame;
         }
 
+        public void AlignToFrame(uint frameIndex, bool resetAccumulator = true)
+        {
+            EnsureInitialized();
+            _dispatcher.SetCurrentFrame(frameIndex, resetAccumulator);
+            _targetFrame = frameIndex;
+        }
+
         private void Update()
         {
             if (!IsRunning || _dispatcher == null)

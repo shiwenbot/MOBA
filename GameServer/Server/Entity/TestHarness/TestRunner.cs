@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Snapshot;
 
 namespace Fantasy;
 
@@ -13,6 +14,10 @@ public static class TestRunner
 
     public static int RunAll()
     {
+        bool snapshotPassed = RunSnapshotSelfTest();
+        bool frameSchedulePassed = RunFrameScheduleSelfTest();
+        bool serverInputModelPassed = RunServerInputModelSelfTest();
+
         Func<ScenarioResult>[] scenarios =
         {
             RunDeterminismScenario,
@@ -35,7 +40,143 @@ public static class TestRunner
         }
 
         Console.WriteLine($"[TestSuite] {passedCount}/{scenarios.Length} PASS");
-        return passedCount == scenarios.Length ? 0 : 1;
+        return snapshotPassed && frameSchedulePassed && serverInputModelPassed && passedCount == scenarios.Length ? 0 : 1;
+    }
+
+    private static bool RunSnapshotSelfTest()
+    {
+        bool passed = SnapshotSelfTestSuite.Run(out string failedCase);
+        Console.WriteLine(passed ? "[SnapshotTest] ALL PASS" : $"[SnapshotTest] FAIL: {failedCase}");
+        return passed;
+    }
+
+    private static bool RunFrameScheduleSelfTest()
+    {
+        bool passed = FutureFrameInputAppliesOnTargetFrame();
+        Console.WriteLine(passed ? "[FrameScheduleTest] ALL PASS" : "[FrameScheduleTest] FAIL: future-frame-input-applies-on-target-frame");
+        return passed;
+    }
+
+    private static bool RunServerInputModelSelfTest()
+    {
+        bool expiredPassed = ExpiredInputIsDropped();
+        bool futureBufferedPassed = FutureInputIsBuffered();
+        bool tooFarRejectedPassed = TooFarFutureInputIsRejected();
+        bool reusePassed = MissingInputReusesLast();
+
+        if (expiredPassed && futureBufferedPassed && tooFarRejectedPassed && reusePassed)
+        {
+            Console.WriteLine("[ServerInputTest] ALL PASS");
+            return true;
+        }
+
+        if (!expiredPassed)
+        {
+            Console.WriteLine("[ServerInputTest] FAIL: expired-input-is-dropped");
+        }
+
+        if (!futureBufferedPassed)
+        {
+            Console.WriteLine("[ServerInputTest] FAIL: future-input-is-buffered");
+        }
+
+        if (!tooFarRejectedPassed)
+        {
+            Console.WriteLine("[ServerInputTest] FAIL: too-far-future-input-is-rejected");
+        }
+
+        if (!reusePassed)
+        {
+            Console.WriteLine("[ServerInputTest] FAIL: missing-input-reuses-last");
+        }
+
+        return false;
+    }
+
+    private static bool FutureFrameInputAppliesOnTargetFrame()
+    {
+        BattleLogic battleLogic = new BattleLogic();
+        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
+        for (uint frame = 0; frame < 5; frame++)
+        {
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            if (state.X != 0.0f)
+            {
+                return false;
+            }
+        }
+
+        battleLogic.Tick(5, DeterminismRules.FixedDeltaTime);
+        float expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
+        return Math.Abs(state.X - expectedX) < 0.0001f;
+    }
+
+    private static bool ExpiredInputIsDropped()
+    {
+        BattleLogic battleLogic = new BattleLogic();
+        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.Tick(0, DeterminismRules.FixedDeltaTime);
+        battleLogic.SubmitInput(1, 0, 1, 1.0f, 0.0f);
+        battleLogic.Tick(1, DeterminismRules.FixedDeltaTime);
+
+        return Math.Abs(state.X) < 0.0001f;
+    }
+
+    private static bool FutureInputIsBuffered()
+    {
+        BattleLogic battleLogic = new BattleLogic();
+        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
+        for (uint frame = 0; frame < 5; frame++)
+        {
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            if (Math.Abs(state.X) >= 0.0001f)
+            {
+                return false;
+            }
+        }
+
+        battleLogic.Tick(5, DeterminismRules.FixedDeltaTime);
+        float expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
+        return Math.Abs(state.X - expectedX) < 0.0001f;
+    }
+
+    private static bool TooFarFutureInputIsRejected()
+    {
+        BattleLogic battleLogic = new BattleLogic();
+        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.SubmitInput(1, 17, 1, 1.0f, 0.0f);
+        for (uint frame = 0; frame <= 17; frame++)
+        {
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+        }
+
+        return Math.Abs(state.X) < 0.0001f;
+    }
+
+    private static bool MissingInputReusesLast()
+    {
+        BattleLogic battleLogic = new BattleLogic();
+        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.Tick(0, DeterminismRules.FixedDeltaTime);
+        if (Math.Abs(state.X) >= 0.0001f)
+        {
+            return false;
+        }
+
+        battleLogic.SubmitInput(1, 1, 1, 1.0f, 0.0f);
+        battleLogic.Tick(1, DeterminismRules.FixedDeltaTime);
+        float afterFirstTick = state.X;
+
+        battleLogic.Tick(2, DeterminismRules.FixedDeltaTime);
+        float expectedX = afterFirstTick + (DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime);
+        return Math.Abs(state.X - expectedX) < 0.0001f;
     }
 
     private static ScenarioResult RunDeterminismScenario()

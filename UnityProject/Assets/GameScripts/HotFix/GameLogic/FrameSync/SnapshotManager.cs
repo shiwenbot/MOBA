@@ -68,7 +68,7 @@ namespace GameLogic.FrameSync
         private void RunSelfTest()
         {
             string failedCase;
-            bool passed = SnapshotSelfTest.Run(out failedCase);
+            bool passed = SnapshotSelfTestSuite.Run(out failedCase);
             if (passed)
             {
                 Log.Info("[SnapshotTest] ALL PASS");

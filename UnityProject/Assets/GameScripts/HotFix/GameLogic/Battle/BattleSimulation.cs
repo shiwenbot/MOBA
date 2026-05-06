@@ -1,35 +1,50 @@
 using System;
 using System.Collections.Generic;
 using GameShared.FrameSync.Battle;
-using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
+using Log = TEngine.Log;
 
 namespace GameLogic
 {
     public sealed class BattleSimulation
     {
         private const int PingIntervalFrames = 30;
+        private const int PredictionBufferCapacity = 32;
+        private const int InputHistoryCapacity = 128;
+        private const int ConsistencyLogInterval = 300;
         private const float InitialRttEmaMs = 100f;
         private const float RttEmaAlpha = 0.2f;
+        private const int MinLeadFrames = 3;
         private const int MaxLeadFrames = 8;
+        // 多留 1 帧缓冲，吸收网络抖动和服务端帧边界调度误差。
+        private const int JitterBufferFrames = 2;
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
         private readonly Action<uint, uint, float, float> _onSendInput;
         private readonly Action<ulong> _onSendPing;
-        private readonly IFrameSyncLogger _logger;
+        private readonly GameShared.FrameSync.Core.IFrameSyncLogger _logger;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
+        private readonly Dictionary<uint, SelfPrediction> _selfPredictions =
+            new Dictionary<uint, SelfPrediction>(PredictionBufferCapacity);
+        private readonly Dictionary<uint, BufferedInput> _inputHistory =
+            new Dictionary<uint, BufferedInput>(InputHistoryCapacity);
 
         private bool _isJoined;
         private bool _hasRttSample;
         private long _selfPlayerId;
         private uint _inputSeq;
         private uint _lastAppliedFrame;
-        private uint _lastSentFrameIndex;
-        private uint _serverFrameOffset;
-        private uint _leadFrames = 1;
+        private uint _lastPredictedFrame;
+        private uint _localFrame;
+        private uint _leadFrames = MinLeadFrames;
         private float _rttEmaMs = InitialRttEmaMs;
         private int _pingCount;
+        private int _checked;
+        private int _hits;
+        private int _misses;
+        private int _skippedNoRecord;
+        private int _skippedEvicted;
         private bool _hasPendingServerSnapshot;
         private BattleWorldSnapshot _pendingServerSnapshot;
 
@@ -37,7 +52,7 @@ namespace GameLogic
             BattleWorldState worldState,
             Action<uint, uint, float, float> onSendInput,
             Action<ulong> onSendPing,
-            IFrameSyncLogger logger = null)
+            GameShared.FrameSync.Core.IFrameSyncLogger logger = null)
         {
             _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
@@ -49,7 +64,13 @@ namespace GameLogic
         public long SelfPlayerId => _selfPlayerId;
         public uint LeadFrames => _leadFrames;
         public uint LastAppliedFrame => _lastAppliedFrame;
-        public uint ServerFrameOffset => _serverFrameOffset;
+        public uint LocalFrame => _localFrame;
+        public uint InitialAlignedFrame => unchecked(_lastAppliedFrame + _leadFrames);
+        public int ConsistencyChecked => _checked;
+        public int ConsistencyHits => _hits;
+        public int ConsistencyMisses => _misses;
+        public int ConsistencySkippedNoRecord => _skippedNoRecord;
+        public int ConsistencySkippedEvicted => _skippedEvicted;
 
         public void EnqueueServerSnapshot(BattleWorldSnapshot snapshot)
         {
@@ -91,8 +112,8 @@ namespace GameLogic
                 _rttEmaMs = (RttEmaAlpha * rttMs) + ((1.0f - RttEmaAlpha) * _rttEmaMs);
             }
 
-            int leadFrames = (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
-            _leadFrames = (uint)Math.Clamp(leadFrames, 1, MaxLeadFrames);
+            int leadFrames = JitterBufferFrames + (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
+            _leadFrames = (uint)Math.Clamp(leadFrames, MinLeadFrames, MaxLeadFrames);
         }
 
         public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy)
@@ -108,23 +129,17 @@ namespace GameLogic
                 DeterminismRules.AssertFinite(dx, nameof(dx));
                 DeterminismRules.AssertFinite(dy, nameof(dy));
 
-                bool snapshotApplied = ApplyPendingServerSnapshot(frameIndex, out int catchUpFrames);
-                SendPingIfNeeded();
+                _localFrame = frameIndex;
                 NormalizeInput(ref dx, ref dy);
 
-                uint predictedServerFrame = ToPredictedServerFrame(frameIndex);
-                uint sendFrame = predictedServerFrame;
-                uint minFrame = unchecked(_lastSentFrameIndex + 1);
-                if (sendFrame < minFrame)
-                {
-                    sendFrame = minFrame;
-                }
+                SaveInputHistory(frameIndex, dx, dy);
+                SendPingIfNeeded();
+                _onSendInput(frameIndex, ++_inputSeq, dx, dy);
 
-                _lastSentFrameIndex = sendFrame;
-                _onSendInput(sendFrame, ++_inputSeq, dx, dy);
+                bool snapshotApplied = ApplyPendingServerSnapshot(out int catchUpFrames, out bool consistencyMismatch);
+                AdvancePredictionTo(frameIndex, fixedDt);
 
-                // TODO v0.3c: persist (frameIndex, dx, dy) into an input history buffer.
-                return new TickResult(snapshotApplied, _lastAppliedFrame, catchUpFrames);
+                return new TickResult(snapshotApplied, _lastAppliedFrame, catchUpFrames, consistencyMismatch);
             }
             catch (Exception exception)
             {
@@ -133,15 +148,26 @@ namespace GameLogic
             }
         }
 
-        public void SetJoined(long playerId, uint serverFrame, uint localFrame, float x, float y)
+        public void SetJoined(long playerId, uint serverFrame, float x, float y)
         {
             ClearWorldState();
 
             _selfPlayerId = playerId;
             _lastAppliedFrame = serverFrame;
-            _serverFrameOffset = unchecked(serverFrame - localFrame);
-            _lastSentFrameIndex = 0;
+            _lastPredictedFrame = serverFrame;
+            _localFrame = serverFrame;
             _inputSeq = 0;
+            _leadFrames = MinLeadFrames;
+            _rttEmaMs = InitialRttEmaMs;
+            _hasRttSample = false;
+            _pingCount = 0;
+            _checked = 0;
+            _hits = 0;
+            _misses = 0;
+            _skippedNoRecord = 0;
+            _skippedEvicted = 0;
+            _selfPredictions.Clear();
+            _inputHistory.Clear();
             _hasPendingServerSnapshot = false;
             _pendingServerSnapshot = null;
             _isJoined = true;
@@ -156,45 +182,13 @@ namespace GameLogic
 
         public static bool RunSelfTest(out string failedCase)
         {
-            try
-            {
-                if (!PureLogicRoundTrip())
-                {
-                    failedCase = "pure-logic-roundtrip";
-                    return false;
-                }
-
-                if (!RttLeadFrameClamp())
-                {
-                    failedCase = "rtt-leadframe-clamp";
-                    return false;
-                }
-
-                if (!PredictedFrameOffset())
-                {
-                    failedCase = "predicted-frame-offset";
-                    return false;
-                }
-
-                if (!InputNormalization())
-                {
-                    failedCase = "input-normalization";
-                    return false;
-                }
-            }
-            catch (Exception exception)
-            {
-                failedCase = $"{exception.GetType().Name}:{exception.Message}";
-                return false;
-            }
-
-            failedCase = string.Empty;
-            return true;
+            return BattlePredictionSelfTestSuite.Run(out failedCase);
         }
 
-        private bool ApplyPendingServerSnapshot(uint localFrame, out int catchUpFrames)
+        private bool ApplyPendingServerSnapshot(out int catchUpFrames, out bool consistencyMismatch)
         {
             catchUpFrames = 0;
+            consistencyMismatch = false;
             if (!_hasPendingServerSnapshot || _pendingServerSnapshot == null)
             {
                 return false;
@@ -209,15 +203,70 @@ namespace GameLogic
                 return false;
             }
 
-            _lastAppliedFrame = snapshot.FrameIndex;
-            ApplySnapshotToWorldState(snapshot);
+            consistencyMismatch = CheckConsistency(snapshot);
+            ApplyAuthoritativeSnapshot(snapshot);
 
-            uint predictedServerFrame = ToPredictedServerFrame(localFrame);
-            uint targetServerFrame = unchecked(snapshot.FrameIndex + _leadFrames);
-            int frameDeltaToTarget = unchecked((int)(targetServerFrame - predictedServerFrame));
-            _serverFrameOffset = unchecked(targetServerFrame - localFrame);
+            uint targetLocalFrame = unchecked(snapshot.FrameIndex + _leadFrames);
+            int frameDeltaToTarget = unchecked((int)(targetLocalFrame - _localFrame));
             catchUpFrames = frameDeltaToTarget > 0 ? frameDeltaToTarget : 0;
             return true;
+        }
+
+        private bool CheckConsistency(BattleWorldSnapshot snapshot)
+        {
+            bool hasAuthoritativeSelf = TryGetAuthoritativeSelf(snapshot, out PlayerStateSnapshot authoritativeSelf);
+            bool hasPrediction = _selfPredictions.TryGetValue(snapshot.FrameIndex, out SelfPrediction prediction);
+
+            if (hasPrediction)
+            {
+                _selfPredictions.Remove(snapshot.FrameIndex);
+            }
+
+            if (!hasAuthoritativeSelf || !hasPrediction)
+            {
+                _skippedNoRecord++;
+                return false;
+            }
+
+            _checked++;
+            if (prediction.X == authoritativeSelf.X && prediction.Y == authoritativeSelf.Y)
+            {
+                _hits++;
+            }
+            else
+            {
+                _misses++;
+                float deltaX = authoritativeSelf.X - prediction.X;
+                float deltaY = authoritativeSelf.Y - prediction.Y;
+                Log.Warning(
+                    $"[Consistency] MISMATCH frame={snapshot.FrameIndex} pred=({prediction.X},{prediction.Y}) auth=({authoritativeSelf.X},{authoritativeSelf.Y}) delta=({deltaX:F4},{deltaY:F4})");
+            }
+
+            if (_checked > 0 && (_checked % ConsistencyLogInterval) == 0)
+            {
+                float rate = (float)_hits / _checked;
+                Log.Info(
+                    $"[Consistency] HitRate={rate:P1} hit={_hits} miss={_misses} noRecord={_skippedNoRecord} evicted={_skippedEvicted}");
+            }
+
+            return prediction.X != authoritativeSelf.X || prediction.Y != authoritativeSelf.Y;
+        }
+
+        private bool TryGetAuthoritativeSelf(BattleWorldSnapshot snapshot, out PlayerStateSnapshot selfSnapshot)
+        {
+            IReadOnlyList<PlayerStateSnapshot> players = snapshot.Players;
+            for (int i = 0; i < players.Count; i++)
+            {
+                PlayerStateSnapshot player = players[i];
+                if (player.PlayerId == _selfPlayerId)
+                {
+                    selfSnapshot = player;
+                    return true;
+                }
+            }
+
+            selfSnapshot = default;
+            return false;
         }
 
         private void ApplySnapshotToWorldState(BattleWorldSnapshot snapshot)
@@ -243,6 +292,14 @@ namespace GameLogic
             _stalePlayerIds.Clear();
         }
 
+        private void ApplyAuthoritativeSnapshot(BattleWorldSnapshot snapshot)
+        {
+            _lastAppliedFrame = snapshot.FrameIndex;
+            ApplySnapshotToWorldState(snapshot);
+            _lastPredictedFrame = snapshot.FrameIndex;
+            RemoveConfirmedInputHistory(snapshot.FrameIndex);
+        }
+
         private void SendPingIfNeeded()
         {
             _pingCount++;
@@ -255,9 +312,113 @@ namespace GameLogic
             _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
-        private uint ToPredictedServerFrame(uint localFrame)
+        private void AdvancePredictionTo(uint targetFrame, float fixedDt)
         {
-            return unchecked(localFrame + _serverFrameOffset);
+            int frameCount = unchecked((int)(targetFrame - _lastPredictedFrame));
+            if (frameCount <= 0)
+            {
+                return;
+            }
+
+            if (!_worldState.TryGetPlayer(_selfPlayerId, out _))
+            {
+                return;
+            }
+
+            for (int i = 1; i <= frameCount; i++)
+            {
+                uint replayFrame = unchecked(_lastPredictedFrame + (uint)i);
+                BufferedInput input = _inputHistory.TryGetValue(replayFrame, out BufferedInput bufferedInput)
+                    ? bufferedInput
+                    : default;
+                ApplyLocalPrediction(replayFrame, input.Dx, input.Dy, fixedDt);
+            }
+
+            _lastPredictedFrame = targetFrame;
+        }
+
+        private void SaveInputHistory(uint frameIndex, float dx, float dy)
+        {
+            if (!_inputHistory.ContainsKey(frameIndex) && _inputHistory.Count >= InputHistoryCapacity)
+            {
+                uint oldest = uint.MaxValue;
+                foreach (uint key in _inputHistory.Keys)
+                {
+                    if (key < oldest)
+                    {
+                        oldest = key;
+                    }
+                }
+
+                if (oldest != uint.MaxValue)
+                {
+                    _inputHistory.Remove(oldest);
+                }
+            }
+
+            _inputHistory[frameIndex] = new BufferedInput(dx, dy);
+        }
+
+        private void RemoveConfirmedInputHistory(uint confirmedFrame)
+        {
+            if (_inputHistory.Count == 0)
+            {
+                return;
+            }
+
+            List<uint> framesToRemove = null;
+            foreach (uint frame in _inputHistory.Keys)
+            {
+                if (frame <= confirmedFrame)
+                {
+                    framesToRemove ??= new List<uint>();
+                    framesToRemove.Add(frame);
+                }
+            }
+
+            if (framesToRemove == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < framesToRemove.Count; i++)
+            {
+                _inputHistory.Remove(framesToRemove[i]);
+            }
+        }
+
+        private void ApplyLocalPrediction(uint frameIndex, float dx, float dy, float fixedDt)
+        {
+            if (!_worldState.TryGetPlayer(_selfPlayerId, out PlayerState selfPlayer))
+            {
+                return;
+            }
+
+            MoveSystem.Apply(selfPlayer, dx, dy, fixedDt);
+            SaveSelfPrediction(frameIndex, selfPlayer.X, selfPlayer.Y);
+        }
+
+        private void SaveSelfPrediction(uint frameIndex, float x, float y)
+        {
+            if (!_selfPredictions.ContainsKey(frameIndex) && _selfPredictions.Count >= PredictionBufferCapacity)
+            {
+                uint oldest = uint.MaxValue;
+                foreach (uint key in _selfPredictions.Keys)
+                {
+                    if (key < oldest)
+                    {
+                        oldest = key;
+                    }
+                }
+
+                if (oldest != uint.MaxValue)
+                {
+                    _selfPredictions.Remove(oldest);
+                    _skippedEvicted++;
+                }
+            }
+
+            _selfPredictions[frameIndex] = new SelfPrediction(x, y);
         }
 
         private void ClearWorldState()
@@ -288,108 +449,45 @@ namespace GameLogic
             dx *= inverseMagnitude;
             dy *= inverseMagnitude;
         }
+    }
 
-        private static bool PureLogicRoundTrip()
+    internal readonly struct SelfPrediction
+    {
+        public SelfPrediction(float x, float y)
         {
-            BattleWorldState worldState = new BattleWorldState();
-            BattleSimulation simulation = new BattleSimulation(
-                worldState,
-                static (_, _, _, _) => { },
-                static _ => { });
-
-            simulation.SetJoined(1, 30, 20, 1.0f, 2.0f);
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                31,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, 10.0f, 20.0f),
-                    new PlayerStateSnapshot(2, -3.5f, 4.5f)
-                }));
-
-            TickResult result = simulation.Tick(20, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
-            if (!result.SnapshotApplied || result.LastAppliedFrame != 31 || worldState.PlayerCount != 2)
-            {
-                return false;
-            }
-
-            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
-            {
-                return false;
-            }
-
-            if (!worldState.TryGetPlayer(2, out PlayerState otherPlayer))
-            {
-                return false;
-            }
-
-            return Math.Abs(selfPlayer.X - 10.0f) < 0.0001f &&
-                   Math.Abs(selfPlayer.Y - 20.0f) < 0.0001f &&
-                   Math.Abs(otherPlayer.X + 3.5f) < 0.0001f &&
-                   Math.Abs(otherPlayer.Y - 4.5f) < 0.0001f;
+            X = x;
+            Y = y;
         }
 
-        private static bool RttLeadFrameClamp()
-        {
-            BattleSimulation lowLatencySimulation = new BattleSimulation(
-                new BattleWorldState(),
-                static (_, _, _, _) => { },
-                static _ => { });
-            lowLatencySimulation.ProcessPong(1);
-            if (lowLatencySimulation.LeadFrames != 1)
-            {
-                return false;
-            }
+        public float X { get; }
+        public float Y { get; }
+    }
 
-            BattleSimulation highLatencySimulation = new BattleSimulation(
-                new BattleWorldState(),
-                static (_, _, _, _) => { },
-                static _ => { });
-            highLatencySimulation.ProcessPong(10000);
-            return highLatencySimulation.LeadFrames == MaxLeadFrames;
+    internal readonly struct BufferedInput
+    {
+        public BufferedInput(float dx, float dy)
+        {
+            Dx = dx;
+            Dy = dy;
         }
 
-        private static bool PredictedFrameOffset()
-        {
-            BattleSimulation simulation = new BattleSimulation(
-                new BattleWorldState(),
-                static (_, _, _, _) => { },
-                static _ => { });
-            simulation.SetJoined(7, 120, 100, 0.0f, 0.0f);
-            return simulation.ToPredictedServerFrame(105) == 125;
-        }
-
-        private static bool InputNormalization()
-        {
-            float capturedDx = 0.0f;
-            float capturedDy = 0.0f;
-            BattleSimulation simulation = new BattleSimulation(
-                new BattleWorldState(),
-                (_, _, dx, dy) =>
-                {
-                    capturedDx = dx;
-                    capturedDy = dy;
-                },
-                static _ => { });
-
-            simulation.SetJoined(9, 60, 50, 0.0f, 0.0f);
-            simulation.Tick(50, DeterminismRules.FixedDeltaTime, 1.0f, 1.0f);
-
-            float sqrMagnitude = (capturedDx * capturedDx) + (capturedDy * capturedDy);
-            return sqrMagnitude <= 1.0001f && sqrMagnitude >= 0.9990f;
-        }
+        public float Dx { get; }
+        public float Dy { get; }
     }
 
     public readonly struct TickResult
     {
-        public TickResult(bool snapshotApplied, uint lastAppliedFrame, int catchUpFrames)
+        public TickResult(bool snapshotApplied, uint lastAppliedFrame, int catchUpFrames, bool consistencyMismatch = false)
         {
             SnapshotApplied = snapshotApplied;
             LastAppliedFrame = lastAppliedFrame;
             CatchUpFrames = catchUpFrames;
+            ConsistencyMismatch = consistencyMismatch;
         }
 
         public bool SnapshotApplied { get; }
         public uint LastAppliedFrame { get; }
         public int CatchUpFrames { get; }
+        public bool ConsistencyMismatch { get; }
     }
 }
