@@ -13,6 +13,7 @@ public sealed class BattleLogic
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
     private readonly Dictionary<long, Dictionary<uint, PendingInput>> _pendingInputsByPlayerId = new();
     private readonly Dictionary<long, ConsumedInput> _lastConsumedInputByPlayerId = new();
+    private readonly Dictionary<long, SubmittedInput> _lastSubmittedInputByPlayerId = new();
     private readonly List<long> _playerIdBuffer = new();
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
@@ -42,6 +43,7 @@ public sealed class BattleLogic
     {
         _pendingInputsByPlayerId.Remove(playerId);
         _lastConsumedInputByPlayerId.Remove(playerId);
+        _lastSubmittedInputByPlayerId.Remove(playerId);
         return _statesByPlayerId.Remove(playerId);
     }
 
@@ -64,8 +66,15 @@ public sealed class BattleLogic
             return;
         }
 
+        bool isInputEdge = IsSubmittedInputEdge(playerId, dx, dy);
         if (frameIndex <= LastFrameIndex)
         {
+            if (isInputEdge)
+            {
+                _logWarning?.Invoke(
+                    $"[Battle][LateInputDrop] player={playerId} frame={frameIndex} current={LastFrameIndex} input=({dx:F3},{dy:F3}) seq={inputSeq}");
+            }
+
             return;
         }
 
@@ -75,6 +84,12 @@ public sealed class BattleLogic
             _logWarning?.Invoke(
                 $"[Battle][FutureInput] Reject player={playerId} frame={frameIndex} current={LastFrameIndex} maxFuture={maxAcceptedFrame}");
             return;
+        }
+
+        if (isInputEdge)
+        {
+            _logDebug?.Invoke(
+                $"[Battle][SubmitInputEdge] player={playerId} frame={frameIndex} current={LastFrameIndex} input=({dx:F3},{dy:F3}) seq={inputSeq}");
         }
 
         if (!_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs))
@@ -90,6 +105,7 @@ public sealed class BattleLogic
         }
 
         playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy);
+        _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, dx, dy);
     }
 
     public void Tick(uint frameIndex, float fixedDt)
@@ -110,11 +126,22 @@ public sealed class BattleLogic
             float dx = 0.0f;
             float dy = 0.0f;
             bool consumedCurrentFrameInput = false;
+            bool hadLastConsumedInput = _lastConsumedInputByPlayerId.TryGetValue(playerId, out ConsumedInput lastConsumedInput);
             if (_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) &&
                 playerInputs.TryGetValue(frameIndex, out PendingInput input))
             {
                 dx = input.Dx;
                 dy = input.Dy;
+
+                if (!hadLastConsumedInput || !AreInputsEqual(dx, dy, lastConsumedInput.Dx, lastConsumedInput.Dy))
+                {
+                    string previousInput = hadLastConsumedInput
+                        ? $"({lastConsumedInput.Dx:F3},{lastConsumedInput.Dy:F3})"
+                        : "(none)";
+                    _logDebug?.Invoke(
+                        $"[Battle][ConsumeInputEdge] frame={frameIndex} player={playerId} input={previousInput}->({dx:F3},{dy:F3})");
+                }
+
                 _lastConsumedInputByPlayerId[playerId] = new ConsumedInput(dx, dy);
                 consumedCurrentFrameInput = true;
                 playerInputs.Remove(frameIndex);
@@ -123,7 +150,7 @@ public sealed class BattleLogic
                     _pendingInputsByPlayerId.Remove(playerId);
                 }
             }
-            else if (_lastConsumedInputByPlayerId.TryGetValue(playerId, out ConsumedInput lastConsumedInput))
+            else if (hadLastConsumedInput)
             {
                 dx = lastConsumedInput.Dx;
                 dy = lastConsumedInput.Dy;
@@ -196,9 +223,40 @@ public sealed class BattleLogic
         return unchecked(inputFrameIndex - maxAcceptedFrame) < 0x80000000 && inputFrameIndex > maxAcceptedFrame;
     }
 
+    private bool IsSubmittedInputEdge(long playerId, float dx, float dy)
+    {
+        if (!_lastSubmittedInputByPlayerId.TryGetValue(playerId, out SubmittedInput lastSubmittedInput))
+        {
+            return true;
+        }
+
+        return !AreInputsEqual(dx, dy, lastSubmittedInput.Dx, lastSubmittedInput.Dy);
+    }
+
+    private static bool AreInputsEqual(float leftDx, float leftDy, float rightDx, float rightDy)
+    {
+        return leftDx == rightDx && leftDy == rightDy;
+    }
+
     private readonly struct PendingInput
     {
         public PendingInput(uint frameIndex, uint inputSeq, float dx, float dy)
+        {
+            FrameIndex = frameIndex;
+            InputSeq = inputSeq;
+            Dx = dx;
+            Dy = dy;
+        }
+
+        public uint FrameIndex { get; }
+        public uint InputSeq { get; }
+        public float Dx { get; }
+        public float Dy { get; }
+    }
+
+    private readonly struct SubmittedInput
+    {
+        public SubmittedInput(uint frameIndex, uint inputSeq, float dx, float dy)
         {
             FrameIndex = frameIndex;
             InputSeq = inputSeq;

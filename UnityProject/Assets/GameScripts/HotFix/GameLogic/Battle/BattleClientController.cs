@@ -16,7 +16,9 @@ namespace GameLogic
     {
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
-        private static bool s_archTestExecuted;
+#if BATTLE_PREDICTION_SELF_TEST
+        private static bool s_predictionSelfTestExecuted;
+#endif
 
         private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
@@ -147,22 +149,24 @@ namespace GameLogic
                 SendPingCommand,
                 _tickDriver.Logger);
 
-            if (s_archTestExecuted)
+#if BATTLE_PREDICTION_SELF_TEST
+            if (s_predictionSelfTestExecuted)
             {
                 return;
             }
 
-            s_archTestExecuted = true;
+            s_predictionSelfTestExecuted = true;
             string failedCase;
             bool passed = BattleSimulation.RunSelfTest(out failedCase);
             if (passed)
             {
-                Log.Info("[PredictTest] ALL PASS");
+                Log.Info("[PredictSelfTest] ALL PASS");
             }
             else
             {
-                Log.Warning($"[PredictTest] FAIL: {failedCase}");
+                Log.Warning($"[PredictSelfTest] FAIL: {failedCase}");
             }
+#endif
         }
 
         private async FTask JoinBattleAsync()

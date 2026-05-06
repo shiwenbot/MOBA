@@ -84,7 +84,8 @@ namespace GameLogic
         {
             BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out _, out _);
             simulation.SetJoined(7, 120, 0.0f, 0.0f);
-            return simulation.InitialAlignedFrame == 123 && simulation.LastAppliedFrame == 120;
+            return simulation.InitialAlignedFrame == simulation.LastAppliedFrame + simulation.LeadFrames &&
+                   simulation.LastAppliedFrame == 120;
         }
 
         private static bool FrameIndexIsGlobal()

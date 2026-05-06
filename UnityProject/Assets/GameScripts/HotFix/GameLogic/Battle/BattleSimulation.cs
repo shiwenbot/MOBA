@@ -18,6 +18,9 @@ namespace GameLogic
         private const int MaxLeadFrames = 8;
         // 多留 1 帧缓冲，吸收网络抖动和服务端帧边界调度误差。
         private const int JitterBufferFrames = 2;
+        // 客户端是在执行当前帧时才采样并发送该帧输入，额外补 1 帧发送安全边界，
+        // 避免消息正好在服务端进入同帧后到达而被当成 late input 丢弃。
+        private const int InputSendSafetyFrames = 1;
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
@@ -45,6 +48,9 @@ namespace GameLogic
         private int _misses;
         private int _skippedNoRecord;
         private int _skippedEvicted;
+        private bool _hasLastSentInput;
+        private float _lastSentDx;
+        private float _lastSentDy;
         private bool _hasPendingServerSnapshot;
         private BattleWorldSnapshot _pendingServerSnapshot;
 
@@ -112,8 +118,7 @@ namespace GameLogic
                 _rttEmaMs = (RttEmaAlpha * rttMs) + ((1.0f - RttEmaAlpha) * _rttEmaMs);
             }
 
-            int leadFrames = JitterBufferFrames + (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
-            _leadFrames = (uint)Math.Clamp(leadFrames, MinLeadFrames, MaxLeadFrames);
+            RefreshLeadFrames();
         }
 
         public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy)
@@ -133,6 +138,7 @@ namespace GameLogic
                 NormalizeInput(ref dx, ref dy);
 
                 SaveInputHistory(frameIndex, dx, dy);
+                LogInputEdgeIfNeeded(frameIndex, dx, dy);
                 SendPingIfNeeded();
                 _onSendInput(frameIndex, ++_inputSeq, dx, dy);
 
@@ -157,15 +163,18 @@ namespace GameLogic
             _lastPredictedFrame = serverFrame;
             _localFrame = serverFrame;
             _inputSeq = 0;
-            _leadFrames = MinLeadFrames;
             _rttEmaMs = InitialRttEmaMs;
             _hasRttSample = false;
+            RefreshLeadFrames();
             _pingCount = 0;
             _checked = 0;
             _hits = 0;
             _misses = 0;
             _skippedNoRecord = 0;
             _skippedEvicted = 0;
+            _hasLastSentInput = false;
+            _lastSentDx = 0.0f;
+            _lastSentDy = 0.0f;
             _selfPredictions.Clear();
             _inputHistory.Clear();
             _hasPendingServerSnapshot = false;
@@ -312,6 +321,29 @@ namespace GameLogic
             _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
+        private void LogInputEdgeIfNeeded(uint frameIndex, float dx, float dy)
+        {
+            if (_hasLastSentInput && AreInputsEqual(dx, dy, _lastSentDx, _lastSentDy))
+            {
+                return;
+            }
+
+            Log.Info(
+                $"[Battle][ClientInputEdge] frame={frameIndex} lastApplied={_lastAppliedFrame} lead={_leadFrames} local=({_lastSentDx:F3},{_lastSentDy:F3})->({dx:F3},{dy:F3})");
+
+            _hasLastSentInput = true;
+            _lastSentDx = dx;
+            _lastSentDy = dy;
+        }
+
+        private void RefreshLeadFrames()
+        {
+            int leadFrames = JitterBufferFrames +
+                             InputSendSafetyFrames +
+                             (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
+            _leadFrames = (uint)Math.Clamp(leadFrames, MinLeadFrames, MaxLeadFrames);
+        }
+
         private void AdvancePredictionTo(uint targetFrame, float fixedDt)
         {
             int frameCount = unchecked((int)(targetFrame - _lastPredictedFrame));
@@ -448,6 +480,11 @@ namespace GameLogic
             float inverseMagnitude = 1.0f / MathF.Sqrt(sqrMagnitude);
             dx *= inverseMagnitude;
             dy *= inverseMagnitude;
+        }
+
+        private static bool AreInputsEqual(float leftDx, float leftDy, float rightDx, float rightDy)
+        {
+            return leftDx == rightDx && leftDy == rightDy;
         }
     }
 
