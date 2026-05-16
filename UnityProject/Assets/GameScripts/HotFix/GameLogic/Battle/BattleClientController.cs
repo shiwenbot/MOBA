@@ -193,7 +193,11 @@ namespace GameLogic
             _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, response.X, response.Y);
             if (_tickDriver != null && _simulation != null)
             {
-                _tickDriver.AlignToFrame(_simulation.InitialAlignedFrame);
+                uint alignedFrame = _simulation.InitialAlignedFrame;
+                _simulation.AlignLocalFrame(alignedFrame);
+                _tickDriver.AlignToFrame(alignedFrame);
+                Log.Info(
+                    $"[Battle] Join aligned. player={response.PlayerId} serverFrame={response.ServerFrameIndex} localFrame={alignedFrame} lead={_simulation.LeadFrames}");
             }
 
             SyncRendering();

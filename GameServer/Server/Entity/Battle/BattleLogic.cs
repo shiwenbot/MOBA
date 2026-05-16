@@ -17,6 +17,7 @@ public sealed class BattleLogic
     private readonly List<long> _playerIdBuffer = new();
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
+    private bool _hasProcessedFrame;
 
     public BattleLogic(Action<string>? logDebug = null, Action<string>? logWarning = null)
     {
@@ -26,6 +27,11 @@ public sealed class BattleLogic
 
     public uint LastFrameIndex { get; private set; }
     public Action<TestSnapshot>? OnBroadcast { get; set; }
+    public int AcceptedInputCount { get; private set; }
+    public int LateInputDropCount { get; private set; }
+    public int FutureInputRejectCount { get; private set; }
+    public int ReusedInputCount { get; private set; }
+    public int ZeroInputFallbackCount { get; private set; }
 
     public PlayerState JoinPlayer(long playerId, float x, float y)
     {
@@ -67,8 +73,10 @@ public sealed class BattleLogic
         }
 
         bool isInputEdge = IsSubmittedInputEdge(playerId, dx, dy);
-        if (frameIndex <= LastFrameIndex)
+        // Allow frame 0 input before the first authoritative tick starts.
+        if (_hasProcessedFrame && frameIndex <= LastFrameIndex)
         {
+            LateInputDropCount++;
             if (isInputEdge)
             {
                 _logWarning?.Invoke(
@@ -81,6 +89,7 @@ public sealed class BattleLogic
         uint maxAcceptedFrame = unchecked(LastFrameIndex + MaxFutureInputFrames);
         if (IsFutureFrameRejected(frameIndex, maxAcceptedFrame))
         {
+            FutureInputRejectCount++;
             _logWarning?.Invoke(
                 $"[Battle][FutureInput] Reject player={playerId} frame={frameIndex} current={LastFrameIndex} maxFuture={maxAcceptedFrame}");
             return;
@@ -106,12 +115,14 @@ public sealed class BattleLogic
 
         playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy);
         _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, dx, dy);
+        AcceptedInputCount++;
     }
 
     public void Tick(uint frameIndex, float fixedDt)
     {
         DeterminismRules.AssertFixedDt(fixedDt);
         LastFrameIndex = frameIndex;
+        _hasProcessedFrame = true;
 
         BuildSortedPlayerBuffer();
 
@@ -154,6 +165,11 @@ public sealed class BattleLogic
             {
                 dx = lastConsumedInput.Dx;
                 dy = lastConsumedInput.Dy;
+                ReusedInputCount++;
+            }
+            else
+            {
+                ZeroInputFallbackCount++;
             }
 
             MoveSystem.Apply(state!, dx, dy, fixedDt);

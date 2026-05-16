@@ -9,5 +9,6 @@
 
   <ItemGroup>
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\FrameSync\**\*.cs" />
+    <Compile Include="..\..\Server\Entity\TestHarness\FrameSyncValidationRunner.cs" Link="FrameSyncValidationRunner.cs" />
   </ItemGroup>
 </Project>

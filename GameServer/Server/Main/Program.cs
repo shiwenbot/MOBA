@@ -14,10 +14,18 @@ using Fantasy;
 try
 {
     if (Array.Exists(args, static arg =>
+            arg.Equals("--validate", StringComparison.OrdinalIgnoreCase) ||
+            arg.Equals("--mode=validate", StringComparison.OrdinalIgnoreCase)))
+    {
+        Environment.Exit(FrameSyncValidationRunner.Run(args));
+        return;
+    }
+
+    if (Array.Exists(args, static arg =>
             arg.Equals("--test", StringComparison.OrdinalIgnoreCase) ||
             arg.Equals("--mode=test", StringComparison.OrdinalIgnoreCase)))
     {
-        Environment.Exit(TestRunner.RunAll());
+        Environment.Exit(TestRunner.Run(args));
         return;
     }
 

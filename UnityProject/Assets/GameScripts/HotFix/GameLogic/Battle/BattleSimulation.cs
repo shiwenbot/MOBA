@@ -26,8 +26,9 @@ namespace GameLogic
         private readonly BattleWorldState _worldState;
         private readonly Action<uint, uint, float, float> _onSendInput;
         private readonly Action<ulong> _onSendPing;
-        private readonly GameShared.FrameSync.Core.IFrameSyncLogger _logger;
+        private readonly GameShared.FrameSync.Core.IFrameSyncLogger? _logger;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
+        private readonly Queue<BattleWorldSnapshot> _pendingServerSnapshots = new Queue<BattleWorldSnapshot>(4);
         private readonly Dictionary<uint, SelfPrediction> _selfPredictions =
             new Dictionary<uint, SelfPrediction>(PredictionBufferCapacity);
         private readonly Dictionary<uint, BufferedInput> _inputHistory =
@@ -51,14 +52,14 @@ namespace GameLogic
         private bool _hasLastSentInput;
         private float _lastSentDx;
         private float _lastSentDy;
-        private bool _hasPendingServerSnapshot;
-        private BattleWorldSnapshot _pendingServerSnapshot;
+        private bool _hasQueuedServerSnapshot;
+        private uint _latestQueuedSnapshotFrame;
 
         public BattleSimulation(
             BattleWorldState worldState,
             Action<uint, uint, float, float> onSendInput,
             Action<ulong> onSendPing,
-            GameShared.FrameSync.Core.IFrameSyncLogger logger = null)
+            GameShared.FrameSync.Core.IFrameSyncLogger? logger = null)
         {
             _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
@@ -90,15 +91,15 @@ namespace GameLogic
                 return;
             }
 
-            if (_hasPendingServerSnapshot &&
-                _pendingServerSnapshot != null &&
-                snapshot.FrameIndex <= _pendingServerSnapshot.FrameIndex)
+            if (_hasQueuedServerSnapshot &&
+                snapshot.FrameIndex <= _latestQueuedSnapshotFrame)
             {
                 return;
             }
 
-            _pendingServerSnapshot = snapshot;
-            _hasPendingServerSnapshot = true;
+            _pendingServerSnapshots.Enqueue(snapshot);
+            _hasQueuedServerSnapshot = true;
+            _latestQueuedSnapshotFrame = snapshot.FrameIndex;
         }
 
         public void ProcessPong(long rttMs)
@@ -177,11 +178,22 @@ namespace GameLogic
             _lastSentDy = 0.0f;
             _selfPredictions.Clear();
             _inputHistory.Clear();
-            _hasPendingServerSnapshot = false;
-            _pendingServerSnapshot = null;
+            _pendingServerSnapshots.Clear();
+            _hasQueuedServerSnapshot = false;
+            _latestQueuedSnapshotFrame = serverFrame;
             _isJoined = true;
 
             _worldState.AddOrUpdatePlayer(playerId, x, y);
+        }
+
+        public void AlignLocalFrame(uint frameIndex)
+        {
+            if (!_isJoined)
+            {
+                throw new InvalidOperationException("Cannot align local frame before joining battle.");
+            }
+
+            _localFrame = frameIndex;
         }
 
         public void RollBack(uint targetFrame)
@@ -198,24 +210,34 @@ namespace GameLogic
         {
             catchUpFrames = 0;
             consistencyMismatch = false;
-            if (!_hasPendingServerSnapshot || _pendingServerSnapshot == null)
+            if (!_hasQueuedServerSnapshot || _pendingServerSnapshots.Count == 0)
             {
                 return false;
             }
 
-            BattleWorldSnapshot snapshot = _pendingServerSnapshot;
-            _hasPendingServerSnapshot = false;
-            _pendingServerSnapshot = null;
+            bool snapshotApplied = false;
+            while (_pendingServerSnapshots.Count > 0)
+            {
+                BattleWorldSnapshot snapshot = _pendingServerSnapshots.Dequeue();
+                if (snapshot.FrameIndex <= _lastAppliedFrame)
+                {
+                    continue;
+                }
 
-            if (snapshot.FrameIndex <= _lastAppliedFrame)
+                consistencyMismatch |= CheckConsistency(snapshot);
+                ApplyAuthoritativeSnapshot(snapshot);
+                snapshotApplied = true;
+            }
+
+            _hasQueuedServerSnapshot = false;
+            _latestQueuedSnapshotFrame = _lastAppliedFrame;
+
+            if (!snapshotApplied)
             {
                 return false;
             }
 
-            consistencyMismatch = CheckConsistency(snapshot);
-            ApplyAuthoritativeSnapshot(snapshot);
-
-            uint targetLocalFrame = unchecked(snapshot.FrameIndex + _leadFrames);
+            uint targetLocalFrame = unchecked(_lastAppliedFrame + _leadFrames);
             int frameDeltaToTarget = unchecked((int)(targetLocalFrame - _localFrame));
             catchUpFrames = frameDeltaToTarget > 0 ? frameDeltaToTarget : 0;
             return true;
@@ -398,17 +420,16 @@ namespace GameLogic
                 return;
             }
 
-            List<uint> framesToRemove = null;
+            List<uint> framesToRemove = new List<uint>();
             foreach (uint frame in _inputHistory.Keys)
             {
                 if (frame <= confirmedFrame)
                 {
-                    framesToRemove ??= new List<uint>();
                     framesToRemove.Add(frame);
                 }
             }
 
-            if (framesToRemove == null)
+            if (framesToRemove.Count == 0)
             {
                 return;
             }

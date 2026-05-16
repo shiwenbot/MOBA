@@ -6,78 +6,64 @@ namespace GameLogic
 {
     public static class BattlePredictionSelfTestSuite
     {
+        private static readonly string[] AllCaseNames =
+        {
+            "join-aligns-global-frame",
+            "frame-index-is-global",
+            "input-normalization",
+            "prediction-moves-self-player",
+            "catchup-target-is-auth-plus-lead",
+            "queued-snapshots-apply-in-order",
+            "consistency-hit",
+            "consistency-miss",
+            "prediction-buffer-uses-global-frame",
+            "skipped-no-record",
+            "eviction-does-not-crash"
+        };
+
         public static bool Run(out string failedCase)
+        {
+            for (int i = 0; i < AllCaseNames.Length; i++)
+            {
+                if (!RunCase(AllCaseNames[i], out failedCase))
+                {
+                    return false;
+                }
+            }
+
+            failedCase = string.Empty;
+            return true;
+        }
+
+        public static bool RunCase(string caseName, out string failedCase)
         {
             try
             {
-                if (!JoinAlignsGlobalFrame())
+                string normalizedCaseName = caseName?.Trim().ToLowerInvariant() ?? string.Empty;
+                bool passed = normalizedCaseName switch
                 {
-                    failedCase = "join-aligns-global-frame";
-                    return false;
-                }
+                    "join-aligns-global-frame" => JoinAlignsGlobalFrame(),
+                    "frame-index-is-global" => FrameIndexIsGlobal(),
+                    "input-normalization" => InputNormalization(),
+                    "prediction-moves-self-player" => PredictionMovesSelfPlayer(),
+                    "catchup-target-is-auth-plus-lead" => CatchUpTargetIsAuthPlusLead(),
+                    "queued-snapshots-apply-in-order" => QueuedSnapshotsApplyInOrder(),
+                    "consistency-hit" => ConsistencyHit(),
+                    "consistency-miss" => ConsistencyMiss(),
+                    "prediction-buffer-uses-global-frame" => PredictionBufferUsesGlobalFrame(),
+                    "skipped-no-record" => SkippedNoRecord(),
+                    "eviction-does-not-crash" => EvictionDoesNotCrash(),
+                    _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
+                };
 
-                if (!FrameIndexIsGlobal())
-                {
-                    failedCase = "frame-index-is-global";
-                    return false;
-                }
-
-                if (!InputNormalization())
-                {
-                    failedCase = "input-normalization";
-                    return false;
-                }
-
-                if (!PredictionMovesSelfPlayer())
-                {
-                    failedCase = "prediction-moves-self-player";
-                    return false;
-                }
-
-                if (!CatchUpTargetIsAuthPlusLead())
-                {
-                    failedCase = "catchup-target-is-auth-plus-lead";
-                    return false;
-                }
-
-                if (!ConsistencyHit())
-                {
-                    failedCase = "consistency-hit";
-                    return false;
-                }
-
-                if (!ConsistencyMiss())
-                {
-                    failedCase = "consistency-miss";
-                    return false;
-                }
-
-                if (!PredictionBufferUsesGlobalFrame())
-                {
-                    failedCase = "prediction-buffer-uses-global-frame";
-                    return false;
-                }
-
-                if (!SkippedNoRecord())
-                {
-                    failedCase = "skipped-no-record";
-                    return false;
-                }
-
-                if (!EvictionDoesNotCrash())
-                {
-                    failedCase = "eviction-does-not-crash";
-                    return false;
-                }
+                failedCase = passed ? string.Empty : normalizedCaseName;
+                return passed;
             }
             catch (Exception exception)
             {
                 failedCase = $"{exception.GetType().Name}:{exception.Message}";
                 return false;
             }
-
-            failedCase = string.Empty;
-            return true;
         }
 
         private static bool JoinAlignsGlobalFrame()
@@ -159,6 +145,49 @@ namespace GameLogic
                    simulation.ConsistencyChecked == 1 &&
                    simulation.ConsistencyHits == 1 &&
                    simulation.ConsistencyMisses == 0;
+        }
+
+        private static bool QueuedSnapshotsApplyInOrder()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame11))
+            {
+                return false;
+            }
+
+            float frame11X = afterFrame11.X;
+            float frame11Y = afterFrame11.Y;
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame12))
+            {
+                return false;
+            }
+
+            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
+                11,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, frame11X, frame11Y)
+                }));
+
+            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
+                12,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, afterFrame12.X, afterFrame12.Y)
+                }));
+
+            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            return result.SnapshotApplied &&
+                   !result.ConsistencyMismatch &&
+                   simulation.LastAppliedFrame == 12 &&
+                   simulation.ConsistencyChecked == 2 &&
+                   simulation.ConsistencyHits == 2;
         }
 
         private static bool ConsistencyMiss()
