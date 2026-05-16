@@ -97,6 +97,8 @@ public static class TestRunner
             case TestScenario.PredictionBufferUsesGlobalFrame:
             case TestScenario.SkippedNoRecord:
             case TestScenario.EvictionDoesNotCrash:
+            case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
+            case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
                 break;
 
@@ -434,8 +436,9 @@ public static class TestRunner
         BattleLogic battleLogic = new BattleLogic();
         PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
 
-        battleLogic.SubmitInput(1, 17, 1, 1.0f, 0.0f);
-        for (uint frame = 0; frame <= 17; frame++)
+        uint rejectedFrame = (uint)(InputBufferTuning.MaxFutureInputFrames + 1);
+        battleLogic.SubmitInput(1, rejectedFrame, 1, 1.0f, 0.0f);
+        for (uint frame = 0; frame <= rejectedFrame; frame++)
         {
             battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
         }
@@ -969,6 +972,8 @@ public static class TestRunner
                 "prediction-buffer-uses-global-frame" => TestScenario.PredictionBufferUsesGlobalFrame,
                 "skipped-no-record" => TestScenario.SkippedNoRecord,
                 "eviction-does-not-crash" => TestScenario.EvictionDoesNotCrash,
+                "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
+                "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
                 "determinism" => TestScenario.Determinism,
                 "consistency" => TestScenario.Consistency,
                 "convergence" => TestScenario.Convergence,
@@ -1008,6 +1013,8 @@ public static class TestRunner
         public const string PredictionBufferUsesGlobalFrame = "prediction-buffer-uses-global-frame";
         public const string SkippedNoRecord = "skipped-no-record";
         public const string EvictionDoesNotCrash = "eviction-does-not-crash";
+        public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
+        public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";
         public const string Determinism = "determinism";
         public const string Consistency = "consistency";
         public const string Convergence = "convergence";

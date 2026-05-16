@@ -18,7 +18,10 @@ namespace GameLogic
             "consistency-miss",
             "prediction-buffer-uses-global-frame",
             "skipped-no-record",
-            "eviction-does-not-crash"
+            "eviction-does-not-crash",
+            "accepted-input-feedback-raises-lead",
+            "rollback-replays-before-next-consistency-check",
+            "manual-rollback-replays-authoritative-history"
         };
 
         public static bool Run(out string failedCase)
@@ -53,6 +56,9 @@ namespace GameLogic
                     "prediction-buffer-uses-global-frame" => PredictionBufferUsesGlobalFrame(),
                     "skipped-no-record" => SkippedNoRecord(),
                     "eviction-does-not-crash" => EvictionDoesNotCrash(),
+                    "accepted-input-feedback-raises-lead" => AcceptedInputFeedbackRaisesLead(),
+                    "rollback-replays-before-next-consistency-check" => RollbackReplaysBeforeNextConsistencyCheck(),
+                    "manual-rollback-replays-authoritative-history" => ManualRollbackReplaysAuthoritativeHistory(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -109,16 +115,21 @@ namespace GameLogic
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
             simulation.ProcessPong(120);
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                20,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, 5.0f, 0.0f)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    20,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 5.0f, 0.0f)
+                    }),
+                20);
 
             TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             int expectedCatchUpFrames = (int)(20 + simulation.LeadFrames - 11);
-            return result.SnapshotApplied && result.CatchUpFrames == expectedCatchUpFrames;
+            uint expectedTargetFrameExclusive = unchecked(20 + simulation.LeadFrames + 1u);
+            return result.SnapshotApplied &&
+                   result.CatchUpFrames == expectedCatchUpFrames &&
+                   result.TargetFrameExclusive == expectedTargetFrameExclusive;
         }
 
         private static bool ConsistencyHit()
@@ -133,12 +144,14 @@ namespace GameLogic
                 return false;
             }
 
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                11,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
+                    }),
+                11);
 
             TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             return !result.ConsistencyMismatch &&
@@ -168,19 +181,23 @@ namespace GameLogic
                 return false;
             }
 
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                11,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, frame11X, frame11Y)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, frame11X, frame11Y)
+                    }),
+                11);
 
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                12,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, afterFrame12.X, afterFrame12.Y)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    12,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, afterFrame12.X, afterFrame12.Y)
+                    }),
+                12);
 
             TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             return result.SnapshotApplied &&
@@ -202,12 +219,14 @@ namespace GameLogic
                 return false;
             }
 
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                11,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, selfPlayer.X + 1.0f, selfPlayer.Y)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X + 1.0f, selfPlayer.Y)
+                    }),
+                11);
 
             TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             return result.ConsistencyMismatch &&
@@ -228,12 +247,14 @@ namespace GameLogic
                 return false;
             }
 
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                11,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
+                    }),
+                11);
 
             TickResult result = simulation.Tick(99, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             return !result.ConsistencyMismatch && simulation.ConsistencyHits == 1;
@@ -244,12 +265,14 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.EnqueueServerSnapshot(new BattleWorldSnapshot(
-                11,
-                new[]
-                {
-                    new PlayerStateSnapshot(1, 5.0f, 0.0f)
-                }));
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 5.0f, 0.0f)
+                    }),
+                11);
 
             simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
             return simulation.ConsistencySkippedNoRecord == 1 && simulation.ConsistencyChecked == 0;
@@ -266,6 +289,116 @@ namespace GameLogic
             }
 
             return simulation.ConsistencySkippedEvicted >= 1;
+        }
+
+        private static bool AcceptedInputFeedbackRaisesLead()
+        {
+            BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out _, out _);
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+
+            uint leadBefore = simulation.LeadFrames;
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    20,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                    }),
+                20);
+
+            TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            return result.SnapshotApplied &&
+                   simulation.LastServerBufferedInputFrames == 0 &&
+                   simulation.LeadFrames > leadBefore;
+        }
+
+        private static bool RollbackReplaysBeforeNextConsistencyCheck()
+        {
+            float step = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, step * 2.0f, 0.0f)
+                    }),
+                11);
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    12,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, step * 3.0f, 0.0f)
+                    }),
+                12);
+
+            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            return result.SnapshotApplied &&
+                   result.ConsistencyMismatch &&
+                   simulation.ConsistencyChecked == 2 &&
+                   simulation.ConsistencyHits == 1 &&
+                   simulation.ConsistencyMisses == 1 &&
+                   simulation.RollbackCount == 1 &&
+                   simulation.LastRollbackReplayFrames == 1 &&
+                   Math.Abs(selfPlayer.X - (step * 3.0f)) < 0.0001f;
+        }
+
+        private static bool ManualRollbackReplaysAuthoritativeHistory()
+        {
+            float step = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, step * 2.0f, 0.0f)
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            if (!result.ConsistencyMismatch)
+            {
+                return false;
+            }
+
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            selfPlayer.X = 99.0f;
+            selfPlayer.Y = 99.0f;
+
+            simulation.RollBack(11);
+
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            return simulation.RollbackCount == 2 &&
+                   simulation.LastRollbackReplayFrames == 1 &&
+                   Math.Abs(restoredPlayer.X - (step * 3.0f)) < 0.0001f &&
+                   Math.Abs(restoredPlayer.Y) < 0.0001f;
         }
 
         private static BattleSimulation CreateSimulation(

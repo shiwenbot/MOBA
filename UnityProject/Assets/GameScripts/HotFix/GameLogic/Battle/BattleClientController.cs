@@ -108,9 +108,9 @@ namespace GameLogic
             TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, _cachedDx, _cachedDy);
             SyncRendering();
 
-            if (tickResult.CatchUpFrames > 0 && _tickDriver != null)
+            if (tickResult.TargetFrameExclusive > 0 && _tickDriver != null)
             {
-                _tickDriver.SetTargetFrame(unchecked(frameIndex + (uint)tickResult.CatchUpFrames));
+                _tickDriver.SetTargetFrame(tickResult.TargetFrameExclusive);
             }
         }
 
@@ -225,7 +225,8 @@ namespace GameLogic
                 return;
             }
 
-            _simulation?.EnqueueServerSnapshot(ConvertSnapshot(snapshot));
+            BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(snapshot, out uint selfLatestAcceptedInputFrame);
+            _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
         }
 
         private void OnPongMessage(IMessage message)
@@ -277,13 +278,18 @@ namespace GameLogic
             }
         }
 
-        private static BattleWorldSnapshot ConvertSnapshot(S2C_FrameSnapshot snapshot)
+        private BattleWorldSnapshot ConvertSnapshot(S2C_FrameSnapshot snapshot, out uint selfLatestAcceptedInputFrame)
         {
+            selfLatestAcceptedInputFrame = 0;
             PlayerStateSnapshot[] players = new PlayerStateSnapshot[snapshot.Players.Count];
             for (int i = 0; i < snapshot.Players.Count; i++)
             {
                 PlayerSnapshot player = snapshot.Players[i];
                 players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y);
+                if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
+                {
+                    selfLatestAcceptedInputFrame = player.LatestAcceptedInputFrame;
+                }
             }
 
             Array.Sort(players, PlayerSnapshotComparer.Instance);

@@ -71,6 +71,7 @@ message PlayerSnapshot
 	int64 PlayerId = 1;
 	float X = 2;
 	float Y = 3;
+	uint32 LatestAcceptedInputFrame = 4;
 }
 
 // 服务端每帧广播快照

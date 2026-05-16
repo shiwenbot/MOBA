@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Snapshot;
 using Log = TEngine.Log;
 
 namespace GameLogic
@@ -11,16 +13,10 @@ namespace GameLogic
         private const int PingIntervalFrames = 30;
         private const int PredictionBufferCapacity = 32;
         private const int InputHistoryCapacity = 128;
+        private const int AuthoritativeSnapshotHistoryCapacity = 32;
         private const int ConsistencyLogInterval = 300;
         private const float InitialRttEmaMs = 100f;
         private const float RttEmaAlpha = 0.2f;
-        private const int MinLeadFrames = 3;
-        private const int MaxLeadFrames = 8;
-        // 多留 1 帧缓冲，吸收网络抖动和服务端帧边界调度误差。
-        private const int JitterBufferFrames = 2;
-        // 客户端是在执行当前帧时才采样并发送该帧输入，额外补 1 帧发送安全边界，
-        // 避免消息正好在服务端进入同帧后到达而被当成 late input 丢弃。
-        private const int InputSendSafetyFrames = 1;
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
@@ -28,11 +24,14 @@ namespace GameLogic
         private readonly Action<ulong> _onSendPing;
         private readonly GameShared.FrameSync.Core.IFrameSyncLogger? _logger;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
-        private readonly Queue<BattleWorldSnapshot> _pendingServerSnapshots = new Queue<BattleWorldSnapshot>(4);
+        private readonly Queue<PendingAuthoritativeSnapshot> _pendingServerSnapshots =
+            new Queue<PendingAuthoritativeSnapshot>(4);
         private readonly Dictionary<uint, SelfPrediction> _selfPredictions =
             new Dictionary<uint, SelfPrediction>(PredictionBufferCapacity);
         private readonly Dictionary<uint, BufferedInput> _inputHistory =
             new Dictionary<uint, BufferedInput>(InputHistoryCapacity);
+        private readonly SnapshotBuffer<BattleWorldSnapshot> _authoritativeSnapshots =
+            new SnapshotBuffer<BattleWorldSnapshot>(AuthoritativeSnapshotHistoryCapacity);
 
         private bool _isJoined;
         private bool _hasRttSample;
@@ -41,7 +40,8 @@ namespace GameLogic
         private uint _lastAppliedFrame;
         private uint _lastPredictedFrame;
         private uint _localFrame;
-        private uint _leadFrames = MinLeadFrames;
+        private uint _leadFrames = InputBufferTuning.MinLeadFrames;
+        private uint _baselineLeadFrames = InputBufferTuning.MinLeadFrames;
         private float _rttEmaMs = InitialRttEmaMs;
         private int _pingCount;
         private int _checked;
@@ -49,11 +49,16 @@ namespace GameLogic
         private int _misses;
         private int _skippedNoRecord;
         private int _skippedEvicted;
+        private int _leadDecreaseCooldownSnapshots;
+        private int _lastServerBufferedInputFrames;
         private bool _hasLastSentInput;
         private float _lastSentDx;
         private float _lastSentDy;
         private bool _hasQueuedServerSnapshot;
         private uint _latestQueuedSnapshotFrame;
+        private int _rollbackCount;
+        private int _lastRollbackReplayFrames;
+        private double _lastRollbackElapsedMs;
 
         public BattleSimulation(
             BattleWorldState worldState,
@@ -78,8 +83,12 @@ namespace GameLogic
         public int ConsistencyMisses => _misses;
         public int ConsistencySkippedNoRecord => _skippedNoRecord;
         public int ConsistencySkippedEvicted => _skippedEvicted;
+        public int LastServerBufferedInputFrames => _lastServerBufferedInputFrames;
+        public int RollbackCount => _rollbackCount;
+        public int LastRollbackReplayFrames => _lastRollbackReplayFrames;
+        public double LastRollbackElapsedMs => _lastRollbackElapsedMs;
 
-        public void EnqueueServerSnapshot(BattleWorldSnapshot snapshot)
+        public void EnqueueServerSnapshot(BattleWorldSnapshot snapshot, uint selfLatestAcceptedInputFrame)
         {
             if (snapshot == null)
             {
@@ -91,13 +100,12 @@ namespace GameLogic
                 return;
             }
 
-            if (_hasQueuedServerSnapshot &&
-                snapshot.FrameIndex <= _latestQueuedSnapshotFrame)
+            if (_hasQueuedServerSnapshot && snapshot.FrameIndex <= _latestQueuedSnapshotFrame)
             {
                 return;
             }
 
-            _pendingServerSnapshots.Enqueue(snapshot);
+            _pendingServerSnapshots.Enqueue(new PendingAuthoritativeSnapshot(snapshot, selfLatestAcceptedInputFrame));
             _hasQueuedServerSnapshot = true;
             _latestQueuedSnapshotFrame = snapshot.FrameIndex;
         }
@@ -119,7 +127,7 @@ namespace GameLogic
                 _rttEmaMs = (RttEmaAlpha * rttMs) + ((1.0f - RttEmaAlpha) * _rttEmaMs);
             }
 
-            RefreshLeadFrames();
+            RefreshBaselineLeadFrames();
         }
 
         public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy)
@@ -143,10 +151,20 @@ namespace GameLogic
                 SendPingIfNeeded();
                 _onSendInput(frameIndex, ++_inputSeq, dx, dy);
 
-                bool snapshotApplied = ApplyPendingServerSnapshot(out int catchUpFrames, out bool consistencyMismatch);
+                bool snapshotApplied = ApplyPendingServerSnapshot(
+                    frameIndex,
+                    fixedDt,
+                    out int catchUpFrames,
+                    out uint targetFrameExclusive,
+                    out bool consistencyMismatch);
                 AdvancePredictionTo(frameIndex, fixedDt);
 
-                return new TickResult(snapshotApplied, _lastAppliedFrame, catchUpFrames, consistencyMismatch);
+                return new TickResult(
+                    snapshotApplied,
+                    _lastAppliedFrame,
+                    catchUpFrames,
+                    targetFrameExclusive,
+                    consistencyMismatch);
             }
             catch (Exception exception)
             {
@@ -164,23 +182,31 @@ namespace GameLogic
             _lastPredictedFrame = serverFrame;
             _localFrame = serverFrame;
             _inputSeq = 0;
+            _leadFrames = InputBufferTuning.MinLeadFrames;
+            _baselineLeadFrames = InputBufferTuning.MinLeadFrames;
             _rttEmaMs = InitialRttEmaMs;
             _hasRttSample = false;
-            RefreshLeadFrames();
+            RefreshBaselineLeadFrames();
             _pingCount = 0;
             _checked = 0;
             _hits = 0;
             _misses = 0;
             _skippedNoRecord = 0;
             _skippedEvicted = 0;
+            _leadDecreaseCooldownSnapshots = 0;
+            _lastServerBufferedInputFrames = 0;
             _hasLastSentInput = false;
             _lastSentDx = 0.0f;
             _lastSentDy = 0.0f;
             _selfPredictions.Clear();
             _inputHistory.Clear();
             _pendingServerSnapshots.Clear();
+            _authoritativeSnapshots.Clear();
             _hasQueuedServerSnapshot = false;
             _latestQueuedSnapshotFrame = serverFrame;
+            _rollbackCount = 0;
+            _lastRollbackReplayFrames = 0;
+            _lastRollbackElapsedMs = 0.0d;
             _isJoined = true;
 
             _worldState.AddOrUpdatePlayer(playerId, x, y);
@@ -198,7 +224,18 @@ namespace GameLogic
 
         public void RollBack(uint targetFrame)
         {
-            // TODO v0.3c: restore simulation metadata together with SnapshotManager.RollBack.
+            if (!_isJoined)
+            {
+                return;
+            }
+
+            if (!_authoritativeSnapshots.TryGet(targetFrame, out BattleWorldSnapshot snapshot))
+            {
+                Log.Warning($"[Rollback] Missing authoritative snapshot for frame={targetFrame}.");
+                return;
+            }
+
+            ReconcileAuthoritativeSnapshot(snapshot, _localFrame, DeterminismRules.FixedDeltaTime, true, "manual");
         }
 
         public static bool RunSelfTest(out string failedCase)
@@ -206,9 +243,15 @@ namespace GameLogic
             return BattlePredictionSelfTestSuite.Run(out failedCase);
         }
 
-        private bool ApplyPendingServerSnapshot(out int catchUpFrames, out bool consistencyMismatch)
+        private bool ApplyPendingServerSnapshot(
+            uint currentFrame,
+            float fixedDt,
+            out int catchUpFrames,
+            out uint targetFrameExclusive,
+            out bool consistencyMismatch)
         {
             catchUpFrames = 0;
+            targetFrameExclusive = 0;
             consistencyMismatch = false;
             if (!_hasQueuedServerSnapshot || _pendingServerSnapshots.Count == 0)
             {
@@ -218,14 +261,33 @@ namespace GameLogic
             bool snapshotApplied = false;
             while (_pendingServerSnapshots.Count > 0)
             {
-                BattleWorldSnapshot snapshot = _pendingServerSnapshots.Dequeue();
+                PendingAuthoritativeSnapshot pendingSnapshot = _pendingServerSnapshots.Dequeue();
+                BattleWorldSnapshot snapshot = pendingSnapshot.Snapshot;
                 if (snapshot.FrameIndex <= _lastAppliedFrame)
                 {
                     continue;
                 }
 
-                consistencyMismatch |= CheckConsistency(snapshot);
-                ApplyAuthoritativeSnapshot(snapshot);
+                UpdateLeadFramesFromAcceptedInput(snapshot.FrameIndex, pendingSnapshot.SelfLatestAcceptedInputFrame);
+                bool mismatch = CheckConsistency(snapshot);
+                consistencyMismatch |= mismatch;
+
+                uint replayTargetFrame = currentFrame;
+                if (_pendingServerSnapshots.Count > 0)
+                {
+                    uint nextSnapshotFrame = _pendingServerSnapshots.Peek().Snapshot.FrameIndex;
+                    if (nextSnapshotFrame < replayTargetFrame)
+                    {
+                        replayTargetFrame = nextSnapshotFrame;
+                    }
+                }
+
+                ReconcileAuthoritativeSnapshot(
+                    snapshot,
+                    replayTargetFrame,
+                    fixedDt,
+                    mismatch,
+                    mismatch ? "consistency-miss" : string.Empty);
                 snapshotApplied = true;
             }
 
@@ -238,8 +300,11 @@ namespace GameLogic
             }
 
             uint targetLocalFrame = unchecked(_lastAppliedFrame + _leadFrames);
-            int frameDeltaToTarget = unchecked((int)(targetLocalFrame - _localFrame));
+            int frameDeltaToTarget = unchecked((int)(targetLocalFrame - currentFrame));
             catchUpFrames = frameDeltaToTarget > 0 ? frameDeltaToTarget : 0;
+            targetFrameExclusive = catchUpFrames > 0
+                ? unchecked(targetLocalFrame + 1u)
+                : 0u;
             return true;
         }
 
@@ -331,6 +396,44 @@ namespace GameLogic
             RemoveConfirmedInputHistory(snapshot.FrameIndex);
         }
 
+        private void ReconcileAuthoritativeSnapshot(
+            BattleWorldSnapshot snapshot,
+            uint replayTargetFrame,
+            float fixedDt,
+            bool logRollback,
+            string rollbackReason)
+        {
+            _authoritativeSnapshots.Save(snapshot.FrameIndex, snapshot);
+            ApplyAuthoritativeSnapshot(snapshot);
+            DiscardPredictionsAtOrAfter(snapshot.FrameIndex);
+
+            int replayFrames = 0;
+            Stopwatch? rollbackTimer = null;
+            if (logRollback)
+            {
+                rollbackTimer = Stopwatch.StartNew();
+            }
+
+            if (replayTargetFrame > snapshot.FrameIndex)
+            {
+                replayFrames = unchecked((int)(replayTargetFrame - snapshot.FrameIndex));
+                AdvancePredictionTo(replayTargetFrame, fixedDt);
+            }
+
+            if (!logRollback)
+            {
+                return;
+            }
+
+            rollbackTimer?.Stop();
+            _rollbackCount++;
+            _lastRollbackReplayFrames = replayFrames;
+            _lastRollbackElapsedMs = rollbackTimer?.Elapsed.TotalMilliseconds ?? 0.0d;
+
+            Log.Info(
+                $"[Rollback] reason={rollbackReason} frame={snapshot.FrameIndex} replayTo={replayTargetFrame} replayFrames={replayFrames} elapsedMs={_lastRollbackElapsedMs:F3}");
+        }
+
         private void SendPingIfNeeded()
         {
             _pingCount++;
@@ -358,12 +461,73 @@ namespace GameLogic
             _lastSentDy = dy;
         }
 
-        private void RefreshLeadFrames()
+        private void RefreshBaselineLeadFrames()
         {
-            int leadFrames = JitterBufferFrames +
-                             InputSendSafetyFrames +
+            int leadFrames = InputBufferTuning.JitterBufferFrames +
+                             InputBufferTuning.InputSendSafetyFrames +
                              (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
-            _leadFrames = (uint)Math.Clamp(leadFrames, MinLeadFrames, MaxLeadFrames);
+            _baselineLeadFrames = (uint)Math.Clamp(
+                leadFrames,
+                InputBufferTuning.MinLeadFrames,
+                InputBufferTuning.MaxLeadFrames);
+
+            if (_leadFrames < _baselineLeadFrames)
+            {
+                _leadFrames = _baselineLeadFrames;
+            }
+        }
+
+        // Closed-loop lead control: keep the server-side accepted-input queue in a healthy range.
+        private void UpdateLeadFramesFromAcceptedInput(uint snapshotFrame, uint latestAcceptedInputFrame)
+        {
+            int previousLead = (int)_leadFrames;
+            int serverBufferedFrames = latestAcceptedInputFrame > snapshotFrame
+                ? unchecked((int)(latestAcceptedInputFrame - snapshotFrame))
+                : 0;
+            _lastServerBufferedInputFrames = serverBufferedFrames;
+
+            if (serverBufferedFrames < InputBufferTuning.MinAcceptedInputBufferFrames)
+            {
+                int deficit = InputBufferTuning.MinAcceptedInputBufferFrames - serverBufferedFrames;
+                int raisedLead = Math.Max((int)_baselineLeadFrames, (int)_leadFrames + deficit);
+                _leadFrames = (uint)Math.Clamp(
+                    raisedLead,
+                    InputBufferTuning.MinLeadFrames,
+                    InputBufferTuning.MaxLeadFrames);
+                _leadDecreaseCooldownSnapshots = InputBufferTuning.LeadDecreaseCooldownSnapshots;
+            }
+            else if (serverBufferedFrames > InputBufferTuning.MaxAcceptedInputBufferFrames)
+            {
+                if (_leadDecreaseCooldownSnapshots > 0)
+                {
+                    _leadDecreaseCooldownSnapshots--;
+                }
+                else if (_leadFrames > _baselineLeadFrames)
+                {
+                    _leadFrames--;
+                    _leadDecreaseCooldownSnapshots = InputBufferTuning.LeadDecreaseCooldownSnapshots;
+                }
+            }
+            else
+            {
+                if (_leadDecreaseCooldownSnapshots > 0)
+                {
+                    _leadDecreaseCooldownSnapshots--;
+                }
+
+                if (_leadFrames < _baselineLeadFrames)
+                {
+                    _leadFrames = _baselineLeadFrames;
+                }
+            }
+
+            if (previousLead == _leadFrames)
+            {
+                return;
+            }
+
+            Log.Info(
+                $"[LeadControl] snapshot={snapshotFrame} accepted={latestAcceptedInputFrame} buffered={serverBufferedFrames} baseline={_baselineLeadFrames} lead={previousLead}->{_leadFrames}");
         }
 
         private void AdvancePredictionTo(uint targetFrame, float fixedDt)
@@ -437,6 +601,28 @@ namespace GameLogic
             for (int i = 0; i < framesToRemove.Count; i++)
             {
                 _inputHistory.Remove(framesToRemove[i]);
+            }
+        }
+
+        private void DiscardPredictionsAtOrAfter(uint frameIndex)
+        {
+            if (_selfPredictions.Count == 0)
+            {
+                return;
+            }
+
+            List<uint> framesToRemove = new List<uint>();
+            foreach (uint predictedFrame in _selfPredictions.Keys)
+            {
+                if (predictedFrame >= frameIndex)
+                {
+                    framesToRemove.Add(predictedFrame);
+                }
+            }
+
+            for (int i = 0; i < framesToRemove.Count; i++)
+            {
+                _selfPredictions.Remove(framesToRemove[i]);
             }
         }
 
@@ -533,19 +719,38 @@ namespace GameLogic
         public float Dy { get; }
     }
 
+    internal readonly struct PendingAuthoritativeSnapshot
+    {
+        public PendingAuthoritativeSnapshot(BattleWorldSnapshot snapshot, uint selfLatestAcceptedInputFrame)
+        {
+            Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
+            SelfLatestAcceptedInputFrame = selfLatestAcceptedInputFrame;
+        }
+
+        public BattleWorldSnapshot Snapshot { get; }
+        public uint SelfLatestAcceptedInputFrame { get; }
+    }
+
     public readonly struct TickResult
     {
-        public TickResult(bool snapshotApplied, uint lastAppliedFrame, int catchUpFrames, bool consistencyMismatch = false)
+        public TickResult(
+            bool snapshotApplied,
+            uint lastAppliedFrame,
+            int catchUpFrames,
+            uint targetFrameExclusive = 0,
+            bool consistencyMismatch = false)
         {
             SnapshotApplied = snapshotApplied;
             LastAppliedFrame = lastAppliedFrame;
             CatchUpFrames = catchUpFrames;
+            TargetFrameExclusive = targetFrameExclusive;
             ConsistencyMismatch = consistencyMismatch;
         }
 
         public bool SnapshotApplied { get; }
         public uint LastAppliedFrame { get; }
         public int CatchUpFrames { get; }
+        public uint TargetFrameExclusive { get; }
         public bool ConsistencyMismatch { get; }
     }
 }

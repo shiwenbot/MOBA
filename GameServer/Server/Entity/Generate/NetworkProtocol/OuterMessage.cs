@@ -424,6 +424,7 @@ namespace Fantasy
             PlayerId = default;
             X = default;
             Y = default;
+            LatestAcceptedInputFrame = default;
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -432,6 +433,8 @@ namespace Fantasy
         public float X { get; set; }
         [ProtoMember(3)]
         public float Y { get; set; }
+        [ProtoMember(4)]
+        public uint LatestAcceptedInputFrame { get; set; }
     }
     [Serializable]
     [ProtoContract]

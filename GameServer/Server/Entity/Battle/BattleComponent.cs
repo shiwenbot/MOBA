@@ -124,7 +124,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             {
                 PlayerId = player.PlayerId,
                 X = player.X,
-                Y = player.Y
+                Y = player.Y,
+                LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId)
             });
         }
 

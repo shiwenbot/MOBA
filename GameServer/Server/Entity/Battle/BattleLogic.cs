@@ -8,12 +8,11 @@ namespace Fantasy;
 
 public sealed class BattleLogic
 {
-    private const uint MaxFutureInputFrames = 16;
-
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
     private readonly Dictionary<long, Dictionary<uint, PendingInput>> _pendingInputsByPlayerId = new();
     private readonly Dictionary<long, ConsumedInput> _lastConsumedInputByPlayerId = new();
     private readonly Dictionary<long, SubmittedInput> _lastSubmittedInputByPlayerId = new();
+    private readonly Dictionary<long, uint> _latestAcceptedInputFrameByPlayerId = new();
     private readonly List<long> _playerIdBuffer = new();
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
@@ -50,6 +49,7 @@ public sealed class BattleLogic
         _pendingInputsByPlayerId.Remove(playerId);
         _lastConsumedInputByPlayerId.Remove(playerId);
         _lastSubmittedInputByPlayerId.Remove(playerId);
+        _latestAcceptedInputFrameByPlayerId.Remove(playerId);
         return _statesByPlayerId.Remove(playerId);
     }
 
@@ -63,6 +63,13 @@ public sealed class BattleLogic
         bool found = _statesByPlayerId.TryGetValue(playerId, out PlayerState? resolvedState);
         state = resolvedState!;
         return found;
+    }
+
+    public uint GetLatestAcceptedInputFrame(long playerId)
+    {
+        return _latestAcceptedInputFrameByPlayerId.TryGetValue(playerId, out uint frameIndex)
+            ? frameIndex
+            : 0u;
     }
 
     public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, float dx, float dy)
@@ -86,7 +93,7 @@ public sealed class BattleLogic
             return;
         }
 
-        uint maxAcceptedFrame = unchecked(LastFrameIndex + MaxFutureInputFrames);
+        uint maxAcceptedFrame = unchecked(LastFrameIndex + (uint)InputBufferTuning.MaxFutureInputFrames);
         if (IsFutureFrameRejected(frameIndex, maxAcceptedFrame))
         {
             FutureInputRejectCount++;
@@ -115,6 +122,11 @@ public sealed class BattleLogic
 
         playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy);
         _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, dx, dy);
+        if (!_latestAcceptedInputFrameByPlayerId.TryGetValue(playerId, out uint latestAcceptedFrame) ||
+            frameIndex >= latestAcceptedFrame)
+        {
+            _latestAcceptedInputFrameByPlayerId[playerId] = frameIndex;
+        }
         AcceptedInputCount++;
     }
 
