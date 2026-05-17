@@ -425,6 +425,12 @@ namespace Fantasy
             X = default;
             Y = default;
             LatestAcceptedInputFrame = default;
+            Angle = default;
+            LinearVelocityX = default;
+            LinearVelocityY = default;
+            AngularVelocity = default;
+            IsAwake = default;
+            IsEnabled = default;
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -435,6 +441,64 @@ namespace Fantasy
         public float Y { get; set; }
         [ProtoMember(4)]
         public uint LatestAcceptedInputFrame { get; set; }
+        [ProtoMember(5)]
+        public float Angle { get; set; }
+        [ProtoMember(6)]
+        public float LinearVelocityX { get; set; }
+        [ProtoMember(7)]
+        public float LinearVelocityY { get; set; }
+        [ProtoMember(8)]
+        public float AngularVelocity { get; set; }
+        [ProtoMember(9)]
+        public bool IsAwake { get; set; }
+        [ProtoMember(10)]
+        public bool IsEnabled { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class FrameContactSnapshot : AMessage, IDisposable
+    {
+        public static FrameContactSnapshot Create(bool autoReturn = true)
+        {
+            var frameContactSnapshot = MessageObjectPool<FrameContactSnapshot>.Rent();
+            frameContactSnapshot.AutoReturn = autoReturn;
+
+            if (!autoReturn)
+            {
+                frameContactSnapshot.SetIsPool(false);
+            }
+
+            return frameContactSnapshot;
+        }
+
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return;
+            BodyAId = default;
+            BodyBId = default;
+            IsTouching = default;
+            MessageObjectPool<FrameContactSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public int BodyAId { get; set; }
+        [ProtoMember(2)]
+        public int BodyBId { get; set; }
+        [ProtoMember(3)]
+        public bool IsTouching { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -472,6 +536,7 @@ namespace Fantasy
             if (!IsPool()) return; 
             FrameIndex = default;
             Players.Clear();
+            Contacts.Clear();
             MessageObjectPool<S2C_FrameSnapshot>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.S2C_FrameSnapshot; } 
@@ -479,6 +544,8 @@ namespace Fantasy
         public uint FrameIndex { get; set; }
         [ProtoMember(2)]
         public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
+        [ProtoMember(3)]
+        public List<FrameContactSnapshot> Contacts { get; set; } = new List<FrameContactSnapshot>();
     }
     [Serializable]
     [ProtoContract]

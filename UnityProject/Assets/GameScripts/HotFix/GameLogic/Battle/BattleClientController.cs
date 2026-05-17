@@ -282,10 +282,21 @@ namespace GameLogic
         {
             selfLatestAcceptedInputFrame = 0;
             PlayerStateSnapshot[] players = new PlayerStateSnapshot[snapshot.Players.Count];
+            PhysicsBodySnapshot[] bodies = new PhysicsBodySnapshot[snapshot.Players.Count];
             for (int i = 0; i < snapshot.Players.Count; i++)
             {
                 PlayerSnapshot player = snapshot.Players[i];
                 players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y);
+                bodies[i] = new PhysicsBodySnapshot(
+                    checked((int)player.PlayerId),
+                    player.X,
+                    player.Y,
+                    player.Angle,
+                    player.LinearVelocityX,
+                    player.LinearVelocityY,
+                    player.AngularVelocity,
+                    player.IsAwake,
+                    player.IsEnabled);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
                     selfLatestAcceptedInputFrame = player.LatestAcceptedInputFrame;
@@ -293,7 +304,17 @@ namespace GameLogic
             }
 
             Array.Sort(players, PlayerSnapshotComparer.Instance);
-            return new BattleWorldSnapshot(snapshot.FrameIndex, players, null);
+            Array.Sort(bodies, PhysicsBodySnapshotComparer.Instance);
+
+            PhysicsContactSnapshot[] contacts = new PhysicsContactSnapshot[snapshot.Contacts.Count];
+            for (int i = 0; i < snapshot.Contacts.Count; i++)
+            {
+                FrameContactSnapshot contact = snapshot.Contacts[i];
+                contacts[i] = new PhysicsContactSnapshot(contact.BodyAId, contact.BodyBId, contact.IsTouching);
+            }
+
+            PhysicsWorldSnapshot physicsSnapshot = new PhysicsWorldSnapshot(bodies, contacts);
+            return new BattleWorldSnapshot(snapshot.FrameIndex, players, physicsSnapshot);
         }
 
         private static void ReadKeyboardDirection(out float dx, out float dy)
@@ -374,6 +395,16 @@ namespace GameLogic
             public int Compare(PlayerStateSnapshot x, PlayerStateSnapshot y)
             {
                 return x.PlayerId.CompareTo(y.PlayerId);
+            }
+        }
+
+        private sealed class PhysicsBodySnapshotComparer : IComparer<PhysicsBodySnapshot>
+        {
+            public static readonly PhysicsBodySnapshotComparer Instance = new PhysicsBodySnapshotComparer();
+
+            public int Compare(PhysicsBodySnapshot x, PhysicsBodySnapshot y)
+            {
+                return x.BodyId.CompareTo(y.BodyId);
             }
         }
     }

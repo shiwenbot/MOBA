@@ -7,9 +7,16 @@ namespace GameShared.FrameSync.Battle
     public sealed class BattleWorldState : ISnapshotable<BattleWorldSnapshot>
     {
         private readonly Dictionary<long, PlayerState> _players = new Dictionary<long, PlayerState>();
+        private readonly IPhysicsMovementWorld _physicsWorld;
+
+        public BattleWorldState(IPhysicsMovementWorld physicsWorld = null)
+        {
+            _physicsWorld = physicsWorld ?? new FrameSyncPhysicsWorld();
+        }
 
         public int PlayerCount => _players.Count;
         public Dictionary<long, PlayerState>.ValueCollection Players => _players.Values;
+        public IPhysicsMovementWorld PhysicsWorld => _physicsWorld;
 
         public void AddOrUpdatePlayer(long playerId, float x, float y)
         {
@@ -17,14 +24,17 @@ namespace GameShared.FrameSync.Battle
             {
                 playerState.X = x;
                 playerState.Y = y;
+                _physicsWorld.SetBodyTransform(ToBodyId(playerId), x, y, false);
                 return;
             }
 
             _players[playerId] = new PlayerState(playerId, x, y);
+            _physicsWorld.EnsureBody(ToBodyId(playerId), x, y);
         }
 
         public bool RemovePlayer(long playerId)
         {
+            _physicsWorld.RemoveBody(ToBodyId(playerId));
             return _players.Remove(playerId);
         }
 
@@ -44,7 +54,8 @@ namespace GameShared.FrameSync.Battle
             }
 
             Array.Sort(snapshots, PlayerStateSnapshotComparer.Instance);
-            return new BattleWorldSnapshot(0, snapshots, null);
+            PhysicsWorldSnapshot physicsSnapshot = _physicsWorld.TakeSnapshot();
+            return new BattleWorldSnapshot(0, snapshots, physicsSnapshot);
         }
 
         public void RestoreSnapshot(BattleWorldSnapshot snapshot)
@@ -61,6 +72,26 @@ namespace GameShared.FrameSync.Battle
                 PlayerStateSnapshot player = players[i];
                 _players[player.PlayerId] = new PlayerState(player.PlayerId, player.X, player.Y);
             }
+
+            if (snapshot.PhysicsSnapshot != null)
+            {
+                _physicsWorld.RestoreSnapshot(snapshot.PhysicsSnapshot);
+                return;
+            }
+
+            _physicsWorld.ClearBodies();
+            for (int i = 0; i < players.Count; i++)
+            {
+                PlayerStateSnapshot player = players[i];
+                int bodyId = ToBodyId(player.PlayerId);
+                _physicsWorld.EnsureBody(bodyId, player.X, player.Y);
+                _physicsWorld.SetBodyTransform(bodyId, player.X, player.Y, true);
+            }
+        }
+
+        private static int ToBodyId(long playerId)
+        {
+            return checked((int)playerId);
         }
 
         private sealed class PlayerStateSnapshotComparer : IComparer<PlayerStateSnapshot>

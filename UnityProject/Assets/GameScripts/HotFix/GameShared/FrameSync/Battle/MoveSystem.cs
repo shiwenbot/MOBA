@@ -5,8 +5,13 @@ namespace GameShared.FrameSync.Battle
 {
     public static class MoveSystem
     {
-        public static void Apply(PlayerState state, float dx, float dy, float dt)
+        public static void Apply(BattleWorldState worldState, PlayerState state, float dx, float dy, float dt)
         {
+            if (worldState == null)
+            {
+                throw new ArgumentNullException(nameof(worldState));
+            }
+
             if (state == null)
             {
                 throw new ArgumentNullException(nameof(state));
@@ -14,18 +19,30 @@ namespace GameShared.FrameSync.Battle
 
             DeterminismRules.AssertFinite(dx, nameof(dx));
             DeterminismRules.AssertFinite(dy, nameof(dy));
-            DeterminismRules.AssertFinite(dt, nameof(dt));
+            DeterminismRules.AssertFixedDt(dt);
 
-            float lenSq = dx * dx + dy * dy;
-            if (lenSq > 1.0f)
+            worldState.PhysicsWorld.SetBodyMovementInput(checked((int)state.PlayerId), dx, dy);
+        }
+
+        public static void SyncFromPhysics(BattleWorldState worldState, PlayerState state)
+        {
+            if (worldState == null)
             {
-                float invLen = 1.0f / MathF.Sqrt(lenSq);
-                dx *= invLen;
-                dy *= invLen;
+                throw new ArgumentNullException(nameof(worldState));
             }
 
-            state.X += dx * DeterminismRules.MoveSpeed * dt;
-            state.Y += dy * DeterminismRules.MoveSpeed * dt;
+            if (state == null)
+            {
+                throw new ArgumentNullException(nameof(state));
+            }
+
+            if (!worldState.PhysicsWorld.TryGetBodySnapshot(checked((int)state.PlayerId), out PhysicsBodySnapshot bodySnapshot))
+            {
+                return;
+            }
+
+            state.X = bodySnapshot.PositionX;
+            state.Y = bodySnapshot.PositionY;
         }
     }
 }

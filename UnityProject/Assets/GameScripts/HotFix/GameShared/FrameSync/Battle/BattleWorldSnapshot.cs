@@ -5,7 +5,10 @@ namespace GameShared.FrameSync.Battle
 {
     public sealed class BattleWorldSnapshot
     {
-        public BattleWorldSnapshot(uint frameIndex, IReadOnlyList<PlayerStateSnapshot> players, object physicsSnapshot = null)
+        public BattleWorldSnapshot(
+            uint frameIndex,
+            IReadOnlyList<PlayerStateSnapshot> players,
+            PhysicsWorldSnapshot physicsSnapshot = null)
         {
             if (players == null)
             {
@@ -19,7 +22,8 @@ namespace GameShared.FrameSync.Battle
 
         public uint FrameIndex { get; }
         public IReadOnlyList<PlayerStateSnapshot> Players { get; }
-        public object PhysicsSnapshot { get; }
+        public PhysicsWorldSnapshot PhysicsSnapshot { get; }
+        public bool HasPhysicsSnapshot => PhysicsSnapshot != null;
 
         public BattleWorldSnapshot WithFrameIndex(uint frameIndex)
         {

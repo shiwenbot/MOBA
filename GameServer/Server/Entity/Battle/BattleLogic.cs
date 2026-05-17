@@ -9,6 +9,7 @@ namespace Fantasy;
 public sealed class BattleLogic
 {
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
+    private readonly FrameSyncPhysicsWorld _physicsWorld = new();
     private readonly Dictionary<long, Dictionary<uint, PendingInput>> _pendingInputsByPlayerId = new();
     private readonly Dictionary<long, ConsumedInput> _lastConsumedInputByPlayerId = new();
     private readonly Dictionary<long, SubmittedInput> _lastSubmittedInputByPlayerId = new();
@@ -41,6 +42,7 @@ public sealed class BattleLogic
 
         PlayerState newState = new PlayerState(playerId, x, y);
         _statesByPlayerId.Add(playerId, newState);
+        _physicsWorld.EnsureBody(checked((int)playerId), x, y);
         return newState;
     }
 
@@ -50,6 +52,7 @@ public sealed class BattleLogic
         _lastConsumedInputByPlayerId.Remove(playerId);
         _lastSubmittedInputByPlayerId.Remove(playerId);
         _latestAcceptedInputFrameByPlayerId.Remove(playerId);
+        _physicsWorld.RemoveBody(checked((int)playerId));
         return _statesByPlayerId.Remove(playerId);
     }
 
@@ -184,12 +187,16 @@ public sealed class BattleLogic
                 ZeroInputFallbackCount++;
             }
 
-            MoveSystem.Apply(state!, dx, dy, fixedDt);
+            _physicsWorld.EnsureBody(checked((int)state!.PlayerId), state.X, state.Y);
+            _physicsWorld.SetBodyMovementInput(checked((int)state.PlayerId), dx, dy);
             if (!consumedCurrentFrameInput && _logDebug != null)
             {
                 _logDebug($"[Battle][ReuseInput] Frame={frameIndex}, Player={playerId}, Dx={dx:F3}, Dy={dy:F3}");
             }
         }
+
+        _physicsWorld.Step(fixedDt);
+        SyncPlayerStatesFromPhysics();
 
         if (OnBroadcast != null)
         {
@@ -204,14 +211,13 @@ public sealed class BattleLogic
 
     private TestSnapshot BuildTestSnapshot(uint frameIndex)
     {
-        PlayerStateSnapshot[] players = BuildPlayerSnapshots();
-        return new TestSnapshot(frameIndex, players);
+        return TestSnapshot.FromBattleWorldSnapshot(BuildBattleWorldSnapshot(frameIndex));
     }
 
     private BattleWorldSnapshot BuildBattleWorldSnapshot(uint frameIndex)
     {
         PlayerStateSnapshot[] players = BuildPlayerSnapshots();
-        return new BattleWorldSnapshot(frameIndex, players);
+        return new BattleWorldSnapshot(frameIndex, players, _physicsWorld.TakeSnapshot());
     }
 
     private PlayerStateSnapshot[] BuildPlayerSnapshots()
@@ -239,6 +245,26 @@ public sealed class BattleLogic
         }
 
         _playerIdBuffer.Sort();
+    }
+
+    private void SyncPlayerStatesFromPhysics()
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            if (!_statesByPlayerId.TryGetValue(playerId, out PlayerState state))
+            {
+                continue;
+            }
+
+            if (!_physicsWorld.TryGetBodySnapshot(checked((int)playerId), out PhysicsBodySnapshot bodySnapshot))
+            {
+                continue;
+            }
+
+            state.X = bodySnapshot.PositionX;
+            state.Y = bodySnapshot.PositionY;
+        }
     }
 
     private static bool IsInputNewerOrEqual(uint incomingSeq, uint cachedSeq)

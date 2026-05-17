@@ -367,25 +367,7 @@ namespace GameLogic
 
         private void ApplySnapshotToWorldState(BattleWorldSnapshot snapshot)
         {
-            _stalePlayerIds.Clear();
-            foreach (PlayerState player in _worldState.Players)
-            {
-                _stalePlayerIds.Add(player.PlayerId);
-            }
-
-            for (int i = 0; i < snapshot.Players.Count; i++)
-            {
-                PlayerStateSnapshot player = snapshot.Players[i];
-                _worldState.AddOrUpdatePlayer(player.PlayerId, player.X, player.Y);
-                _stalePlayerIds.Remove(player.PlayerId);
-            }
-
-            foreach (long stalePlayerId in _stalePlayerIds)
-            {
-                _worldState.RemovePlayer(stalePlayerId);
-            }
-
-            _stalePlayerIds.Clear();
+            _worldState.RestoreSnapshot(snapshot);
         }
 
         private void ApplyAuthoritativeSnapshot(BattleWorldSnapshot snapshot)
@@ -633,8 +615,18 @@ namespace GameLogic
                 return;
             }
 
-            MoveSystem.Apply(selfPlayer, dx, dy, fixedDt);
+            MoveSystem.Apply(_worldState, selfPlayer, dx, dy, fixedDt);
+            _worldState.PhysicsWorld.Step(fixedDt);
+            SyncAllPlayersFromPhysics();
             SaveSelfPrediction(frameIndex, selfPlayer.X, selfPlayer.Y);
+        }
+
+        private void SyncAllPlayersFromPhysics()
+        {
+            foreach (PlayerState player in _worldState.Players)
+            {
+                MoveSystem.SyncFromPhysics(_worldState, player);
+            }
         }
 
         private void SaveSelfPrediction(uint frameIndex, float x, float y)

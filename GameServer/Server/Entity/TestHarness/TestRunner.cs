@@ -46,6 +46,7 @@ public static class TestRunner
                 checks.Add(RunPredictionSelfTest());
                 scenarios.Add(RunDeterminismScenario(options));
                 scenarios.Add(RunServerClientConsistencyScenario(options));
+                scenarios.Add(RunPlayerCollisionScenario(options));
                 scenarios.Add(RunConvergenceScenario(options));
                 scenarios.Add(RunPlayerLeaveScenario(options));
                 break;
@@ -112,6 +113,10 @@ public static class TestRunner
 
             case TestScenario.Convergence:
                 scenarios.Add(RunConvergenceScenario(options));
+                break;
+
+            case TestScenario.PlayerCollision:
+                scenarios.Add(RunPlayerCollisionScenario(options));
                 break;
 
             case TestScenario.PlayerLeave:
@@ -595,6 +600,208 @@ public static class TestRunner
         return ScenarioResult.Pass($"Convergence (no input after frame {StopInputFrame})");
     }
 
+    private static ScenarioResult RunPlayerCollisionScenario(TestRunOptions options)
+    {
+        const float stationaryPlayerX = 1.0f;
+        const float minimumExpectedSeparation = 0.85f;
+        uint totalFrames = Math.Max(options.Frames, 30);
+        if (!RunStationaryBodyBlockScenario(
+                totalFrames,
+                stationaryPlayerX,
+                minimumExpectedSeparation,
+                out string stationaryFailure,
+                out string stationaryDetail))
+        {
+            return ScenarioResult.Fail("PlayerCollision (MOBA body block)", stationaryFailure);
+        }
+
+        if (!RunHeadOnBodyBlockScenario(
+                totalFrames,
+                minimumExpectedSeparation,
+                out string headOnFailure,
+                out string headOnDetail))
+        {
+            return ScenarioResult.Fail("PlayerCollision (MOBA body block)", headOnFailure);
+        }
+
+        return ScenarioResult.Pass(
+            "PlayerCollision (MOBA body block)",
+            $"{stationaryDetail}; {headOnDetail}");
+    }
+
+    private static bool RunStationaryBodyBlockScenario(
+        uint totalFrames,
+        float stationaryPlayerX,
+        float minimumExpectedSeparation,
+        out string failure,
+        out string successDetail)
+    {
+        const float moverStartX = -1.0f;
+        const float stationaryMaxDisplacement = 0.01f;
+        Harness harness = CreateHarness(
+            2,
+            playerIndex => playerIndex switch
+            {
+                0 => (moverStartX, 0.0f),
+                1 => (stationaryPlayerX, 0.0f),
+                _ => GetSpawnPosition(playerIndex)
+            });
+
+        bool everTouched = false;
+        float minimumSeparation = float.MaxValue;
+        float maximumStationaryDisplacement = 0.0f;
+
+        for (uint frame = 0; frame < totalFrames; frame++)
+        {
+            harness.Clients[0].SubmitInput(frame, 1.0f, 0.0f);
+            harness.Clients[1].SubmitInput(frame, 0.0f, 0.0f);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+
+            if (!TryGetOrderedPlayers(harness.Clients[0].WorldState, 1, 2, out PlayerState mover, out PlayerState blocker))
+            {
+                failure = $"stationary-block players missing frame={frame}";
+                successDetail = string.Empty;
+                return false;
+            }
+
+            float separation = blocker.X - mover.X;
+            minimumSeparation = Math.Min(minimumSeparation, separation);
+            maximumStationaryDisplacement = Math.Max(maximumStationaryDisplacement, Math.Abs(blocker.X - stationaryPlayerX));
+
+            PhysicsWorldSnapshot physicsSnapshot = harness.Clients[0].WorldState.TakeSnapshot().PhysicsSnapshot;
+            if (physicsSnapshot != null && physicsSnapshot.Contacts.Count > 0)
+            {
+                everTouched = true;
+            }
+        }
+
+        ulong serverHash = harness.BattleLogic.GetStateHash();
+        ulong clientHash = harness.Clients[0].GetStateHash();
+        if (serverHash != clientHash)
+        {
+            failure = $"stationary-block hash mismatch server=0x{serverHash:X16} client=0x{clientHash:X16}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (!everTouched)
+        {
+            failure = "stationary-block no contact recorded";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (minimumSeparation < minimumExpectedSeparation)
+        {
+            failure = $"stationary-block penetration minSeparation={minimumSeparation:F4}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (maximumStationaryDisplacement > stationaryMaxDisplacement)
+        {
+            failure = $"stationary-block pushed blocker displacement={maximumStationaryDisplacement:F4}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        successDetail = $"stationaryDisp={maximumStationaryDisplacement:F4} minSeparation={minimumSeparation:F4}";
+        failure = string.Empty;
+        return true;
+    }
+
+    private static bool RunHeadOnBodyBlockScenario(
+        uint totalFrames,
+        float minimumExpectedSeparation,
+        out string failure,
+        out string successDetail)
+    {
+        const float initialOffset = 1.0f;
+        Harness harness = CreateHarness(
+            2,
+            playerIndex => playerIndex switch
+            {
+                0 => (-initialOffset, 0.0f),
+                1 => (initialOffset, 0.0f),
+                _ => GetSpawnPosition(playerIndex)
+            });
+
+        bool everTouched = false;
+        float minimumSeparation = float.MaxValue;
+
+        for (uint frame = 0; frame < totalFrames; frame++)
+        {
+            harness.Clients[0].SubmitInput(frame, 1.0f, 0.0f);
+            harness.Clients[1].SubmitInput(frame, -1.0f, 0.0f);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+
+            if (!TryGetOrderedPlayers(harness.Clients[0].WorldState, 1, 2, out PlayerState leftPlayer, out PlayerState rightPlayer))
+            {
+                failure = $"head-on players missing frame={frame}";
+                successDetail = string.Empty;
+                return false;
+            }
+
+            float separation = rightPlayer.X - leftPlayer.X;
+            minimumSeparation = Math.Min(minimumSeparation, separation);
+
+            PhysicsWorldSnapshot physicsSnapshot = harness.Clients[0].WorldState.TakeSnapshot().PhysicsSnapshot;
+            if (physicsSnapshot != null && physicsSnapshot.Contacts.Count > 0)
+            {
+                everTouched = true;
+            }
+        }
+
+        if (!TryGetOrderedPlayers(harness.Clients[0].WorldState, 1, 2, out PlayerState finalLeftPlayer, out PlayerState finalRightPlayer))
+        {
+            failure = "head-on players missing at final frame";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        float finalSeparation = finalRightPlayer.X - finalLeftPlayer.X;
+        ulong serverHash = harness.BattleLogic.GetStateHash();
+        ulong clientHash = harness.Clients[0].GetStateHash();
+        if (serverHash != clientHash)
+        {
+            failure = $"head-on hash mismatch server=0x{serverHash:X16} client=0x{clientHash:X16}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (!everTouched)
+        {
+            failure = "head-on no contact recorded";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (minimumSeparation < minimumExpectedSeparation)
+        {
+            failure = $"head-on penetration minSeparation={minimumSeparation:F4}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (finalSeparation < minimumExpectedSeparation)
+        {
+            failure = $"head-on final separation too small finalSeparation={finalSeparation:F4}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        if (finalLeftPlayer.X >= finalRightPlayer.X)
+        {
+            failure = $"head-on player order inverted left={finalLeftPlayer.X:F4} right={finalRightPlayer.X:F4}";
+            successDetail = string.Empty;
+            return false;
+        }
+
+        successDetail = $"headOnMin={minimumSeparation:F4} headOnFinal={finalSeparation:F4}";
+        failure = string.Empty;
+        return true;
+    }
+
     private static ScenarioResult RunPlayerLeaveScenario(TestRunOptions options)
     {
         uint totalFrames = Math.Max(options.Frames, LeaveFrame + 51);
@@ -678,7 +885,20 @@ public static class TestRunner
         return ScenarioResult.Pass("PlayerLeave (player B leaves at frame 100)");
     }
 
-    private static Harness CreateHarness(int clientCount)
+    private static bool TryGetOrderedPlayers(
+        BattleWorldState worldState,
+        long leftPlayerId,
+        long rightPlayerId,
+        out PlayerState leftPlayer,
+        out PlayerState rightPlayer)
+    {
+        leftPlayer = null;
+        rightPlayer = null;
+        return worldState.TryGetPlayer(leftPlayerId, out leftPlayer) &&
+               worldState.TryGetPlayer(rightPlayerId, out rightPlayer);
+    }
+
+    private static Harness CreateHarness(int clientCount, Func<int, (float x, float y)> spawnProvider = null)
     {
         BattleLogic battleLogic = new BattleLogic();
         List<SimulatedClient> clients = new(clientCount);
@@ -699,7 +919,7 @@ public static class TestRunner
                 (id, frameIndex, inputSeq, dx, dy) => battleLogic.SubmitInput(id, frameIndex, inputSeq, dx, dy));
             clients.Add(client);
 
-            (float x, float y) = GetSpawnPosition(i);
+            (float x, float y) = spawnProvider != null ? spawnProvider(i) : GetSpawnPosition(i);
             battleLogic.JoinPlayer(playerId, x, y);
         }
 
@@ -977,6 +1197,7 @@ public static class TestRunner
                 "determinism" => TestScenario.Determinism,
                 "consistency" => TestScenario.Consistency,
                 "convergence" => TestScenario.Convergence,
+                "player-collision" => TestScenario.PlayerCollision,
                 "player-leave" => TestScenario.PlayerLeave,
                 _ => throw new ArgumentException($"Unknown --scenario value: {scenario}")
             };
@@ -1018,6 +1239,7 @@ public static class TestRunner
         public const string Determinism = "determinism";
         public const string Consistency = "consistency";
         public const string Convergence = "convergence";
+        public const string PlayerCollision = "player-collision";
         public const string PlayerLeave = "player-leave";
     }
 }

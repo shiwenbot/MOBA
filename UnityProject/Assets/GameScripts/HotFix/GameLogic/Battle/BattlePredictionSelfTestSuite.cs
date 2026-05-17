@@ -20,6 +20,7 @@ namespace GameLogic
             "skipped-no-record",
             "eviction-does-not-crash",
             "accepted-input-feedback-raises-lead",
+            "authoritative-snapshot-restores-physics-world",
             "rollback-replays-before-next-consistency-check",
             "manual-rollback-replays-authoritative-history"
         };
@@ -57,6 +58,7 @@ namespace GameLogic
                     "skipped-no-record" => SkippedNoRecord(),
                     "eviction-does-not-crash" => EvictionDoesNotCrash(),
                     "accepted-input-feedback-raises-lead" => AcceptedInputFeedbackRaisesLead(),
+                    "authoritative-snapshot-restores-physics-world" => AuthoritativeSnapshotRestoresPhysicsWorld(),
                     "rollback-replays-before-next-consistency-check" => RollbackReplaysBeforeNextConsistencyCheck(),
                     "manual-rollback-replays-authoritative-history" => ManualRollbackReplaysAuthoritativeHistory(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
@@ -312,6 +314,55 @@ namespace GameLogic
                    simulation.LeadFrames > leadBefore;
         }
 
+        private static bool AuthoritativeSnapshotRestoresPhysicsWorld()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(2, 5.0f, 0.0f);
+            if (!worldState.TryGetPlayer(2, out PlayerState remotePlayer))
+            {
+                return false;
+            }
+
+            MoveSystem.Apply(worldState, remotePlayer, 1.0f, 0.0f, DeterminismRules.FixedDeltaTime);
+            worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTime);
+            MoveSystem.SyncFromPhysics(worldState, remotePlayer);
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f),
+                        new PlayerStateSnapshot(2, 5.0f, 0.0f)
+                    },
+                    new PhysicsWorldSnapshot(
+                        new[]
+                        {
+                            new PhysicsBodySnapshot(1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true, true),
+                            new PhysicsBodySnapshot(2, 5.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true, true)
+                        })),
+                11);
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+
+            if (!worldState.TryGetPlayer(2, out PlayerState restoredRemotePlayer))
+            {
+                return false;
+            }
+
+            BattleWorldSnapshot localSnapshot = worldState.TakeSnapshot();
+            return Math.Abs(restoredRemotePlayer.X - 5.0f) < 0.0001f &&
+                   Math.Abs(restoredRemotePlayer.Y) < 0.0001f &&
+                   TryGetBodySnapshot(localSnapshot, 2, out PhysicsBodySnapshot remoteBody) &&
+                   Math.Abs(remoteBody.PositionX - 5.0f) < 0.0001f &&
+                   Math.Abs(remoteBody.PositionY) < 0.0001f &&
+                   Math.Abs(remoteBody.LinearVelocityX) < 0.0001f &&
+                   Math.Abs(remoteBody.LinearVelocityY) < 0.0001f;
+        }
+
         private static bool RollbackReplaysBeforeNextConsistencyCheck()
         {
             float step = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
@@ -399,6 +450,29 @@ namespace GameLogic
                    simulation.LastRollbackReplayFrames == 1 &&
                    Math.Abs(restoredPlayer.X - (step * 3.0f)) < 0.0001f &&
                    Math.Abs(restoredPlayer.Y) < 0.0001f;
+        }
+
+        private static bool TryGetBodySnapshot(
+            BattleWorldSnapshot snapshot,
+            int bodyId,
+            out PhysicsBodySnapshot bodySnapshot)
+        {
+            PhysicsWorldSnapshot physicsSnapshot = snapshot.PhysicsSnapshot;
+            if (physicsSnapshot != null)
+            {
+                for (int i = 0; i < physicsSnapshot.Bodies.Count; i++)
+                {
+                    PhysicsBodySnapshot candidate = physicsSnapshot.Bodies[i];
+                    if (candidate.BodyId == bodyId)
+                    {
+                        bodySnapshot = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            bodySnapshot = default;
+            return false;
         }
 
         private static BattleSimulation CreateSimulation(

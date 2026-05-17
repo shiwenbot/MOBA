@@ -116,17 +116,40 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         {
             FrameIndex = snapshot.FrameIndex
         };
+        Dictionary<int, PhysicsBodySnapshot> physicsByBodyId = BuildPhysicsBodyLookup(snapshot.PhysicsSnapshot);
 
         for (int i = 0; i < snapshot.Players.Length; i++)
         {
             PlayerStateSnapshot player = snapshot.Players[i];
+            int bodyId = checked((int)player.PlayerId);
+            bool hasPhysics = physicsByBodyId.TryGetValue(bodyId, out PhysicsBodySnapshot bodySnapshot);
             frameSnapshot.Players.Add(new PlayerSnapshot
             {
                 PlayerId = player.PlayerId,
                 X = player.X,
                 Y = player.Y,
-                LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId)
+                LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
+                Angle = hasPhysics ? bodySnapshot.RotationRadians : 0.0f,
+                LinearVelocityX = hasPhysics ? bodySnapshot.LinearVelocityX : 0.0f,
+                LinearVelocityY = hasPhysics ? bodySnapshot.LinearVelocityY : 0.0f,
+                AngularVelocity = hasPhysics ? bodySnapshot.AngularVelocity : 0.0f,
+                IsAwake = hasPhysics && bodySnapshot.IsAwake,
+                IsEnabled = !hasPhysics || bodySnapshot.IsEnabled
             });
+        }
+
+        if (snapshot.PhysicsSnapshot != null)
+        {
+            for (int i = 0; i < snapshot.PhysicsSnapshot.Contacts.Count; i++)
+            {
+                PhysicsContactSnapshot contact = snapshot.PhysicsSnapshot.Contacts[i];
+                frameSnapshot.Contacts.Add(new FrameContactSnapshot
+                {
+                    BodyAId = contact.BodyAId,
+                    BodyBId = contact.BodyBId,
+                    IsTouching = contact.IsTouching
+                });
+            }
         }
 
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
@@ -141,6 +164,23 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         Log.Debug($"[Battle] Frame={snapshot.FrameIndex}, Players={frameSnapshot.Players.Count}, Broadcast");
+    }
+
+    private static Dictionary<int, PhysicsBodySnapshot> BuildPhysicsBodyLookup(PhysicsWorldSnapshot physicsSnapshot)
+    {
+        Dictionary<int, PhysicsBodySnapshot> lookup = new Dictionary<int, PhysicsBodySnapshot>();
+        if (physicsSnapshot == null)
+        {
+            return lookup;
+        }
+
+        for (int i = 0; i < physicsSnapshot.Bodies.Count; i++)
+        {
+            PhysicsBodySnapshot body = physicsSnapshot.Bodies[i];
+            lookup[body.BodyId] = body;
+        }
+
+        return lookup;
     }
 
     private static (float x, float y) GetSpawnPosition(int playerCount)

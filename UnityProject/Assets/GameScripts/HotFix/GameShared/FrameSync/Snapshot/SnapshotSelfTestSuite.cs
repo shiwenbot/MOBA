@@ -33,6 +33,18 @@ namespace GameShared.FrameSync.Snapshot
                 return false;
             }
 
+            if (!PhysicsRoundTrip())
+            {
+                failedCase = "physics-roundtrip";
+                return false;
+            }
+
+            if (!PhysicsAffectsHash())
+            {
+                failedCase = "physics-affects-hash";
+                return false;
+            }
+
             failedCase = string.Empty;
             return true;
         }
@@ -109,6 +121,67 @@ namespace GameShared.FrameSync.Snapshot
             return StateHasher.Hash(left) == StateHasher.Hash(right);
         }
 
+        private static bool PhysicsRoundTrip()
+        {
+            TestPhysicsSnapshotProvider physicsProvider = new TestPhysicsSnapshotProvider(
+                new PhysicsWorldSnapshot(
+                    new[]
+                    {
+                        new PhysicsBodySnapshot(7, 1.0f, 2.0f, 0.5f, 3.0f, 4.0f, 5.0f, true, true)
+                    },
+                    new[]
+                    {
+                        new PhysicsContactSnapshot(7, 8, true)
+                    }));
+            BattleWorldState worldState = new BattleWorldState(physicsProvider);
+            worldState.AddOrUpdatePlayer(1, 3.5f, 8.0f);
+
+            BattleWorldSnapshot snapshot = worldState.TakeSnapshot().WithFrameIndex(100);
+            PhysicsWorldSnapshot originalPhysics = snapshot.PhysicsSnapshot;
+            if (originalPhysics == null || originalPhysics.Bodies.Count != 1 || originalPhysics.Contacts.Count != 1)
+            {
+                return false;
+            }
+
+            physicsProvider.CurrentSnapshot = new PhysicsWorldSnapshot(
+                new[]
+                {
+                    new PhysicsBodySnapshot(99, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false)
+                });
+            worldState.RestoreSnapshot(snapshot);
+
+            return ReferenceEquals(physicsProvider.CurrentSnapshot, originalPhysics);
+        }
+
+        private static bool PhysicsAffectsHash()
+        {
+            BattleWorldSnapshot left = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                },
+                new PhysicsWorldSnapshot(
+                    new[]
+                    {
+                        new PhysicsBodySnapshot(1, 1.0f, 2.0f, 0.25f, 3.0f, 4.0f, 5.0f, true, true)
+                    }));
+
+            BattleWorldSnapshot right = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                },
+                new PhysicsWorldSnapshot(
+                    new[]
+                    {
+                        new PhysicsBodySnapshot(1, 10.0f, 2.0f, 0.25f, 3.0f, 4.0f, 5.0f, true, true)
+                    }));
+
+            return StateHasher.Hash(left) != StateHasher.Hash(right);
+        }
+
         private static BattleWorldSnapshot CreateSinglePlayerSnapshot(uint frameIndex, float x)
         {
             return new BattleWorldSnapshot(
@@ -117,6 +190,56 @@ namespace GameShared.FrameSync.Snapshot
                 {
                     new PlayerStateSnapshot(1, x, 0.0f)
                 });
+        }
+
+        private sealed class TestPhysicsSnapshotProvider : IPhysicsMovementWorld
+        {
+            public TestPhysicsSnapshotProvider(PhysicsWorldSnapshot snapshot)
+            {
+                CurrentSnapshot = snapshot;
+            }
+
+            public PhysicsWorldSnapshot CurrentSnapshot { get; set; }
+
+            public PhysicsWorldSnapshot TakeSnapshot()
+            {
+                return CurrentSnapshot;
+            }
+
+            public void RestoreSnapshot(PhysicsWorldSnapshot snapshot)
+            {
+                CurrentSnapshot = snapshot;
+            }
+
+            public void ClearBodies()
+            {
+            }
+
+            public void EnsureBody(int bodyId, float x, float y)
+            {
+            }
+
+            public void RemoveBody(int bodyId)
+            {
+            }
+
+            public void SetBodyTransform(int bodyId, float x, float y, bool resetVelocity)
+            {
+            }
+
+            public void SetBodyMovementInput(int bodyId, float dx, float dy)
+            {
+            }
+
+            public void Step(float dt)
+            {
+            }
+
+            public bool TryGetBodySnapshot(int bodyId, out PhysicsBodySnapshot snapshot)
+            {
+                snapshot = default;
+                return false;
+            }
         }
     }
 }
