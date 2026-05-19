@@ -79,11 +79,12 @@ namespace Fantasy
 			session.Send(S2C_FrameSnapshot_message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void S2C_FrameSnapshot(this Session session, uint frameIndex, List<PlayerSnapshot> players)
+		public static void S2C_FrameSnapshot(this Session session, uint frameIndex, List<PlayerSnapshot> players, List<FrameContactSnapshot> contacts)
 		{
 			using var S2C_FrameSnapshot_message = Fantasy.S2C_FrameSnapshot.Create();
 			S2C_FrameSnapshot_message.FrameIndex = frameIndex;
 			S2C_FrameSnapshot_message.Players = players;
+			S2C_FrameSnapshot_message.Contacts = contacts;
 			session.Send(S2C_FrameSnapshot_message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]

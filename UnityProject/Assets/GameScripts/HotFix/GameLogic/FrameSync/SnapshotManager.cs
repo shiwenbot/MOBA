@@ -8,7 +8,6 @@ namespace GameLogic.FrameSync
 {
     public sealed class SnapshotManager : ITickable
     {
-        private const int SnapshotLogIntervalFrames = 300;
         private const int DefaultBufferCapacity = 24;
 
         private readonly BattleWorldState _worldState;
@@ -41,10 +40,6 @@ namespace GameLogic.FrameSync
             _buffer.Save(frameIndex, snapshot);
             LatestHash = StateHasher.Hash(snapshot);
 
-            if (frameIndex % SnapshotLogIntervalFrames == 0)
-            {
-                Log.Info($"[Snapshot] Frame={frameIndex}, LatestHash={LatestHash}, Count={_buffer.Count}");
-            }
         }
 
         public bool TryGetSnapshot(uint frameIndex, out BattleWorldSnapshot snapshot)

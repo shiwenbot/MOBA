@@ -14,7 +14,6 @@ namespace GameLogic
         private const int PredictionBufferCapacity = 32;
         private const int InputHistoryCapacity = 128;
         private const int AuthoritativeSnapshotHistoryCapacity = 32;
-        private const int ConsistencyLogInterval = 300;
         private const float InitialRttEmaMs = 100f;
         private const float RttEmaAlpha = 0.2f;
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
@@ -325,7 +324,10 @@ namespace GameLogic
             }
 
             _checked++;
-            if (prediction.X == authoritativeSelf.X && prediction.Y == authoritativeSelf.Y)
+            bool matched = prediction.X == authoritativeSelf.X &&
+                           prediction.Y == authoritativeSelf.Y &&
+                           AreAttributesEqual(prediction.Attributes, authoritativeSelf.Attributes);
+            if (matched)
             {
                 _hits++;
             }
@@ -335,17 +337,13 @@ namespace GameLogic
                 float deltaX = authoritativeSelf.X - prediction.X;
                 float deltaY = authoritativeSelf.Y - prediction.Y;
                 Log.Warning(
-                    $"[Consistency] MISMATCH frame={snapshot.FrameIndex} pred=({prediction.X},{prediction.Y}) auth=({authoritativeSelf.X},{authoritativeSelf.Y}) delta=({deltaX:F4},{deltaY:F4})");
+                    $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
+                    $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({deltaX:F4},{deltaY:F4}) " +
+                    $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
+                    $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack})");
             }
 
-            if (_checked > 0 && (_checked % ConsistencyLogInterval) == 0)
-            {
-                float rate = (float)_hits / _checked;
-                Log.Info(
-                    $"[Consistency] HitRate={rate:P1} hit={_hits} miss={_misses} noRecord={_skippedNoRecord} evicted={_skippedEvicted}");
-            }
-
-            return prediction.X != authoritativeSelf.X || prediction.Y != authoritativeSelf.Y;
+            return !matched;
         }
 
         private bool TryGetAuthoritativeSelf(BattleWorldSnapshot snapshot, out PlayerStateSnapshot selfSnapshot)
@@ -435,9 +433,6 @@ namespace GameLogic
                 return;
             }
 
-            Log.Info(
-                $"[Battle][ClientInputEdge] frame={frameIndex} lastApplied={_lastAppliedFrame} lead={_leadFrames} local=({_lastSentDx:F3},{_lastSentDy:F3})->({dx:F3},{dy:F3})");
-
             _hasLastSentInput = true;
             _lastSentDx = dx;
             _lastSentDy = dy;
@@ -507,9 +502,6 @@ namespace GameLogic
             {
                 return;
             }
-
-            Log.Info(
-                $"[LeadControl] snapshot={snapshotFrame} accepted={latestAcceptedInputFrame} buffered={serverBufferedFrames} baseline={_baselineLeadFrames} lead={previousLead}->{_leadFrames}");
         }
 
         private void AdvancePredictionTo(uint targetFrame, float fixedDt)
@@ -618,7 +610,7 @@ namespace GameLogic
             MoveSystem.Apply(_worldState, selfPlayer, dx, dy, fixedDt);
             _worldState.PhysicsWorld.Step(fixedDt);
             SyncAllPlayersFromPhysics();
-            SaveSelfPrediction(frameIndex, selfPlayer.X, selfPlayer.Y);
+            SaveSelfPrediction(frameIndex, selfPlayer.X, selfPlayer.Y, selfPlayer.CaptureAttributeSnapshot());
         }
 
         private void SyncAllPlayersFromPhysics()
@@ -629,7 +621,7 @@ namespace GameLogic
             }
         }
 
-        private void SaveSelfPrediction(uint frameIndex, float x, float y)
+        private void SaveSelfPrediction(uint frameIndex, float x, float y, PlayerAttributeSnapshot attributes)
         {
             if (!_selfPredictions.ContainsKey(frameIndex) && _selfPredictions.Count >= PredictionBufferCapacity)
             {
@@ -649,7 +641,7 @@ namespace GameLogic
                 }
             }
 
-            _selfPredictions[frameIndex] = new SelfPrediction(x, y);
+            _selfPredictions[frameIndex] = new SelfPrediction(x, y, attributes);
         }
 
         private void ClearWorldState()
@@ -685,18 +677,29 @@ namespace GameLogic
         {
             return leftDx == rightDx && leftDy == rightDy;
         }
+
+        private static bool AreAttributesEqual(PlayerAttributeSnapshot left, PlayerAttributeSnapshot right)
+        {
+            return left.Health == right.Health &&
+                   left.MaxHealth == right.MaxHealth &&
+                   left.Mana == right.Mana &&
+                   left.MaxMana == right.MaxMana &&
+                   left.Attack == right.Attack;
+        }
     }
 
     internal readonly struct SelfPrediction
     {
-        public SelfPrediction(float x, float y)
+        public SelfPrediction(float x, float y, PlayerAttributeSnapshot attributes)
         {
             X = x;
             Y = y;
+            Attributes = attributes;
         }
 
         public float X { get; }
         public float Y { get; }
+        public PlayerAttributeSnapshot Attributes { get; }
     }
 
     internal readonly struct BufferedInput

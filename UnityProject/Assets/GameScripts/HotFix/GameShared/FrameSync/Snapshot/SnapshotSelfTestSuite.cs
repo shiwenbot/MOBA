@@ -45,6 +45,24 @@ namespace GameShared.FrameSync.Snapshot
                 return false;
             }
 
+            if (!AttributeRoundTrip())
+            {
+                failedCase = "attribute-roundtrip";
+                return false;
+            }
+
+            if (!AttributesAffectHash())
+            {
+                failedCase = "attributes-affect-hash";
+                return false;
+            }
+
+            if (!AttributeDirtyMerge())
+            {
+                failedCase = "attribute-dirty-merge";
+                return false;
+            }
+
             failedCase = string.Empty;
             return true;
         }
@@ -180,6 +198,87 @@ namespace GameShared.FrameSync.Snapshot
                     }));
 
             return StateHasher.Hash(left) != StateHasher.Hash(right);
+        }
+
+        private static bool AttributeRoundTrip()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 2.0f, 3.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            player.Health = 72;
+            player.MaxHealth = 120;
+            player.Mana = 18;
+            player.MaxMana = 45;
+            player.Attack = 27;
+
+            BattleWorldSnapshot snapshotA = worldState.TakeSnapshot().WithFrameIndex(200);
+            ulong hashA = StateHasher.Hash(snapshotA);
+
+            player.Health = 1;
+            player.MaxHealth = 2;
+            player.Mana = 3;
+            player.MaxMana = 4;
+            player.Attack = 5;
+
+            worldState.RestoreSnapshot(snapshotA);
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            BattleWorldSnapshot snapshotB = worldState.TakeSnapshot().WithFrameIndex(200);
+            ulong hashB = StateHasher.Hash(snapshotB);
+            return restoredPlayer.Health == 72 &&
+                   restoredPlayer.MaxHealth == 120 &&
+                   restoredPlayer.Mana == 18 &&
+                   restoredPlayer.MaxMana == 45 &&
+                   restoredPlayer.Attack == 27 &&
+                   hashA == hashB;
+        }
+
+        private static bool AttributesAffectHash()
+        {
+            BattleWorldSnapshot left = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, 0.0f, 0.0f, new PlayerAttributeSnapshot(100, 100, 40, 100, 10))
+                });
+
+            BattleWorldSnapshot right = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, 0.0f, 0.0f, new PlayerAttributeSnapshot(90, 100, 40, 100, 10))
+                });
+
+            return StateHasher.Hash(left) != StateHasher.Hash(right);
+        }
+
+        private static bool AttributeDirtyMerge()
+        {
+            PlayerAttributeSnapshot previous = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
+            PlayerAttributeSnapshot current = new PlayerAttributeSnapshot(85, 100, 30, 100, 16);
+            PlayerAttributeDirtyFlags dirtyMask = PlayerAttributeSync.ComputeDirtyMask(true, previous, current);
+            PlayerAttributeSnapshot merged = PlayerAttributeSync.Merge(
+                previous,
+                dirtyMask,
+                current.Health,
+                current.MaxHealth,
+                current.Mana,
+                current.MaxMana,
+                current.Attack);
+
+            return dirtyMask == (PlayerAttributeDirtyFlags.Health | PlayerAttributeDirtyFlags.Mana | PlayerAttributeDirtyFlags.Attack) &&
+                   merged.Health == current.Health &&
+                   merged.MaxHealth == current.MaxHealth &&
+                   merged.Mana == current.Mana &&
+                   merged.MaxMana == current.MaxMana &&
+                   merged.Attack == current.Attack;
         }
 
         private static BattleWorldSnapshot CreateSinglePlayerSnapshot(uint frameIndex, float x)

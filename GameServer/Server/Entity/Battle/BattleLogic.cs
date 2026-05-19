@@ -229,7 +229,11 @@ public sealed class BattleLogic
         {
             long playerId = _playerIdBuffer[i];
             PlayerState state = _statesByPlayerId[playerId];
-            players[i] = new PlayerStateSnapshot(state.PlayerId, state.X, state.Y);
+            players[i] = new PlayerStateSnapshot(
+                state.PlayerId,
+                state.X,
+                state.Y,
+                state.CaptureAttributeSnapshot());
         }
 
         return players;

@@ -24,6 +24,11 @@ namespace GameShared.FrameSync.Snapshot
                 MixInt(ref hash, (int)player.PlayerId);
                 MixInt(ref hash, NormalizeFloatBits(player.X));
                 MixInt(ref hash, NormalizeFloatBits(player.Y));
+                MixInt(ref hash, player.Health);
+                MixInt(ref hash, player.MaxHealth);
+                MixInt(ref hash, player.Mana);
+                MixInt(ref hash, player.MaxMana);
+                MixInt(ref hash, player.Attack);
             }
 
             if (snapshot.PhysicsSnapshot != null)

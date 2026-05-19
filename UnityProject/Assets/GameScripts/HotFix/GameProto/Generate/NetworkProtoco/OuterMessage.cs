@@ -431,6 +431,12 @@ namespace Fantasy
             AngularVelocity = default;
             IsAwake = default;
             IsEnabled = default;
+            AttributeDirtyMask = default;
+            Health = default;
+            MaxHealth = default;
+            Mana = default;
+            MaxMana = default;
+            Attack = default;
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -453,6 +459,18 @@ namespace Fantasy
         public bool IsAwake { get; set; }
         [ProtoMember(10)]
         public bool IsEnabled { get; set; }
+        [ProtoMember(11)]
+        public uint AttributeDirtyMask { get; set; }
+        [ProtoMember(12)]
+        public int Health { get; set; }
+        [ProtoMember(13)]
+        public int MaxHealth { get; set; }
+        [ProtoMember(14)]
+        public int Mana { get; set; }
+        [ProtoMember(15)]
+        public int MaxMana { get; set; }
+        [ProtoMember(16)]
+        public int Attack { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -462,15 +480,15 @@ namespace Fantasy
         {
             var frameContactSnapshot = MessageObjectPool<FrameContactSnapshot>.Rent();
             frameContactSnapshot.AutoReturn = autoReturn;
-
+            
             if (!autoReturn)
             {
                 frameContactSnapshot.SetIsPool(false);
             }
-
+            
             return frameContactSnapshot;
         }
-
+        
         public void Return()
         {
             if (!AutoReturn)
@@ -487,7 +505,7 @@ namespace Fantasy
 
         public void Dispose()
         {
-            if (!IsPool()) return;
+            if (!IsPool()) return; 
             BodyAId = default;
             BodyBId = default;
             IsTouching = default;

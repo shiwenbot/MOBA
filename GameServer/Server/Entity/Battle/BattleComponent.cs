@@ -8,9 +8,10 @@ namespace Fantasy;
 
 public sealed class BattleComponent : Entitas.Entity, ITickable
 {
-    private readonly BattleLogic _battleLogic = new(Log.Debug, Log.Warning);
+    private readonly BattleLogic _battleLogic = new(null, Log.Warning);
     private readonly Dictionary<long, PlayerSession> _sessionsByPlayerId = new();
     private readonly Dictionary<long, long> _playerIdBySessionId = new();
+    private readonly Dictionary<long, PlayerAttributeSnapshot> _lastBroadcastAttributesByPlayerId = new();
     private readonly List<long> _playerIdBuffer = new();
 
     private long _nextPlayerId = 1;
@@ -101,6 +102,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             }
 
             _sessionsByPlayerId.Remove(playerId);
+            _lastBroadcastAttributesByPlayerId.Remove(playerId);
             _battleLogic.RemovePlayer(playerId);
         }
     }
@@ -123,6 +125,12 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             PlayerStateSnapshot player = snapshot.Players[i];
             int bodyId = checked((int)player.PlayerId);
             bool hasPhysics = physicsByBodyId.TryGetValue(bodyId, out PhysicsBodySnapshot bodySnapshot);
+            bool hasPreviousAttributes = _lastBroadcastAttributesByPlayerId.TryGetValue(player.PlayerId, out PlayerAttributeSnapshot previousAttributes);
+            PlayerAttributeSnapshot currentAttributes = player.Attributes;
+            PlayerAttributeDirtyFlags dirtyMask = PlayerAttributeSync.ComputeDirtyMask(
+                hasPreviousAttributes,
+                previousAttributes,
+                currentAttributes);
             frameSnapshot.Players.Add(new PlayerSnapshot
             {
                 PlayerId = player.PlayerId,
@@ -134,8 +142,16 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 LinearVelocityY = hasPhysics ? bodySnapshot.LinearVelocityY : 0.0f,
                 AngularVelocity = hasPhysics ? bodySnapshot.AngularVelocity : 0.0f,
                 IsAwake = hasPhysics && bodySnapshot.IsAwake,
-                IsEnabled = !hasPhysics || bodySnapshot.IsEnabled
+                IsEnabled = !hasPhysics || bodySnapshot.IsEnabled,
+                AttributeDirtyMask = (uint)dirtyMask,
+                Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, currentAttributes.Health),
+                MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
+                Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, currentAttributes.Mana),
+                MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, currentAttributes.MaxMana),
+                Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack)
             });
+
+            _lastBroadcastAttributesByPlayerId[player.PlayerId] = currentAttributes;
         }
 
         if (snapshot.PhysicsSnapshot != null)
@@ -162,8 +178,6 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
             session.Send(frameSnapshot);
         }
-
-        Log.Debug($"[Battle] Frame={snapshot.FrameIndex}, Players={frameSnapshot.Players.Count}, Broadcast");
     }
 
     private static Dictionary<int, PhysicsBodySnapshot> BuildPhysicsBodyLookup(PhysicsWorldSnapshot physicsSnapshot)

@@ -21,7 +21,10 @@ namespace GameLogic
 #endif
 
         private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
+        private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
+        private readonly HashSet<long> _authoritativePlayersInSnapshot = new HashSet<long>();
+        private readonly List<long> _staleAuthoritativePlayers = new List<long>();
 
         private ClientTickDriver _tickDriver;
         private BattleSimulation _simulation;
@@ -86,6 +89,9 @@ namespace GameLogic
 
             _playerCapsules.Clear();
             _activePlayers.Clear();
+            _authoritativeAttributesByPlayerId.Clear();
+            _authoritativePlayersInSnapshot.Clear();
+            _staleAuthoritativePlayers.Clear();
         }
 
         private void Update()
@@ -286,7 +292,22 @@ namespace GameLogic
             for (int i = 0; i < snapshot.Players.Count; i++)
             {
                 PlayerSnapshot player = snapshot.Players[i];
-                players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y);
+                _authoritativePlayersInSnapshot.Add(player.PlayerId);
+                PlayerAttributeSnapshot baselineAttributes = _authoritativeAttributesByPlayerId.TryGetValue(
+                    player.PlayerId,
+                    out PlayerAttributeSnapshot cachedAttributes)
+                    ? cachedAttributes
+                    : PlayerAttributeSnapshot.Default;
+                PlayerAttributeSnapshot mergedAttributes = PlayerAttributeSync.Merge(
+                    baselineAttributes,
+                    (PlayerAttributeDirtyFlags)player.AttributeDirtyMask,
+                    player.Health,
+                    player.MaxHealth,
+                    player.Mana,
+                    player.MaxMana,
+                    player.Attack);
+                _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
+                players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y, mergedAttributes);
                 bodies[i] = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
                     player.X,
@@ -303,6 +324,8 @@ namespace GameLogic
                 }
             }
 
+            CleanupStaleAuthoritativeAttributes();
+
             Array.Sort(players, PlayerSnapshotComparer.Instance);
             Array.Sort(bodies, PhysicsBodySnapshotComparer.Instance);
 
@@ -315,6 +338,27 @@ namespace GameLogic
 
             PhysicsWorldSnapshot physicsSnapshot = new PhysicsWorldSnapshot(bodies, contacts);
             return new BattleWorldSnapshot(snapshot.FrameIndex, players, physicsSnapshot);
+        }
+
+        private void CleanupStaleAuthoritativeAttributes()
+        {
+            _staleAuthoritativePlayers.Clear();
+            foreach (long playerId in _authoritativeAttributesByPlayerId.Keys)
+            {
+                if (_authoritativePlayersInSnapshot.Contains(playerId))
+                {
+                    continue;
+                }
+
+                _staleAuthoritativePlayers.Add(playerId);
+            }
+
+            for (int i = 0; i < _staleAuthoritativePlayers.Count; i++)
+            {
+                _authoritativeAttributesByPlayerId.Remove(_staleAuthoritativePlayers[i]);
+            }
+
+            _authoritativePlayersInSnapshot.Clear();
         }
 
         private static void ReadKeyboardDirection(out float dx, out float dy)

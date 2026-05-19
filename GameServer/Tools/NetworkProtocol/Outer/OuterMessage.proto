@@ -72,6 +72,25 @@ message PlayerSnapshot
 	float X = 2;
 	float Y = 3;
 	uint32 LatestAcceptedInputFrame = 4;
+	float Angle = 5;
+	float LinearVelocityX = 6;
+	float LinearVelocityY = 7;
+	float AngularVelocity = 8;
+	bool IsAwake = 9;
+	bool IsEnabled = 10;
+	uint32 AttributeDirtyMask = 11;
+	int32 Health = 12;
+	int32 MaxHealth = 13;
+	int32 Mana = 14;
+	int32 MaxMana = 15;
+	int32 Attack = 16;
+}
+
+message FrameContactSnapshot
+{
+	int32 BodyAId = 1;
+	int32 BodyBId = 2;
+	bool IsTouching = 3;
 }
 
 // 服务端每帧广播快照
@@ -79,6 +98,7 @@ message S2C_FrameSnapshot // IMessage
 {
 	uint32 FrameIndex = 1;
 	repeated PlayerSnapshot Players = 2;
+	repeated FrameContactSnapshot Contacts = 3;
 }
 
 // 客户端 Ping（单向消息，用于 RTT 测量）

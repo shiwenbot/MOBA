@@ -21,6 +21,7 @@ namespace GameLogic
             "eviction-does-not-crash",
             "accepted-input-feedback-raises-lead",
             "authoritative-snapshot-restores-physics-world",
+            "authoritative-snapshot-restores-player-attributes",
             "rollback-replays-before-next-consistency-check",
             "manual-rollback-replays-authoritative-history"
         };
@@ -59,6 +60,7 @@ namespace GameLogic
                     "eviction-does-not-crash" => EvictionDoesNotCrash(),
                     "accepted-input-feedback-raises-lead" => AcceptedInputFeedbackRaisesLead(),
                     "authoritative-snapshot-restores-physics-world" => AuthoritativeSnapshotRestoresPhysicsWorld(),
+                    "authoritative-snapshot-restores-player-attributes" => AuthoritativeSnapshotRestoresPlayerAttributes(),
                     "rollback-replays-before-next-consistency-check" => RollbackReplaysBeforeNextConsistencyCheck(),
                     "manual-rollback-replays-authoritative-history" => ManualRollbackReplaysAuthoritativeHistory(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
@@ -361,6 +363,42 @@ namespace GameLogic
                    Math.Abs(remoteBody.PositionY) < 0.0001f &&
                    Math.Abs(remoteBody.LinearVelocityX) < 0.0001f &&
                    Math.Abs(remoteBody.LinearVelocityY) < 0.0001f;
+        }
+
+        private static bool AuthoritativeSnapshotRestoresPlayerAttributes()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            PlayerAttributeSnapshot authoritativeAttributes = new PlayerAttributeSnapshot(80, 120, 35, 60, 22);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y, authoritativeAttributes)
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            return result.ConsistencyMismatch &&
+                   restoredPlayer.Health == authoritativeAttributes.Health &&
+                   restoredPlayer.MaxHealth == authoritativeAttributes.MaxHealth &&
+                   restoredPlayer.Mana == authoritativeAttributes.Mana &&
+                   restoredPlayer.MaxMana == authoritativeAttributes.MaxMana &&
+                   restoredPlayer.Attack == authoritativeAttributes.Attack;
         }
 
         private static bool RollbackReplaysBeforeNextConsistencyCheck()

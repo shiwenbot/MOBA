@@ -98,6 +98,7 @@ public static class TestRunner
             case TestScenario.PredictionBufferUsesGlobalFrame:
             case TestScenario.SkippedNoRecord:
             case TestScenario.EvictionDoesNotCrash:
+            case TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes:
             case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
             case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
@@ -1192,6 +1193,7 @@ public static class TestRunner
                 "prediction-buffer-uses-global-frame" => TestScenario.PredictionBufferUsesGlobalFrame,
                 "skipped-no-record" => TestScenario.SkippedNoRecord,
                 "eviction-does-not-crash" => TestScenario.EvictionDoesNotCrash,
+                "authoritative-snapshot-restores-player-attributes" => TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes,
                 "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
                 "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
                 "determinism" => TestScenario.Determinism,
@@ -1234,6 +1236,7 @@ public static class TestRunner
         public const string PredictionBufferUsesGlobalFrame = "prediction-buffer-uses-global-frame";
         public const string SkippedNoRecord = "skipped-no-record";
         public const string EvictionDoesNotCrash = "eviction-does-not-crash";
+        public const string AuthoritativeSnapshotRestoresPlayerAttributes = "authoritative-snapshot-restores-player-attributes";
         public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
         public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";
         public const string Determinism = "determinism";

@@ -50,7 +50,11 @@ namespace GameShared.FrameSync.Battle
             foreach (KeyValuePair<long, PlayerState> pair in _players)
             {
                 PlayerState playerState = pair.Value;
-                snapshots[index++] = new PlayerStateSnapshot(playerState.PlayerId, playerState.X, playerState.Y);
+                snapshots[index++] = new PlayerStateSnapshot(
+                    playerState.PlayerId,
+                    playerState.X,
+                    playerState.Y,
+                    playerState.CaptureAttributeSnapshot());
             }
 
             Array.Sort(snapshots, PlayerStateSnapshotComparer.Instance);
@@ -70,7 +74,7 @@ namespace GameShared.FrameSync.Battle
             for (int i = 0; i < players.Count; i++)
             {
                 PlayerStateSnapshot player = players[i];
-                _players[player.PlayerId] = new PlayerState(player.PlayerId, player.X, player.Y);
+                _players[player.PlayerId] = new PlayerState(player.PlayerId, player.X, player.Y, player.Attributes);
             }
 
             if (snapshot.PhysicsSnapshot != null)
