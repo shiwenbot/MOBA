@@ -33,8 +33,13 @@ namespace GameLogic
         private bool _snapshotRegistered;
         private bool _pongRegistered;
         private bool _isInitialized;
+        private bool _joinSucceeded;
+        private string _joinFailureReason = string.Empty;
+        private int _snapshotMessageCount;
+        private int _pongMessageCount;
         private float _cachedDx;
         private float _cachedDy;
+        private IBattleAutomationInputSource _automationInputSource;
 
         public int Priority => 0;
 
@@ -76,8 +81,13 @@ namespace GameLogic
             _pongHandler = null;
             _simulation = null;
             _isInitialized = false;
+            _joinSucceeded = false;
+            _joinFailureReason = string.Empty;
+            _snapshotMessageCount = 0;
+            _pongMessageCount = 0;
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
+            _automationInputSource = null;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
             {
@@ -111,7 +121,16 @@ namespace GameLogic
                 return;
             }
 
-            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, _cachedDx, _cachedDy);
+            float dx = _cachedDx;
+            float dy = _cachedDy;
+            if (_automationInputSource != null &&
+                _automationInputSource.TryGetInput(frameIndex, out float automationDx, out float automationDy))
+            {
+                dx = automationDx;
+                dy = automationDy;
+            }
+
+            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, dx, dy);
             SyncRendering();
 
             if (tickResult.TargetFrameExclusive > 0 && _tickDriver != null)
@@ -123,6 +142,59 @@ namespace GameLogic
         public void RollBack(uint targetFrame)
         {
             _simulation?.RollBack(targetFrame);
+        }
+
+        public void SetAutomationInputSource(IBattleAutomationInputSource inputSource)
+        {
+            _automationInputSource = inputSource;
+        }
+
+        public BattleAutomationClientSnapshot CaptureAutomationSnapshot(string clientId)
+        {
+            BattleWorldState worldState = _tickDriver?.WorldState;
+            List<BattleAutomationPlayerSnapshot> players = new List<BattleAutomationPlayerSnapshot>();
+            if (worldState != null)
+            {
+                foreach (PlayerState player in worldState.Players)
+                {
+                    bool isSelf = _simulation != null && player.PlayerId == _simulation.SelfPlayerId;
+                    players.Add(new BattleAutomationPlayerSnapshot
+                    {
+                        playerId = player.PlayerId,
+                        isSelf = isSelf,
+                        x = player.X,
+                        y = player.Y,
+                        health = player.Health,
+                        maxHealth = player.MaxHealth,
+                        mana = player.Mana,
+                        maxMana = player.MaxMana,
+                        attack = player.Attack
+                    });
+                }
+            }
+
+            return new BattleAutomationClientSnapshot
+            {
+                clientId = clientId ?? string.Empty,
+                joined = _joinSucceeded && _simulation != null && _simulation.IsJoined,
+                joinFailureReason = _joinFailureReason ?? string.Empty,
+                selfPlayerId = _simulation?.SelfPlayerId ?? 0L,
+                localFrame = (int)(_simulation?.LocalFrame ?? 0u),
+                lastAppliedFrame = (int)(_simulation?.LastAppliedFrame ?? 0u),
+                leadFrames = (int)(_simulation?.LeadFrames ?? 0u),
+                activePlayerCount = players.Count,
+                snapshotMessageCount = _snapshotMessageCount,
+                pongMessageCount = _pongMessageCount,
+                consistencyChecked = _simulation?.ConsistencyChecked ?? 0,
+                consistencyHits = _simulation?.ConsistencyHits ?? 0,
+                consistencyMisses = _simulation?.ConsistencyMisses ?? 0,
+                consistencySkippedNoRecord = _simulation?.ConsistencySkippedNoRecord ?? 0,
+                consistencySkippedEvicted = _simulation?.ConsistencySkippedEvicted ?? 0,
+                rollbackCount = _simulation?.RollbackCount ?? 0,
+                lastRollbackReplayFrames = _simulation?.LastRollbackReplayFrames ?? 0,
+                lastRollbackElapsedMs = (float)(_simulation?.LastRollbackElapsedMs ?? 0.0d),
+                players = players.ToArray()
+            };
         }
 
         private void OnDestroy()
@@ -177,25 +249,36 @@ namespace GameLogic
 
         private async FTask JoinBattleAsync()
         {
-            bool connected = await DataCenterSys.Instance.ConnectBattle(BattleServerAddress, BattleServerPort);
+            string battleServerAddress = BattleAutomationConfig.Current.Enabled
+                ? BattleAutomationConfig.Current.BattleServerAddress
+                : BattleServerAddress;
+            int battleServerPort = BattleAutomationConfig.Current.Enabled
+                ? BattleAutomationConfig.Current.BattleServerPort
+                : BattleServerPort;
+            bool connected = await DataCenterSys.Instance.ConnectBattle(battleServerAddress, battleServerPort);
             if (!connected)
             {
+                _joinFailureReason = $"connect-battle-failed:{battleServerAddress}:{battleServerPort}";
                 return;
             }
 
             C2B_JoinBattleResponse response = (C2B_JoinBattleResponse)await GameClient.Instance.Call(new C2B_JoinBattle());
             if (response == null)
             {
+                _joinFailureReason = "join-battle-response-null";
                 Log.Warning("[Battle] JoinBattle response is null.");
                 return;
             }
 
             if (response.ErrorCode != 0)
             {
+                _joinFailureReason = $"join-battle-error:{response.ErrorCode}";
                 Log.Warning($"[Battle] JoinBattle failed, ErrorCode={response.ErrorCode}");
                 return;
             }
 
+            _joinSucceeded = true;
+            _joinFailureReason = string.Empty;
             _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, response.X, response.Y);
             if (_tickDriver != null && _simulation != null)
             {
@@ -231,6 +314,7 @@ namespace GameLogic
                 return;
             }
 
+            _snapshotMessageCount++;
             BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(snapshot, out uint selfLatestAcceptedInputFrame);
             _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
         }
@@ -242,6 +326,7 @@ namespace GameLogic
                 return;
             }
 
+            _pongMessageCount++;
             long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             long rttMs = nowMs - (long)pong.SendTimestampMs;
             if (rttMs < 0)

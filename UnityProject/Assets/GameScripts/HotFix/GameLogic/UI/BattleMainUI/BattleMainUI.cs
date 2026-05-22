@@ -22,6 +22,7 @@ namespace GameLogic
         #endregion
 
         private BattleClientController _battleClientController;
+        private BattleAutomationController _battleAutomationController;
 
         protected override void OnCreate()
         {
@@ -34,12 +35,26 @@ namespace GameLogic
             }
 
             _battleClientController.Initialize();
+
+            if (BattleAutomationConfig.Current.Enabled)
+            {
+                Log.Warning(
+                    $"[Automation] BattleMainUI enabling automation controller. client={BattleAutomationConfig.Current.ClientId}");
+                _battleAutomationController = gameObject.GetComponent<BattleAutomationController>();
+                if (_battleAutomationController == null)
+                {
+                    _battleAutomationController = gameObject.AddComponent<BattleAutomationController>();
+                }
+
+                _battleAutomationController.Initialize(_battleClientController);
+            }
         }
 
         protected override void OnDestroy()
         {
             _battleClientController?.DisposeController();
             _battleClientController = null;
+            _battleAutomationController = null;
             base.OnDestroy();
         }
     }

@@ -1,0 +1,2 @@
+# startFrame,endFrame,dx,dy
+0,89,0,1

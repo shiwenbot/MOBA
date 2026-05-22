@@ -1,0 +1,451 @@
+param(
+    [string[]]$Scenario = @('two-client-join', 'two-client-basic-move', 'two-client-disconnect'),
+    [string]$UnityExePath = '',
+    [int]$ClientTimeoutSeconds = 120,
+    [string]$Bridge = 'puerts',
+    [string]$ControllerScriptPath = '',
+    [switch]$InteractiveEditor,
+    [switch]$SkipCloneCreation,
+    [switch]$NoBuild
+)
+
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = 'D:\unity\Tencent\TEngine'
+$unityProjectPath = Join-Path $repoRoot 'UnityProject'
+$serverProjectPath = Join-Path $repoRoot 'GameServer\Server\Main\Main.csproj'
+$editorExecuteMethod = 'RealClientAutomationEditor.RunAutomationClient'
+$cloneExecuteMethod = 'RealClientAutomationEditor.EnsureParrelSyncClone'
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$runRoot = Join-Path $repoRoot "_codex_tmp\battle-automation\$timestamp"
+New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
+
+function Resolve-UnityExePath {
+    param([string]$PreferredPath)
+
+    if ($PreferredPath -and (Test-Path -LiteralPath $PreferredPath)) {
+        return $PreferredPath
+    }
+
+    $candidates = @(
+        'C:\Program Files\Unity 2022.3.62f2\Editor\Unity.exe'
+    )
+
+    $hubCandidates = Get-ChildItem 'C:\Program Files\Unity\Hub\Editor' -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { Join-Path $_.FullName 'Editor\Unity.exe' }
+    $candidates += $hubCandidates
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
+    }
+
+    throw "Unity.exe was not found. Pass it explicitly with -UnityExePath."
+}
+
+function ConvertTo-CustomArgsString {
+    param([hashtable]$Values)
+
+    $pairs = foreach ($key in ($Values.Keys | Sort-Object)) {
+        "{0}={1}" -f $key, [Uri]::EscapeDataString([string]$Values[$key])
+    }
+
+    return '-CustomArgs:' + ($pairs -join ';')
+}
+
+function Get-UnityModeArguments {
+    if ($InteractiveEditor) {
+        return @()
+    }
+
+    return @('-batchmode', '-nographics')
+}
+
+function Test-PortListening {
+    param([int]$Port)
+
+    return [bool](netstat -ano | Select-String -Pattern (':{0}\s' -f $Port))
+}
+
+function Resolve-ControllerScriptPath {
+    param(
+        [string]$ScenarioName,
+        [string]$BridgeMode
+    )
+
+    if ($BridgeMode -ne 'puerts') {
+        return ''
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ControllerScriptPath)) {
+        return $ControllerScriptPath
+    }
+
+    $scriptFileName = "$ScenarioName.js.txt"
+    $scriptPath = Join-Path $unityProjectPath "Assets\StreamingAssets\BattleAutomation\Puerts\$scriptFileName"
+
+    if (Test-Path -LiteralPath $scriptPath) {
+        return $scriptPath
+    }
+
+    return ''
+}
+
+function Invoke-UnityMethod {
+    param(
+        [string]$ProjectPath,
+        [string]$ExecuteMethod,
+        [string]$LogPath,
+        [hashtable]$CustomArgs
+    )
+
+    $argumentList = [string[]]@(
+        (Get-UnityModeArguments),
+        '-projectPath', $ProjectPath,
+        '-executeMethod', $ExecuteMethod,
+        '-logFile', $LogPath,
+        (ConvertTo-CustomArgsString -Values $CustomArgs)
+    ).Where({ $_ -ne $null -and $_ -ne '' })
+
+    $process = Start-Process -FilePath $script:unityExe -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "Unity executeMethod failed. method=$ExecuteMethod exitCode=$($process.ExitCode) log=$LogPath"
+    }
+}
+
+function Ensure-ParrelSyncClone {
+    if ($SkipCloneCreation) {
+        $existing = Get-ChildItem -LiteralPath (Split-Path $unityProjectPath -Parent) -Directory |
+            Where-Object { $_.Name -like 'TEngine_clone_*' } |
+            Select-Object -First 1
+        if ($null -eq $existing) {
+            throw 'SkipCloneCreation was specified, but no TEngine_clone_* project was found.'
+        }
+
+        return $existing.FullName
+    }
+
+    $clonePathFile = Join-Path $runRoot 'clone-path.txt'
+    $cloneLogPath = Join-Path $runRoot 'ensure-clone.log'
+    Invoke-UnityMethod `
+        -ProjectPath $unityProjectPath `
+        -ExecuteMethod $cloneExecuteMethod `
+        -LogPath $cloneLogPath `
+        -CustomArgs @{ clonePathFile = $clonePathFile }
+
+    if (!(Test-Path -LiteralPath $clonePathFile)) {
+        throw "ParrelSync clone path file was not generated: $clonePathFile"
+    }
+
+    $clonePath = (Get-Content -LiteralPath $clonePathFile -Encoding UTF8 | Select-Object -First 1).Trim()
+    if ([string]::IsNullOrWhiteSpace($clonePath) -or !(Test-Path -LiteralPath $clonePath)) {
+        throw "ParrelSync clone path is invalid: $clonePath"
+    }
+
+    return $clonePath
+}
+
+function Start-ServerProcess {
+    param([string]$ScenarioName)
+
+    $serverLogPath = Join-Path $runRoot "$ScenarioName\server.log"
+    $serverErrPath = Join-Path $runRoot "$ScenarioName\server.err.log"
+    $serverDir = Split-Path $serverLogPath -Parent
+    New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+
+    if (Test-PortListening -Port 20101) {
+        'Reusing existing battle server on 20101.' | Set-Content -LiteralPath $serverLogPath -Encoding UTF8
+        return @{
+            Process = $null
+            LogPath = $serverLogPath
+            ErrorPath = $serverErrPath
+            ReusedExisting = $true
+        }
+    }
+
+    $args = @(
+        'run',
+        '--project', $serverProjectPath,
+        '--framework', 'net8.0'
+    )
+
+    if ($NoBuild) {
+        $args += '--no-build'
+    }
+
+    $args += '--'
+    $args += '-m'
+    $args += 'Develop'
+
+    $serverCommand = @(
+        'dotnet run',
+        '--project "' + $serverProjectPath + '"',
+        '--framework net8.0',
+        $(if ($NoBuild) { '--no-build' } else { '' }),
+        '-- -m Release --pid 2001',
+        '1>> "' + $serverLogPath + '"',
+        '2>> "' + $serverErrPath + '"'
+    ) -join ' '
+
+    $process = Start-Process `
+        -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+        -ArgumentList @('-NoProfile', '-Command', $serverCommand) `
+        -PassThru `
+        -WindowStyle Hidden
+
+    Start-Sleep -Seconds 6
+    if ($process.HasExited) {
+        throw "Server startup failed because the process exited early. Check: $serverLogPath / $serverErrPath"
+    }
+
+    return @{
+        Process = $process
+        LogPath = $serverLogPath
+        ErrorPath = $serverErrPath
+        ReusedExisting = $false
+    }
+}
+
+function Stop-ServerProcess {
+    param($ServerState)
+
+    if ($null -eq $ServerState -or $null -eq $ServerState.Process) {
+        return
+    }
+
+    if (!$ServerState.Process.HasExited) {
+        Stop-Process -Id $ServerState.Process.Id -Force
+        $ServerState.Process.WaitForExit()
+    }
+}
+
+function Start-AutomationClient {
+    param(
+        [string]$ProjectPath,
+        [string]$ScenarioName,
+        [string]$ClientId
+    )
+
+    $clientDir = Join-Path $runRoot $ScenarioName
+    New-Item -ItemType Directory -Path $clientDir -Force | Out-Null
+
+    $reportPath = Join-Path $clientDir "$ClientId-report.json"
+    $eventLogPath = Join-Path $clientDir "$ClientId-events.log"
+    $unityLogPath = Join-Path $clientDir "$ClientId-unity.log"
+    if (Test-Path -LiteralPath $reportPath) {
+        Remove-Item -LiteralPath $reportPath -Force
+    }
+
+    $resolvedControllerScript = Resolve-ControllerScriptPath -ScenarioName $ScenarioName -BridgeMode $Bridge
+
+    $lingerSeconds = '30'
+    if ($ScenarioName -eq 'two-client-disconnect') {
+        $lingerSeconds = '0'
+    }
+
+    $customArgs = @{
+        battleAutomation = '1'
+        battleServerAddress = '127.0.0.1'
+        battleServerPort = '20101'
+        autoOpenBattleUi = '1'
+        autoCloseAfterFinish = '1'
+        bridge = $Bridge
+        clientId = $ClientId
+        controllerScriptPath = $resolvedControllerScript
+        eventLogPath = $eventLogPath
+        lingerSeconds = $lingerSeconds
+        minimumPlayerCount = '2'
+        movementDistanceThreshold = '1.0'
+        movementFrames = '90'
+        reportPath = $reportPath
+        scenario = $ScenarioName
+        settleFrames = '30'
+        timeoutSeconds = $ClientTimeoutSeconds.ToString()
+    }
+
+    $argumentList = [string[]]@(
+        (Get-UnityModeArguments),
+        '-projectPath', $ProjectPath,
+        '-executeMethod', $editorExecuteMethod,
+        '-logFile', $unityLogPath,
+        (ConvertTo-CustomArgsString -Values $customArgs)
+    ).Where({ $_ -ne $null -and $_ -ne '' })
+
+    $process = Start-Process -FilePath $script:unityExe -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+    return @{
+        ClientId = $ClientId
+        Process = $process
+        ReportPath = $reportPath
+        EventLogPath = $eventLogPath
+        UnityLogPath = $unityLogPath
+    }
+}
+
+function Wait-ClientProcess {
+    param($ClientState)
+
+    $deadline = (Get-Date).AddSeconds($ClientTimeoutSeconds + 180)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $ClientState.ReportPath) {
+            return Get-Content -LiteralPath $ClientState.ReportPath -Encoding UTF8 | ConvertFrom-Json
+        }
+
+        if ($ClientState.Process.HasExited) {
+            throw "Client process exited before producing a report: $($ClientState.ClientId) exit=$($ClientState.Process.ExitCode)"
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Client report was not generated before timeout: $($ClientState.ClientId) path=$($ClientState.ReportPath)"
+}
+
+function Stop-ClientProcess {
+    param($ClientState)
+
+    if ($null -eq $ClientState -or $null -eq $ClientState.Process) {
+        return
+    }
+
+    if (!$ClientState.Process.HasExited) {
+        Stop-Process -Id $ClientState.Process.Id -Force
+        $ClientState.Process.WaitForExit()
+    }
+}
+
+function Wait-BothClients {
+    param($ClientA, $ClientB)
+
+    $reportA = $null
+    $reportB = $null
+    $errorA = $null
+    $errorB = $null
+    $deadline = (Get-Date).AddSeconds($ClientTimeoutSeconds + 180)
+
+    while ((Get-Date) -lt $deadline) {
+        if ($null -eq $reportA -and (Test-Path -LiteralPath $ClientA.ReportPath)) {
+            $reportA = Get-Content -LiteralPath $ClientA.ReportPath -Encoding UTF8 | ConvertFrom-Json
+        }
+
+        if ($null -eq $reportB -and (Test-Path -LiteralPath $ClientB.ReportPath)) {
+            $reportB = Get-Content -LiteralPath $ClientB.ReportPath -Encoding UTF8 | ConvertFrom-Json
+        }
+
+        if ($null -ne $reportA -and $null -ne $reportB) {
+            Stop-ClientProcess $ClientA
+            Stop-ClientProcess $ClientB
+            return @{ ReportA = $reportA; ReportB = $reportB }
+        }
+
+        if ($null -eq $reportA -and $ClientA.Process.HasExited) {
+            $errorA = "Client A exited without report: exit=$($ClientA.Process.ExitCode)"
+        }
+
+        if ($null -eq $reportB -and $ClientB.Process.HasExited) {
+            $errorB = "Client B exited without report: exit=$($ClientB.Process.ExitCode)"
+        }
+
+        if ($null -ne $errorA -and $null -ne $errorB) {
+            throw "$errorA; $errorB"
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    Stop-ClientProcess $ClientA
+    Stop-ClientProcess $ClientB
+    throw "Timeout waiting for both clients"
+}
+
+function Write-CombinedReports {
+    param([object[]]$ScenarioResults)
+
+    $jsonPath = Join-Path $runRoot 'combined-report.json'
+    $markdownPath = Join-Path $runRoot 'combined-report.md'
+    $payload = [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        passed = ($ScenarioResults | Where-Object { -not $_.Passed }).Count -eq 0
+        scenarios = $ScenarioResults
+    }
+
+    $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Real Client Automation Report')
+    $lines.Add('')
+    $lines.Add('- Generated At: ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))
+    $lines.Add('- Result: ' + $(if ($payload.passed) { 'PASS' } else { 'FAIL' }))
+    $lines.Add('')
+    $lines.Add('## Scenario Results')
+    $lines.Add('')
+
+    foreach ($result in $ScenarioResults) {
+        $lines.Add('- ' + $result.Scenario + ': ' + $(if ($result.Passed) { 'PASS' } else { 'FAIL' }))
+        $lines.Add('  serverLog: ' + $result.ServerLogPath)
+        $lines.Add('  clientAReport: ' + $result.ClientAReportPath)
+        $lines.Add('  clientBReport: ' + $result.ClientBReportPath)
+    }
+
+    Set-Content -LiteralPath $markdownPath -Value $lines -Encoding UTF8
+    return @{
+        JsonPath = $jsonPath
+        MarkdownPath = $markdownPath
+        Passed = $payload.passed
+    }
+}
+
+$script:unityExe = Resolve-UnityExePath -PreferredPath $UnityExePath
+
+if (-not $NoBuild) {
+    dotnet build (Join-Path $repoRoot 'GameServer\Server\Server.sln') -c Debug -v minimal -m:1
+    dotnet build (Join-Path $repoRoot 'UnityProject\GameLogic.csproj') -c Debug -v minimal -m:1
+    dotnet build (Join-Path $repoRoot 'UnityProject\Assembly-CSharp-Editor.csproj') -c Debug -v minimal -m:1
+}
+
+$cloneProjectPath = Ensure-ParrelSyncClone
+$scenarioResults = New-Object System.Collections.Generic.List[object]
+
+foreach ($scenarioName in $Scenario) {
+    $serverState = $null
+    try {
+        $serverState = Start-ServerProcess -ScenarioName $scenarioName
+        $clientA = Start-AutomationClient -ProjectPath $unityProjectPath -ScenarioName $scenarioName -ClientId 'client-a'
+        $clientB = Start-AutomationClient -ProjectPath $cloneProjectPath -ScenarioName $scenarioName -ClientId 'client-b'
+
+        $bothReports = Wait-BothClients -ClientA $clientA -ClientB $clientB
+        $clientAReport = $bothReports.ReportA
+        $clientBReport = $bothReports.ReportB
+
+        $passed = [bool]$clientAReport.passed -and [bool]$clientBReport.passed -and -not $serverState.Process.HasExited
+        $scenarioResults.Add([pscustomobject]@{
+            Scenario = $scenarioName
+            Passed = $passed
+            ServerLogPath = $serverState.LogPath
+            ServerErrorLogPath = $serverState.ErrorPath
+            ClientAReportPath = $clientA.ReportPath
+            ClientBReportPath = $clientB.ReportPath
+            ClientAUnityLogPath = $clientA.UnityLogPath
+            ClientBUnityLogPath = $clientB.UnityLogPath
+            ClientAReason = $clientAReport.reason
+            ClientBReason = $clientBReport.reason
+        })
+    }
+    finally {
+        Stop-ServerProcess -ServerState $serverState
+    }
+}
+
+$combined = Write-CombinedReports -ScenarioResults $scenarioResults
+Write-Output "Combined JSON: $($combined.JsonPath)"
+Write-Output "Combined Markdown: $($combined.MarkdownPath)"
+
+if (-not $combined.Passed -and -not $InteractiveEditor) {
+    Write-Warning 'If Unity shows LicensingClient errors or exit code 199, retry with -InteractiveEditor.'
+}
+
+if (-not $combined.Passed) {
+    exit 1
+}

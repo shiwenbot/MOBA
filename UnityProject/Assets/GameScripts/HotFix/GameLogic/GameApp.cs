@@ -40,7 +40,16 @@ public partial class GameApp
         async UniTaskVoid Init()
         {
             await GameClient.Instance.InitAsync(_hotfixAssembly);
-            GameModule.UI.ShowUIAsync<LoginUI>();
+            if (BattleAutomationConfig.Current.Enabled && BattleAutomationConfig.Current.AutoOpenBattleUi)
+            {
+                Log.Warning(
+                    $"[Automation] Auto-opening BattleMainUI. client={BattleAutomationConfig.Current.ClientId} scenario={BattleAutomationConfig.Current.Scenario}");
+                GameModule.UI.ShowUIAsync<BattleMainUI>();
+            }
+            else
+            {
+                GameModule.UI.ShowUIAsync<LoginUI>();
+            }
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             SkillGraphStepBSmokeTest.Run();
 #endif

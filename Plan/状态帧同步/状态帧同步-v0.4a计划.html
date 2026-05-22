@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>状态帧同步 v0.4a — Box2D 物理集成与移动脏同步</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #79c0ff;
+    --green: #3fb950;
+    --green-dim: #238636;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39d2c0;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* ── Nav ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(13,17,23,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex; align-items: center; gap: 24px;
+    height: 52px;
+  }
+  nav .logo {
+    font-weight: 700; font-size: 14px; color: var(--accent);
+    white-space: nowrap;
+  }
+  nav .logo span { color: var(--text-dim); font-weight: 400; }
+  nav .nav-links { display: flex; gap: 4px; overflow-x: auto; }
+  nav a {
+    color: var(--text-dim); text-decoration: none;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px;
+    white-space: nowrap; transition: all 0.15s;
+  }
+  nav a:hover { color: var(--text); background: var(--surface); }
+  nav .badge {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 99px;
+  }
+  .badge-status { background: rgba(210,153,34,0.2); color: var(--orange); }
+
+  /* ── Layout ── */
+  main {
+    max-width: 960px;
+    margin: 72px auto 80px;
+    padding: 0 24px;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    margin-bottom: 48px; padding: 40px 0 32px;
+    border-bottom: 1px solid var(--border);
+  }
+  .hero h1 {
+    font-size: 28px; font-weight: 700; margin-bottom: 8px;
+  }
+  .hero h1 em { color: var(--accent); font-style: normal; }
+  .hero .subtitle { color: var(--text-dim); font-size: 15px; margin-bottom: 20px; }
+  .hero .meta { display: flex; gap: 16px; flex-wrap: wrap; }
+  .hero .meta-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-dim);
+    background: var(--surface); padding: 4px 12px;
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  .hero .meta-item .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+
+  /* ── Sections ── */
+  section { margin-bottom: 48px; }
+  section h2 {
+    font-size: 20px; font-weight: 600; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section h2 .icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  section h3 { font-size: 16px; font-weight: 600; margin: 20px 0 8px; color: var(--accent2); }
+  section p { color: var(--text-dim); margin-bottom: 12px; font-size: 14px; }
+
+  /* ── Context Callout ── */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 24px;
+  }
+  .callout p { color: var(--text); margin: 0; font-size: 14px; }
+  .callout strong { color: var(--accent); }
+
+  /* ── Cards ── */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    transition: border-color 0.15s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card .card-title {
+    font-weight: 600; font-size: 14px; margin-bottom: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card .card-body { color: var(--text-dim); font-size: 13px; }
+
+  /* ── Constraint List ── */
+  .constraint-list { display: flex; flex-direction: column; gap: 10px; }
+  .constraint {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    display: flex; gap: 12px; align-items: flex-start;
+  }
+  .constraint .num {
+    min-width: 28px; height: 28px;
+    background: var(--green-dim);
+    color: var(--green);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; flex-shrink: 0;
+  }
+  .constraint .label { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .constraint .desc { color: var(--text-dim); font-size: 13px; }
+
+  /* ── Steps Timeline ── */
+  .timeline { position: relative; padding-left: 36px; }
+  .timeline::before {
+    content: ''; position: absolute; left: 14px; top: 8px; bottom: 8px;
+    width: 2px; background: var(--border);
+  }
+  .step {
+    position: relative; margin-bottom: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .step:hover { border-color: var(--accent); }
+  .step::before {
+    content: ''; position: absolute;
+    left: -30px; top: 22px;
+    width: 12px; height: 12px;
+    background: var(--surface2);
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    z-index: 1;
+  }
+  .step.active::before { background: var(--accent); }
+  .step .step-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .step .step-num {
+    font-size: 11px; font-weight: 700;
+    background: rgba(88,166,255,0.15);
+    color: var(--accent);
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .step .step-title { font-weight: 600; font-size: 15px; }
+  .step .step-body {
+    color: var(--text-dim); font-size: 13px;
+    overflow: hidden; transition: max-height 0.3s;
+  }
+  .step ul { margin: 8px 0; padding-left: 18px; }
+  .step li { margin-bottom: 4px; }
+
+  /* ── Data Flow Diagram ── */
+  .diagram-container {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+  .diagram-container svg text { font-family: -apple-system, 'Segoe UI', sans-serif; }
+
+  /* ── Checklist ── */
+  .checklist { display: flex; flex-direction: column; gap: 8px; }
+  .check-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    transition: opacity 0.2s;
+  }
+  .check-item.done { opacity: 0.5; text-decoration: line-through; }
+  .check-box {
+    width: 18px; height: 18px; border-radius: 4px;
+    border: 2px solid var(--border);
+    flex-shrink: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .check-box:hover { border-color: var(--accent); }
+  .check-box.checked {
+    background: var(--green-dim); border-color: var(--green);
+  }
+  .check-box.checked::after { content: '✓'; color: var(--green); font-size: 12px; }
+
+  /* ── File Tree ── */
+  .file-tree {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px; line-height: 1.8;
+  }
+  .file-tree .dir { color: var(--accent); }
+  .file-tree .file { color: var(--text); }
+  .file-tree .new { color: var(--green); font-weight: 600; }
+  .file-tree .modify { color: var(--orange); }
+  .file-tree .comment { color: var(--text-dim); font-style: italic; }
+
+  /* ── Non-goals ── */
+  .nongoal-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .nongoal {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px; color: var(--text-dim);
+  }
+  .nongoal .x { color: var(--red); font-weight: 700; }
+
+  /* ── Tabs ── */
+  .tabs { margin-bottom: 16px; }
+  .tab-bar {
+    display: flex; gap: 2px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .tab-btn {
+    padding: 8px 16px; font-size: 13px;
+    background: none; border: none; color: var(--text-dim);
+    cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding: 24px;
+    color: var(--text-dim); font-size: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    nav .nav-links { display: none; }
+    .hero h1 { font-size: 22px; }
+    .card-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Print ── */
+  @media print {
+    nav { position: static; }
+    body { background: #fff; color: #000; }
+    .card, .step, .constraint, .callout { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">v0.4a <span>— Box2D 物理集成</span></div>
+  <div class="nav-links">
+    <a href="#context">背景</a>
+    <a href="#goals">目标</a>
+    <a href="#constraints">约束</a>
+    <a href="#architecture">架构</a>
+    <a href="#steps">实现步骤</a>
+    <a href="#verify">验证</a>
+    <a href="#files">文件</a>
+    <a href="#next">后续</a>
+  </div>
+  <span class="badge badge-status">未开始</span>
+</nav>
+
+<main>
+
+<!-- ════════ Hero ════════ -->
+<div class="hero">
+  <h1>状态帧同步 v0.4a<br><em>Box2D 物理集成与移动脏同步</em></h1>
+  <p class="subtitle">将快照结构从"逻辑状态"升级为"逻辑状态 + 物理状态"的统一快照，让物理世界进入确定性回滚链路。</p>
+  <div class="meta">
+    <div class="meta-item"><div class="dot" style="background:var(--orange)"></div> 未开始</div>
+    <div class="meta-item">📅 2026-05-16</div>
+    <div class="meta-item">⏱ 固定步长 33.333ms</div>
+    <div class="meta-item">📦 依赖 v0.3c 完成</div>
+  </div>
+</div>
+
+<!-- ════════ Context ════════ -->
+<section id="context">
+  <h2><span class="icon" style="background:rgba(88,166,255,0.15);color:var(--accent)">📋</span> 背景与动机</h2>
+  <div class="callout">
+    <p><strong>v0.3c 已完成全局帧号、快照回滚、逐帧重播和输入缓冲闭环控制。</strong> 但当前 BattleWorldSnapshot 只完整覆盖了逻辑层玩家位置状态，物理世界仍然只是占位字段，尚未形成可回滚、可哈希、可重播的 Box2D 世界状态快照。</p>
+  </div>
+
+  <p>v0.4a 的核心不是"把移动改成物理移动"，而是先把 Box2D 接入现有确定性坐标系，确保物理状态进入同一条快照/回滚链路。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title"><span style="color:var(--green)">✓</span> 已有能力</div>
+      <div class="card-body">
+        <ul>
+          <li>服务端 30Hz 权威推进</li>
+          <li>客户端预测、追帧与回滚</li>
+          <li>基于快照的状态恢复与一致性校验</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span style="color:var(--orange)">⚠</span> 待补齐</div>
+      <div class="card-body">
+        <ul>
+          <li>物理快照从占位 → 强类型</li>
+          <li>Box2D 世界可回滚、可哈希</li>
+          <li>物理状态进入统一快照链路</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ Goals ════════ -->
+<section id="goals">
+  <h2><span class="icon" style="background:rgba(63,185,80,0.15);color:var(--green)">🎯</span> 目标</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">🔄 统一快照</div>
+      <div class="card-body">从"逻辑状态快照"升级为"逻辑状态 + 物理状态"统一快照</div>
+    </div>
+    <div class="card">
+      <div class="card-title">⚙️ Box2D 推进</div>
+      <div class="card-body">双端接入 Box2D 世界推进，固定 dt = 33.333ms</div>
+    </div>
+    <div class="card">
+      <div class="card-title">⏪ 物理回滚</div>
+      <div class="card-body">回滚与重播路径可恢复 Box2D 刚体状态</div>
+    </div>
+    <div class="card">
+      <div class="card-title">🚀 物理移动同步</div>
+      <div class="card-body">移动同步从纯坐标累加切换为物理结果同步</div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ Non-Goals ════════ -->
+<section>
+  <h2><span class="icon" style="background:rgba(248,81,73,0.15);color:var(--red)">🚫</span> 非目标</h2>
+  <div class="nongoal-list">
+    <div class="nongoal"><span class="x">✕</span> 技能、Buff、属性脏同步</div>
+    <div class="nongoal"><span class="x">✕</span> 断线重连 / 重传协议</div>
+    <div class="nongoal"><span class="x">✕</span> 动态仿真速率 / 时间膨胀</div>
+    <div class="nongoal"><span class="x">✕</span> 完整碰撞玩法（仅确定性快照+恢复+验证）</div>
+  </div>
+</section>
+
+<!-- ════════ Constraints ════════ -->
+<section id="constraints">
+  <h2><span class="icon" style="background:rgba(210,153,34,0.15);color:var(--orange)">🔒</span> 设计约束</h2>
+  <div class="constraint-list">
+    <div class="constraint">
+      <div class="num">1</div>
+      <div>
+        <div class="label">固定步长不变</div>
+        <div class="desc">Box2D Step 始终使用 33.333ms，追帧时只增加 Tick 次数，不允许修改 dt。</div>
+      </div>
+    </div>
+    <div class="constraint">
+      <div class="num">2</div>
+      <div>
+        <div class="label">回滚坐标系不变</div>
+        <div class="desc">回滚仍以全局逻辑帧号为唯一坐标系，物理状态必须和逻辑状态共用同一 FrameIndex。</div>
+      </div>
+    </div>
+    <div class="constraint">
+      <div class="num">3</div>
+      <div>
+        <div class="label">快照为唯一恢复来源</div>
+        <div class="desc">回滚必须通过"权威快照 + 本地输入历史 + 逐帧重播"恢复，不允许读取 Unity 场景状态兜底。</div>
+      </div>
+    </div>
+    <div class="constraint">
+      <div class="num">4</div>
+      <div>
+        <div class="label">物理状态必须可哈希</div>
+        <div class="desc">快照至少覆盖：刚体标识、位置、旋转、线速度、角速度、激活/休眠状态、接触信息占位。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ Architecture Diagram ════════ -->
+<section id="architecture">
+  <h2><span class="icon" style="background:rgba(188,140,255,0.15);color:var(--purple)">🏗</span> 架构数据流</h2>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 860 380" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:860px;">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+        </marker>
+        <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/>
+        </marker>
+        <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d29922"/>
+        </marker>
+      </defs>
+
+      <!-- Title -->
+      <text x="430" y="24" text-anchor="middle" fill="#8b949e" font-size="12">v0.4a 数据流：物理状态进入统一快照链路</text>
+
+      <!-- ── Server Side ── -->
+      <rect x="20" y="50" width="380" height="300" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="210" y="74" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">服务端 (Authority)</text>
+
+      <!-- Input -->
+      <rect x="50" y="90" width="130" height="44" rx="6" fill="#1c2333" stroke="#58a6ff" stroke-width="1"/>
+      <text x="115" y="116" text-anchor="middle" fill="#e6edf3" font-size="12">玩家输入</text>
+
+      <!-- Box2D Step -->
+      <rect x="230" y="90" width="140" height="44" rx="6" fill="#1c2333" stroke="#3fb950" stroke-width="1.5"/>
+      <text x="300" y="108" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">Box2D Step</text>
+      <text x="300" y="124" text-anchor="middle" fill="#8b949e" font-size="10">dt = 33.333ms</text>
+
+      <!-- Arrow: Input → Box2D -->
+      <line x1="180" y1="112" x2="228" y2="112" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- Logic State -->
+      <rect x="50" y="170" width="130" height="44" rx="6" fill="#1c2333" stroke="#58a6ff" stroke-width="1"/>
+      <text x="115" y="193" text-anchor="middle" fill="#e6edf3" font-size="12">逻辑状态</text>
+
+      <!-- Physics State -->
+      <rect x="230" y="170" width="140" height="44" rx="6" fill="#1c2333" stroke="#3fb950" stroke-width="1.5"/>
+      <text x="300" y="193" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">物理状态</text>
+
+      <!-- Arrow: Box2D → Logic & Physics -->
+      <line x1="270" y1="134" x2="150" y2="168" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4" marker-end="url(#arrow)"/>
+      <line x1="320" y1="134" x2="310" y2="168" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+      <!-- Unified Snapshot -->
+      <rect x="100" y="252" width="220" height="52" rx="8" fill="#1c2333" stroke="#bc8cff" stroke-width="2"/>
+      <text x="210" y="274" text-anchor="middle" fill="#bc8cff" font-size="13" font-weight="700">统一快照</text>
+      <text x="210" y="293" text-anchor="middle" fill="#8b949e" font-size="10">逻辑 + 物理 · FrameIndex</text>
+
+      <!-- Arrow: Logic → Snapshot -->
+      <line x1="140" y1="214" x2="170" y2="250" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+      <!-- Arrow: Physics → Snapshot -->
+      <line x1="280" y1="214" x2="250" y2="250" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+      <!-- Hash -->
+      <rect x="140" y="322" width="140" height="24" rx="4" fill="#238636" fill-opacity="0.2"/>
+      <text x="210" y="339" text-anchor="middle" fill="#3fb950" font-size="11">StateHasher 统一哈希</text>
+      <line x1="210" y1="304" x2="210" y2="320" stroke="#3fb950" stroke-width="1" marker-end="url(#arrow-green)"/>
+
+      <!-- ── Client Side ── -->
+      <rect x="460" y="50" width="380" height="300" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="650" y="74" text-anchor="middle" fill="#d29922" font-size="13" font-weight="600">客户端 (Prediction)</text>
+
+      <!-- Local Input -->
+      <rect x="490" y="90" width="130" height="44" rx="6" fill="#1c2333" stroke="#d29922" stroke-width="1"/>
+      <text x="555" y="116" text-anchor="middle" fill="#e6edf3" font-size="12">本地输入</text>
+
+      <!-- Client Box2D -->
+      <rect x="670" y="90" width="140" height="44" rx="6" fill="#1c2333" stroke="#3fb950" stroke-width="1.5"/>
+      <text x="740" y="108" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">Box2D Step</text>
+      <text x="740" y="124" text-anchor="middle" fill="#8b949e" font-size="10">dt = 33.333ms</text>
+
+      <line x1="620" y1="112" x2="668" y2="112" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+      <!-- Client Prediction -->
+      <rect x="490" y="170" width="130" height="44" rx="6" fill="#1c2333" stroke="#d29922" stroke-width="1"/>
+      <text x="555" y="193" text-anchor="middle" fill="#e6edf3" font-size="12">预测状态</text>
+
+      <!-- Client Physics -->
+      <rect x="670" y="170" width="140" height="44" rx="6" fill="#1c2333" stroke="#3fb950" stroke-width="1.5"/>
+      <text x="740" y="193" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">物理状态</text>
+
+      <line x1="710" y1="134" x2="590" y2="168" stroke="#d29922" stroke-width="1" stroke-dasharray="4" marker-end="url(#arrow-orange)"/>
+      <line x1="760" y1="134" x2="750" y2="168" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+      <!-- Rollback -->
+      <rect x="540" y="252" width="220" height="52" rx="8" fill="#1c2333" stroke="#f85149" stroke-width="2"/>
+      <text x="650" y="274" text-anchor="middle" fill="#f85149" font-size="13" font-weight="700">回滚 + 重播</text>
+      <text x="650" y="293" text-anchor="middle" fill="#8b949e" font-size="10">恢复逻辑 + 物理 → 逐帧重放</text>
+
+      <line x1="580" y1="214" x2="610" y2="250" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+      <line x1="730" y1="214" x2="700" y2="250" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+      <!-- Consistency -->
+      <rect x="580" y="322" width="140" height="24" rx="4" fill="#238636" fill-opacity="0.2"/>
+      <text x="650" y="339" text-anchor="middle" fill="#3fb950" font-size="11">一致性校验</text>
+      <line x1="650" y1="304" x2="650" y2="320" stroke="#3fb950" stroke-width="1" marker-end="url(#arrow-green)"/>
+
+      <!-- ── Cross arrows ── -->
+      <!-- Server snapshot → Client rollback -->
+      <line x1="320" y1="278" x2="538" y2="278" stroke="#bc8cff" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrow)"/>
+      <text x="430" y="270" text-anchor="middle" fill="#bc8cff" font-size="10">权威快照广播</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ════════ Steps ════════ -->
+<section id="steps">
+  <h2><span class="icon" style="background:rgba(88,166,255,0.15);color:var(--accent)">🛠</span> 实现步骤</h2>
+
+  <div class="timeline">
+    <div class="step active" onclick="this.classList.toggle('expanded')">
+      <div class="step-header">
+        <span class="step-num">Step 0</span>
+        <span class="step-title">补齐共享快照骨架</span>
+      </div>
+      <div class="step-body">
+        <ul>
+          <li>将 BattleWorldSnapshot 中的 PhysicsSnapshot 从弱类型占位升级为强类型</li>
+          <li>新增 PhysicsWorldSnapshot、PhysicsBodySnapshot、PhysicsContactSnapshot 等共享快照结构</li>
+          <li>为 BattleWorldState 增加可选物理快照提供器/恢复器接口</li>
+          <li>扩展 StateHasher，让物理状态进入统一哈希</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-header">
+        <span class="step-num">Step 1</span>
+        <span class="step-title">抽象 Box2D 世界适配层</span>
+      </div>
+      <div class="step-body">
+        <ul>
+          <li>在共享层或服务端/客户端共用层引入 Box2D 世界适配接口</li>
+          <li>明确"逻辑层玩家实体"和"物理层刚体句柄"的映射方式</li>
+          <li>定义最小可运行场景：玩家刚体创建、固定步长推进、结果回写</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-header">
+        <span class="step-num">Step 2</span>
+        <span class="step-title">服务端接入物理推进</span>
+      </div>
+      <div class="step-body">
+        <ul>
+          <li>服务端 BattleLogic 每帧逻辑推进时同步推进 Box2D 世界</li>
+          <li>移动结果不再依赖 MoveSystem.Apply 的纯坐标累加，而是通过物理世界求得</li>
+          <li>广播快照时带出物理快照数据</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-header">
+        <span class="step-num">Step 3</span>
+        <span class="step-title">客户端接入物理回滚与重播</span>
+      </div>
+      <div class="step-body">
+        <ul>
+          <li>客户端预测帧执行时同步推进本地 Box2D 世界</li>
+          <li>应用权威快照时同时恢复逻辑状态与物理状态</li>
+          <li>回滚重播时使用恢复后的物理世界逐帧重放输入，验证结果一致</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-header">
+        <span class="step-num">Step 4</span>
+        <span class="step-title">移动同步切换为物理结果同步</span>
+      </div>
+      <div class="step-body">
+        <ul>
+          <li>客户端/服务端共享移动输入到物理力学或速度驱动的统一规则</li>
+          <li>快照一致性校验从"仅位置一致"升级为"位置/速度/物理状态一致"</li>
+          <li>保留当前日志与无头测试入口，补充物理集成后的回归用例</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ Verification ════════ -->
+<section id="verify">
+  <h2><span class="icon" style="background:rgba(57,210,192,0.15);color:var(--cyan)">✅</span> 验证方式</h2>
+
+  <div class="tabs">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab(event, 'tab-determinism')">确定性验证</button>
+      <button class="tab-btn" onclick="switchTab(event, 'tab-engineering')">工程验证</button>
+      <button class="tab-btn" onclick="switchTab(event, 'tab-checklist')">完成标准</button>
+    </div>
+
+    <div class="tab-content active" id="tab-determinism">
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-title">🔄 重复一致</div>
+          <div class="card-body">相同初始状态 + 相同输入序列，多次运行 Box2D 结果一致</div>
+        </div>
+        <div class="card">
+          <div class="card-title">💾 快照往返</div>
+          <div class="card-body">快照保存 → 恢复 → 重放后，状态哈希完全一致</div>
+        </div>
+        <div class="card">
+          <div class="card-title">🩹 不一致恢复</div>
+          <div class="card-body">人为注入不一致后，客户端回滚恢复正确</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-engineering">
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-title">🧪 自测通过</div>
+          <div class="card-body">prediction-self 与快照自测继续通过</div>
+        </div>
+        <div class="card">
+          <div class="card-title">📐 新增用例</div>
+          <div class="card-body">物理快照自测、物理回滚自测、物理追帧自测</div>
+        </div>
+        <div class="card">
+          <div class="card-title">⚡ 性能监控</div>
+          <div class="card-body">统计 Box2D Step 与回滚重播耗时，确保不拖垮渲染帧</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-checklist">
+      <div class="checklist">
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>BattleWorldSnapshot 正式承载强类型物理快照，而非 object 占位</span>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>服务端与客户端都能对 Box2D 世界做固定步长推进</span>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>回滚时可以同时恢复逻辑状态和物理状态</span>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>物理状态进入统一状态哈希</span>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>无头自测覆盖物理快照、物理恢复、物理回滚重播</span>
+        </div>
+        <div class="check-item" onclick="toggleCheck(this)">
+          <div class="check-box"></div>
+          <span>双端联调下移动结果稳定，无明显结构性回归</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ Files ════════ -->
+<section id="files">
+  <h2><span class="icon" style="background:rgba(210,153,34,0.15);color:var(--orange)">📁</span> 预期改动文件</h2>
+
+  <div class="file-tree">
+    <div><span class="dir">Plan/状态帧同步/</span></div>
+    <div>&nbsp;&nbsp;├── <span class="file">状态帧同步-v0.4a计划.md</span> <span class="comment">← 本文档</span></div>
+    <div></div>
+    <div><span class="dir">UnityProject/.../GameShared/FrameSync/Battle/</span></div>
+    <div>&nbsp;&nbsp;├── <span class="modify">BattleWorldSnapshot.cs</span> <span class="comment">← 修改：物理快照强类型化</span></div>
+    <div>&nbsp;&nbsp;├── <span class="modify">BattleWorldState.cs</span> <span class="comment">← 修改：物理提供器接口</span></div>
+    <div>&nbsp;&nbsp;├── <span class="new">PhysicsWorldSnapshot.cs</span> <span class="comment">← 新增</span></div>
+    <div>&nbsp;&nbsp;├── <span class="new">PhysicsBodySnapshot.cs</span> <span class="comment">← 新增</span></div>
+    <div>&nbsp;&nbsp;├── <span class="new">PhysicsContactSnapshot.cs</span> <span class="comment">← 新增</span></div>
+    <div>&nbsp;&nbsp;└── <span class="new">IPhysicsSnapshotProvider.cs</span> <span class="comment">← 新增</span></div>
+    <div></div>
+    <div><span class="dir">UnityProject/.../GameShared/FrameSync/Snapshot/</span></div>
+    <div>&nbsp;&nbsp;└── <span class="modify">StateHasher.cs</span> <span class="comment">← 修改：扩展物理哈希</span></div>
+    <div></div>
+    <div><span class="dir">GameServer/Server/Entity/Battle/</span></div>
+    <div>&nbsp;&nbsp;└── <span class="modify">BattleLogic.cs</span> <span class="comment">← 修改：物理推进</span></div>
+    <div></div>
+    <div><span class="dir">UnityProject/.../GameLogic/Battle/</span></div>
+    <div>&nbsp;&nbsp;└── <span class="modify">BattleSimulation.cs</span> <span class="comment">← 修改：客户端物理回滚</span></div>
+  </div>
+</section>
+
+<!-- ════════ Next ════════ -->
+<section id="next">
+  <h2><span class="icon" style="background:rgba(188,140,255,0.15);color:var(--purple)">🔮</span> 后续衔接</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title" style="color:var(--purple)">v0.4b — 属性脏同步</div>
+      <div class="card-body">
+        <ul>
+          <li>在 Box2D 稳定接入后扩展到属性脏同步</li>
+          <li>明确逻辑属性变化和物理运动结果在同一帧的结算顺序</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:var(--cyan)">v0.5a — Buff 帧同步</div>
+      <div class="card-body">
+        <ul>
+          <li>物理快照稳定可回滚后，Buff 持续时间、叠加与移除纳入统一帧同步系统</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  v0.4a 计划 · 状态帧同步 · Box2D 物理集成 · 2026-05-16
+</footer>
+
+<script>
+function switchTab(e, tabId) {
+  const container = e.target.closest('.tabs');
+  container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(tabId).classList.add('active');
+}
+
+function toggleCheck(item) {
+  const box = item.querySelector('.check-box');
+  box.classList.toggle('checked');
+  item.classList.toggle('done');
+}
+</script>
+
+</body>
+</html>

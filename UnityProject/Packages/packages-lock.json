@@ -21,6 +21,20 @@
         "com.unity.modules.animation": "1.0.0"
       }
     },
+    "com.tencent.puerts.core": {
+      "version": "file:../LocalPackages/com.tencent.puerts.core",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
+    },
+    "com.tencent.puerts.v8": {
+      "version": "file:../LocalPackages/com.tencent.puerts.v8",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {
+        "com.tencent.puerts.core": "3.0.2"
+      }
+    },
     "com.tuyoogame.yooasset": {
       "version": "file:YooAsset",
       "depth": 0,

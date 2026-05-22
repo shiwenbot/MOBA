@@ -13,17 +13,13 @@ using Fantasy;
 
 try
 {
-    if (Array.Exists(args, static arg =>
-            arg.Equals("--validate", StringComparison.OrdinalIgnoreCase) ||
-            arg.Equals("--mode=validate", StringComparison.OrdinalIgnoreCase)))
+    if (CommandLineOptionReader.HasMode(args, "validate"))
     {
         Environment.Exit(FrameSyncValidationRunner.Run(args));
         return;
     }
 
-    if (Array.Exists(args, static arg =>
-            arg.Equals("--test", StringComparison.OrdinalIgnoreCase) ||
-            arg.Equals("--mode=test", StringComparison.OrdinalIgnoreCase)))
+    if (CommandLineOptionReader.HasMode(args, "test"))
     {
         Environment.Exit(TestRunner.Run(args));
         return;

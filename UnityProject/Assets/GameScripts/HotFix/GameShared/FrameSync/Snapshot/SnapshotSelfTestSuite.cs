@@ -6,65 +6,60 @@ namespace GameShared.FrameSync.Snapshot
     public static class SnapshotSelfTestSuite
     {
         private const int DefaultBufferCapacity = 24;
+        private static readonly string[] AllCaseNames =
+        {
+            "basic-roundtrip",
+            "capacity-eviction",
+            "same-frame-override",
+            "hash-normalization",
+            "physics-roundtrip",
+            "physics-affects-hash",
+            "snapshot-attribute-roundtrip",
+            "attributes-affect-hash",
+            "attribute-dirty-merge"
+        };
 
         public static bool Run(out string failedCase)
         {
-            if (!BasicRoundTrip())
+            for (int i = 0; i < AllCaseNames.Length; i++)
             {
-                failedCase = "basic-roundtrip";
-                return false;
-            }
-
-            if (!CapacityEviction())
-            {
-                failedCase = "capacity-eviction";
-                return false;
-            }
-
-            if (!SameFrameOverride())
-            {
-                failedCase = "same-frame-override";
-                return false;
-            }
-
-            if (!HashNormalization())
-            {
-                failedCase = "hash-normalization";
-                return false;
-            }
-
-            if (!PhysicsRoundTrip())
-            {
-                failedCase = "physics-roundtrip";
-                return false;
-            }
-
-            if (!PhysicsAffectsHash())
-            {
-                failedCase = "physics-affects-hash";
-                return false;
-            }
-
-            if (!AttributeRoundTrip())
-            {
-                failedCase = "attribute-roundtrip";
-                return false;
-            }
-
-            if (!AttributesAffectHash())
-            {
-                failedCase = "attributes-affect-hash";
-                return false;
-            }
-
-            if (!AttributeDirtyMerge())
-            {
-                failedCase = "attribute-dirty-merge";
-                return false;
+                if (!RunCase(AllCaseNames[i], out failedCase))
+                {
+                    return false;
+                }
             }
 
             failedCase = string.Empty;
             return true;
+        }
+
+        public static bool RunCase(string caseName, out string failedCase)
+        {
+            try
+            {
+                string normalizedCaseName = caseName?.Trim().ToLowerInvariant() ?? string.Empty;
+                bool passed = normalizedCaseName switch
+                {
+                    "basic-roundtrip" => BasicRoundTrip(),
+                    "capacity-eviction" => CapacityEviction(),
+                    "same-frame-override" => SameFrameOverride(),
+                    "hash-normalization" => HashNormalization(),
+                    "physics-roundtrip" => PhysicsRoundTrip(),
+                    "physics-affects-hash" => PhysicsAffectsHash(),
+                    "snapshot-attribute-roundtrip" or "attribute-roundtrip" => AttributeRoundTrip(),
+                    "attributes-affect-hash" => AttributesAffectHash(),
+                    "attribute-dirty-merge" => AttributeDirtyMerge(),
+                    _ => throw new ArgumentException($"Unknown snapshot self test case: {caseName}", nameof(caseName))
+                };
+
+                failedCase = passed ? string.Empty : normalizedCaseName;
+                return passed;
+            }
+            catch (Exception exception)
+            {
+                failedCase = $"{exception.GetType().Name}:{exception.Message}";
+                return false;
+            }
         }
 
         private static bool BasicRoundTrip()

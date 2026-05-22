@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自动化验收方案 - 测试效率提升计划</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 0;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 48px 32px; }
+
+  /* Header */
+  .doc-header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  .doc-header h1 {
+    font-size: 2em; font-weight: 700; margin-bottom: 16px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-purple));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .meta-tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+    padding: 4px 14px; font-size: 0.85em; color: var(--text-secondary);
+  }
+  .meta-tag .label { color: var(--accent); font-weight: 600; }
+  .meta-tag.status { border-color: var(--accent-orange); color: var(--accent-orange); }
+
+  /* Sections */
+  h2 { font-size: 1.5em; font-weight: 700; margin-top: 48px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 20px; margin-bottom: 8px; color: var(--text-secondary); }
+  p { margin-bottom: 12px; }
+  ul, ol { margin: 8px 0 16px 24px; }
+  li { margin-bottom: 6px; }
+  code {
+    background: rgba(110,118,129,0.25); border-radius: 4px; padding: 2px 6px;
+    font-size: 0.9em; font-family: 'SF Mono', Consolas, monospace; color: var(--accent-cyan);
+  }
+  pre {
+    background: rgba(110,118,129,0.15); border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px 18px; margin: 12px 0; overflow-x: auto;
+    font-family: 'SF Mono', Consolas, monospace; font-size: 0.9em; color: var(--text-secondary);
+  }
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  /* Callout */
+  .callout { background: var(--surface); border-left: 4px solid var(--accent); border-radius: 6px; padding: 16px 20px; margin: 16px 0; }
+  .callout.conclusion { border-left-color: var(--accent-green); background: rgba(63,185,80,0.08); }
+  .callout.conclusion strong { color: var(--accent-green); }
+  .callout.warning { border-left-color: var(--accent-orange); background: rgba(210,153,34,0.08); }
+  .callout.mandatory { border-left-color: var(--accent-red); background: rgba(248,81,73,0.08); }
+  .callout.mandatory strong { color: var(--accent-red); }
+
+  /* Numbered conclusion block */
+  .conclusion-block { counter-reset: conclusion; margin: 16px 0; }
+  .conclusion-block .item {
+    position: relative; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 20px 16px 52px; margin-bottom: 12px;
+  }
+  .conclusion-block .item::before {
+    counter-increment: conclusion; content: counter(conclusion);
+    position: absolute; left: 16px; top: 14px; width: 28px; height: 28px;
+    background: var(--accent); color: var(--bg); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.9em;
+  }
+
+  /* Layer cards */
+  .layer-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 20px 0; }
+  .layer-card .layer-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .layer-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 4px 12px; border-radius: 6px; font-weight: 700; font-size: 0.85em; color: var(--bg);
+  }
+  .layer-badge.l1 { background: var(--accent-green); }
+  .layer-badge.l2 { background: var(--accent-red); }
+  .layer-badge.l3 { background: var(--accent-purple); }
+  .layer-card h3 { margin: 0; color: var(--text); font-size: 1.15em; }
+  .layer-card ul { margin-left: 20px; }
+  .layer-features { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .feature-tag {
+    background: rgba(110,118,129,0.2); border: 1px solid var(--border);
+    border-radius: 16px; padding: 3px 12px; font-size: 0.82em; color: var(--text-secondary);
+  }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+  th { text-align: left; background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; font-weight: 600; color: var(--accent); }
+  td { border: 1px solid var(--border); padding: 10px 14px; }
+  tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+
+  /* Milestone */
+  .milestone { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 20px 0; }
+  .milestone h3 { color: var(--accent-cyan); margin-top: 0; }
+  .task-list { list-style: none; margin-left: 0; }
+  .task-list li { position: relative; padding-left: 28px; margin-bottom: 6px; }
+  .task-list li::before {
+    content: ''; position: absolute; left: 2px; top: 6px;
+    width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 3px;
+  }
+
+  /* Roadmap */
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0; }
+  .roadmap-step {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; text-align: center;
+  }
+  .roadmap-step .step-num {
+    width: 36px; height: 36px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; margin: 0 auto 12px;
+    font-weight: 700; font-size: 1.1em; color: var(--bg);
+  }
+  .roadmap-step:nth-child(1) .step-num { background: var(--accent-green); }
+  .roadmap-step:nth-child(2) .step-num { background: var(--accent-red); }
+  .roadmap-step:nth-child(3) .step-num { background: var(--accent-purple); }
+  .roadmap-step h4 { color: var(--text); margin: 8px 0; }
+  .roadmap-step p { font-size: 0.88em; color: var(--text-secondary); margin: 0; }
+
+  /* Gate diagram */
+  .gate-diagram { display: flex; align-items: center; justify-content: center; gap: 0; margin: 24px 0; flex-wrap: wrap; }
+  .gate-box {
+    padding: 16px 24px; border-radius: 10px; text-align: center; min-width: 200px;
+  }
+  .gate-box.g1 { background: rgba(63,185,80,0.12); border: 1px solid var(--accent-green); }
+  .gate-box.g1 h4 { color: var(--accent-green); margin: 0 0 4px; }
+  .gate-box.g2 { background: rgba(248,81,73,0.12); border: 1px solid var(--accent-red); }
+  .gate-box.g2 h4 { color: var(--accent-red); margin: 0 0 4px; }
+  .gate-box p { font-size: 0.88em; color: var(--text-secondary); margin: 0; }
+  .gate-arrow { font-size: 1.6em; color: var(--text-secondary); padding: 0 12px; }
+
+  /* Dual-track strategy */
+  .dual-track { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .track-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px;
+  }
+  .track-card h4 { margin-top: 0; }
+  .track-card .track-icon { font-size: 1.4em; margin-bottom: 8px; }
+  .track-card ul { margin-left: 18px; }
+
+  /* Rule block */
+  .rule-block { background: var(--surface); border: 2px solid var(--accent-red); border-radius: 10px; padding: 24px; margin: 20px 0; }
+  .rule-block h3 { color: var(--accent-red); margin-top: 0; }
+  .rule-block .rule-item { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+  .rule-block .rule-num {
+    width: 28px; height: 28px; background: var(--accent-red); color: var(--bg);
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85em; flex-shrink: 0; margin-top: 2px;
+  }
+
+  /* Final */
+  .final-block {
+    background: linear-gradient(135deg, rgba(88,166,255,0.1), rgba(188,140,255,0.1));
+    border: 1px solid var(--accent); border-radius: 10px; padding: 24px; margin: 24px 0;
+  }
+  .final-block ol { margin-left: 20px; }
+  .final-block li { margin-bottom: 8px; }
+  .final-block .emphasis {
+    text-align: center; font-size: 1.05em; font-weight: 600; color: var(--accent-green);
+    margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+
+  @media (max-width: 640px) {
+    .container { padding: 24px 16px; }
+    .roadmap, .dual-track { grid-template-columns: 1fr; }
+    .gate-diagram { flex-direction: column; }
+    .gate-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="doc-header">
+    <h1>自动化验收方案 - 测试效率提升计划</h1>
+    <div class="meta-row">
+      <span class="meta-tag"><span class="label">创建日期</span> 2026-05-19</span>
+      <span class="meta-tag status">提案草案</span>
+      <span class="meta-tag"><span class="label">范围</span> 状态帧同步 / 属性同步 / Buff / SkillGraph / 回滚联动验收</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-tag">CLI游戏逻辑测试应用程序-实施计划.md</span>
+      <span class="meta-tag">状态帧同步-v0.3-test计划.md</span>
+      <span class="meta-tag">状态帧同步-v0.4b计划.md</span>
+    </div>
+  </div>
+
+  <!-- Context -->
+  <h2>Context</h2>
+  <p>当前高频验收流程仍然主要依赖人工操作：</p>
+  <ul>
+    <li>启动 <code>server</code></li>
+    <li>启动两个 Unity 客户端</li>
+    <li>手动进入战斗</li>
+    <li>手动执行移动 / 联调操作</li>
+    <li>通过肉眼观察与日志判断 PASS / FAIL</li>
+  </ul>
+  <p>这套流程在项目早期可以接受，但随着 <code>状态帧同步 → 属性同步 → Buff → Skill → 黑板 → 回滚联动</code> 逐步推进，人工验收成本会快速上升：</p>
+  <ol>
+    <li><strong>验收频率低</strong>：改动一个点就要重新拉起 3 个进程</li>
+    <li><strong>回归成本高</strong>：很多小改动难以及时验证</li>
+    <li><strong>结果不稳定</strong>：不同人的操作节奏不同，日志观察口径也不一致</li>
+    <li><strong>agent 无法自主闭环</strong>：即便逻辑改动已经完成，仍然需要人工继续操作验收</li>
+    <li><strong>后续复杂链路难以持续维护</strong>：一旦 Buff / 技能 / 回滚叠加，单纯靠人肉联调会很快失控</li>
+  </ol>
+  <div class="callout">
+    <p>当前仓库并不是"完全没有自动化测试能力"，而是：</p>
+    <ul>
+      <li>已经有 <code>dotnet run -- --mode=test</code> 的无头测试入口</li>
+      <li>已经有 <code>TestHarness / SimulatedClient / SnapshotSelfTest / PredictSelfTest</code></li>
+      <li>还没有形成一套足够适合<strong>高频调用、结构化输出、可长期扩展</strong>的验收体系</li>
+    </ul>
+    <p style="margin-top:12px;">因此，本方案的重点不是"重新发明一套全新测试系统"，而是<strong>先把已有能力收敛成一套可执行、可迭代、可扩展的自动化验收架构</strong>。</p>
+  </div>
+
+  <hr>
+
+  <!-- 目标 -->
+  <h2>目标</h2>
+  <ol>
+    <li>让 agent 可以<strong>自主完成大部分逻辑验收</strong></li>
+    <li>将当前"server + 2 client + 手动操作"的流程降级为<strong>少量冒烟验收</strong></li>
+    <li>为 <code>状态帧同步 / 属性同步 / Buff / Skill / 回滚</code> 建立长期可复用的测试护栏</li>
+    <li>优先复用现有无头测试入口，避免过早引入高成本新系统</li>
+    <li>为后续真实客户端自动驾驶与联调脚本预留扩展位</li>
+  </ol>
+
+  <h2>非目标</h2>
+  <ul>
+    <li>本阶段不追求一次性做出完整的 CI/CD 测试平台</li>
+    <li>本阶段不要求所有 Unity 表现层问题都可自动化验证</li>
+    <li>本阶段不要求所有双客户端联调都完全替代人工</li>
+    <li>本阶段不将 <code>puerts</code> 直接作为主验收底座</li>
+    <li>本阶段不重构当前战斗主逻辑去适配新的脚本运行时</li>
+  </ul>
+
+  <hr>
+
+  <!-- 核心结论 -->
+  <h2>核心结论</h2>
+
+  <div class="conclusion-block">
+    <div class="item">
+      <p><strong>自动化验收应该拆层，但真实客户端联调必须升级为强制验收门槛</strong></p>
+      <p>当前人工联调同时混合了三类问题：逻辑正确性、真实链路正确性、客户端壳层正确性。这三类问题不应继续由"手工拉三进程"统一承担，但也不能只靠无头测试兜底。</p>
+      <p>根据当前项目实践，已经反复出现：<strong>无头逻辑验收通过，人工真实联调仍然出现问题</strong>。</p>
+      <ul>
+        <li><strong>无头逻辑验收</strong>必须保留，负责高频、低成本、可定位的快速回归</li>
+        <li><strong>真实 server + 真客户端验收</strong>必须升级为每个实现步骤的强制验收门槛</li>
+      </ul>
+    </div>
+    <div class="item">
+      <p><strong>每个实现步骤都必须通过"双层强制验收"</strong></p>
+      <p>后续所有主线开发步骤，统一采用以下完成标准：</p>
+      <ol>
+        <li><strong>无头逻辑验收通过</strong></li>
+        <li><strong>真 server + 真客户端验收通过</strong></li>
+      </ol>
+      <p>只有两层都通过，才能视为该步骤真正完成。</p>
+      <ul>
+        <li>无头层是<strong>快速门</strong></li>
+        <li>真客户端层是<strong>强制门</strong></li>
+      </ul>
+    </div>
+    <div class="item">
+      <p><strong>主力快速回归层应继续建立在现有 CLI / TestHarness 之上</strong>。这是当前性价比最高、见效最快、返工最少的路线。状态帧同步相关的大部分高价值风险，本质上都属于"纯逻辑一致性问题"，最适合无头回归。</p>
+    </div>
+    <div class="item">
+      <p><strong>真双客户端联调不再只是"补充冒烟"，而是标准化强制验收层</strong></p>
+      <p>真实客户端和真实协议链路依然不适合承担所有细粒度逻辑回归，但它必须承担：</p>
+      <ul>
+        <li>每个实现步骤的最终落地确认</li>
+        <li>Unity 生命周期问题暴露</li>
+        <li>热更集成问题暴露</li>
+        <li>真协议链路问题暴露</li>
+        <li>客户端表现壳层与逻辑链路的缝隙确认</li>
+      </ul>
+      <p>因此这层的目标不再是"有空跑一下"，而是建立固定验收流程、标准输入脚本、日志与状态判定口径，尽可能从"人工随意联调"演进为"可重复执行的标准化联调"。</p>
+    </div>
+    <div class="item">
+      <p><strong><code>ParrelSync</code> 与 <code>puerts</code> 可以成为真实客户端验收层的关键支撑</strong></p>
+      <ul>
+        <li><code>ParrelSync</code>：本地快速拉起多个 Unity 客户端实例、多客户端联调环境标准化、降低每次真实双客户端验证的启动成本</li>
+        <li><code>puerts</code>：客户端自动执行测试脚本、自动 Join / 自动输入 / 自动退出、自动采集客户端关键状态与日志、客户端调试控制台 / 自动驾驶层</li>
+      </ul>
+      <p>两者不是替代关系，而是可以组合使用：<code>ParrelSync</code> 负责"多开环境"，<code>puerts</code> 负责"客户端自动驱动"。</p>
+    </div>
+    <div class="item">
+      <p><strong><code>puerts</code> 仍不建议替代 CLI 成为主验收底座</strong>。<code>puerts</code> 更擅长解决客户端行为编排、联调脚本编写、状态收集等问题，不直接解决服务端逻辑高频无头回归、回滚/快照/帧语义验证、agent 低成本闭环等核心问题。因此不建议当前抢在 CLI 强化之前，把它提升为底层主测试框架。</p>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- 推荐架构 -->
+  <h2>推荐架构</h2>
+
+  <!-- Layer 1 -->
+  <div class="layer-card">
+    <div class="layer-header">
+      <span class="layer-badge l1">Layer 1</span>
+      <h3>无头逻辑验收层</h3>
+    </div>
+    <p>使用现有 <code>CLI / TestHarness / --mode=test</code> 作为主力验收层。</p>
+    <h4>职责</h4>
+    <ul>
+      <li>状态帧同步主逻辑回归</li>
+      <li>输入缓冲 / 缺帧复用</li>
+      <li>快照保存 / 恢复</li>
+      <li>正式回滚 / 重播</li>
+      <li>物理状态一致性</li>
+      <li>属性快照 / 属性脏同步</li>
+      <li>后续 Buff / Skill 命令链路</li>
+    </ul>
+    <h4>特点</h4>
+    <div class="layer-features">
+      <span class="feature-tag">单进程</span>
+      <span class="feature-tag">纯 C#</span>
+      <span class="feature-tag">无 Unity 依赖</span>
+      <span class="feature-tag">运行快</span>
+      <span class="feature-tag">适合 agent 高频执行</span>
+    </div>
+    <div class="callout conclusion">
+      <strong>结论：</strong>这是后续自动化验收的<strong>主验收层</strong>，优先级最高。
+    </div>
+  </div>
+
+  <!-- Layer 2 -->
+  <div class="layer-card">
+    <div class="layer-header">
+      <span class="layer-badge l2">Layer 2</span>
+      <h3>真 server + 真客户端强制验收层</h3>
+    </div>
+    <p>建立"真 server + 真客户端"的标准化验收层。</p>
+    <h4>职责</h4>
+    <ul>
+      <li><code>JoinBattle</code> 链路验证</li>
+      <li>真实协议收发验证</li>
+      <li>双客户端基础同步验证</li>
+      <li>玩家离开 / 重入等集成行为验证</li>
+      <li>Unity 生命周期 / 热更集成 / 表现壳层确认</li>
+      <li>每个实现步骤的最终落地确认</li>
+    </ul>
+    <h4>特点</h4>
+    <div class="layer-features">
+      <span class="feature-tag">真实进程</span>
+      <span class="feature-tag">强制执行</span>
+      <span class="feature-tag">覆盖集成问题</span>
+      <span class="feature-tag">可逐步从人工演进为自动化</span>
+    </div>
+    <div class="callout mandatory">
+      <strong>结论：</strong>这是所有开发步骤的<strong>强制验收层</strong>，优先级与无头逻辑层并列为必过门槛。
+    </div>
+  </div>
+
+  <!-- Layer 3 -->
+  <div class="layer-card">
+    <div class="layer-header">
+      <span class="layer-badge l3">Layer 3</span>
+      <h3>客户端脚本驱动层</h3>
+    </div>
+    <p>评估引入 <code>puerts</code> 作为 Unity 客户端的脚本驱动与调试层。</p>
+    <h4>职责</h4>
+    <ul>
+      <li>驱动客户端执行预设输入脚本</li>
+      <li>自动 Join / 自动操作 / 自动退出</li>
+      <li>自动订阅客户端关键状态</li>
+      <li>自动收集客户端日志和结果摘要</li>
+      <li>长期演进为测试控制台 / 调试面板</li>
+    </ul>
+    <h4>特点</h4>
+    <div class="layer-features">
+      <span class="feature-tag">提升真实客户端自动化效率</span>
+      <span class="feature-tag">更适合"客户端自动驾驶"</span>
+      <span class="feature-tag">不作为底层逻辑验收主框架</span>
+    </div>
+    <div class="callout conclusion">
+      <strong>结论：</strong>这是一个<strong>增强层</strong>，优先级第三，可先做 PoC 再决定是否正式接入。
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- 为什么不建议直接让 puerts 替代底层测试框架 -->
+  <h2>为什么不建议直接让 puerts 替代底层测试框架</h2>
+
+  <h3>1. 当前主矛盾不只是"客户端脚本能力不足"</h3>
+  <p>目前真正影响效率的核心问题是：</p>
+  <ul>
+    <li>纯逻辑改完后无法立即无头回归</li>
+    <li>每次验证都过度依赖真实客户端</li>
+    <li>很多错误本质上是逻辑一致性问题，而非 Unity 客户端壳层问题</li>
+  </ul>
+  <p>因此第一刀仍应优先解决"逻辑自动回归"，同时把真实客户端验收标准化，而不是先用 <code>puerts</code> 重建整个测试底层。</p>
+
+  <h3>2. 现有无头测试基础已经能直接复用</h3>
+  <p>仓库当前已经具备：</p>
+  <ul>
+    <li><code>--mode=test</code></li>
+    <li><code>TestRunner</code></li>
+    <li><code>SimulatedClient</code></li>
+    <li><code>SnapshotSelfTest</code></li>
+    <li><code>PredictSelfTest</code></li>
+    <li>Battle / Snapshot / Prediction 的现有验证链路</li>
+  </ul>
+  <p>这意味着最短路径不是新引入脚本运行时，而是<strong>增强现有能力</strong>。</p>
+
+  <h3>3. puerts 会引入额外集成与维护成本</h3>
+  <ul>
+    <li>Unity 工程接入成本</li>
+    <li>JS / TS 运行时组织方式</li>
+    <li>测试脚本目录和生命周期管理</li>
+    <li>日志与状态桥接规范</li>
+    <li>团队协作和代码评审边界</li>
+  </ul>
+  <div class="callout warning">
+    如果在当前阶段直接引入，很容易把"测试提效"变成"新增技术栈治理任务"。
+  </div>
+
+  <hr>
+
+  <!-- 推荐实施路线 -->
+  <h2>推荐实施路线</h2>
+
+  <div class="roadmap">
+    <div class="roadmap-step">
+      <div class="step-num">1</div>
+      <h4>强化 CLI 无头测试</h4>
+      <p>形成快速回归门<br>让 agent 自主快速回归</p>
+    </div>
+    <div class="roadmap-step">
+      <div class="step-num">2</div>
+      <h4>真客户端强制验收</h4>
+      <p>建立标准化流程<br>每步必过的强制门槛</p>
+    </div>
+    <div class="roadmap-step">
+      <div class="step-num">3</div>
+      <h4>puerts PoC 评估</h4>
+      <p>客户端自动驱动层<br>降低真实联调成本</p>
+    </div>
+  </div>
+
+  <!-- 第一阶段 -->
+  <h3>第一阶段：强化现有 CLI 无头测试，形成快速回归门</h3>
+  <h4>目标</h4>
+  <p>让 agent 在改完逻辑代码后，可以直接自主完成主线快速回归。</p>
+  <h4>建议补齐的命令能力</h4>
+  <pre><code>--mode=test
+--scenario &lt;name&gt;
+--frames &lt;count&gt;
+--clients &lt;count&gt;
+--output console|markdown|json
+--report &lt;path&gt;</code></pre>
+  <p>退出码约定：<code>0 = PASS</code>，<code>1 = FAIL</code></p>
+
+  <h4>第一批建议重点场景</h4>
+  <ul>
+    <li><code>prediction-self</code></li>
+    <li><code>all</code></li>
+    <li><code>player-collision</code></li>
+    <li><code>authoritative-snapshot-restores-physics-world</code></li>
+    <li><code>authoritative-snapshot-restores-player-attributes</code></li>
+    <li><code>snapshot-attribute-roundtrip</code></li>
+    <li><code>attribute-dirty-merge</code></li>
+  </ul>
+
+  <h4>后续扩展场景</h4>
+  <ul>
+    <li><code>attribute-sync</code></li>
+    <li><code>rollback-restores-attributes</code></li>
+    <li><code>client-predictable-cost</code></li>
+    <li><code>buff-minimal</code></li>
+    <li><code>skill-command-issued</code></li>
+  </ul>
+
+  <div class="callout conclusion">
+    <strong>阶段收益：</strong>大部分主逻辑问题可以由 agent 自行验证；大幅降低人工拉起三进程的频率；建立"进入真实客户端强制验收之前的快速过滤层"。
+  </div>
+
+  <!-- 第二阶段 -->
+  <h3>第二阶段：建立真 server + 真客户端的标准化强制验收流程</h3>
+  <h4>目标</h4>
+  <p>将当前完全手动、随意性较高的双客户端联调，收敛为每一步都可重复执行的标准化验收流程。</p>
+  <h4>实施重点</h4>
+  <ul>
+    <li>自动启动 <code>server</code></li>
+    <li>基于 <code>ParrelSync</code> 自动启动两个客户端实例</li>
+    <li>自动 JoinBattle</li>
+    <li>自动执行标准输入脚本</li>
+    <li>自动收集 <code>server / clientA / clientB</code> 日志</li>
+    <li>自动导出关键状态摘要</li>
+    <li>自动给出 PASS / FAIL 结论</li>
+  </ul>
+  <h4>第一批建议标准化场景</h4>
+  <ul>
+    <li>双客户端都能进入战斗</li>
+    <li>双方基础移动同步正确</li>
+    <li>玩家离开后另一方继续正常</li>
+    <li>属性权威快照恢复正确</li>
+    <li>回滚发生时日志与结果符合预期</li>
+  </ul>
+  <h4>技术路径</h4>
+  <ul>
+    <li>真 <code>server</code></li>
+    <li><code>ParrelSync</code> 多开客户端</li>
+    <li>Unity <code>-batchmode</code> / <code>-executeMethod</code></li>
+    <li>客户端内置自动测试入口</li>
+    <li>后续若接入 <code>puerts</code>，由 <code>puerts</code> 驱动客户端测试脚本</li>
+  </ul>
+
+  <div class="callout conclusion">
+    <strong>阶段收益：</strong>把真实联调从"经验操作"变成"标准化门槛"；真正覆盖无头层无法发现的集成问题；为后续全自动联调打基础。
+  </div>
+
+  <!-- 第三阶段 -->
+  <h3>第三阶段：评估并接入 puerts 作为客户端自动化驱动层</h3>
+  <h4>目标</h4>
+  <p>验证 <code>puerts</code> 是否能显著降低 Unity 客户端联调脚本的编写与维护成本。</p>
+  <h4>推荐定位</h4>
+  <ul>
+    <li>自动驱动客户端执行测试流程</li>
+    <li>统一编排输入脚本</li>
+    <li>订阅客户端关键状态变化</li>
+    <li>收集并输出测试摘要</li>
+    <li>支撑调试控制台与测试工具面板</li>
+  </ul>
+  <h4>不建议承担的职责</h4>
+  <ul>
+    <li>不替代 CLI 成为主逻辑验收底座</li>
+    <li>不承接服务端主测试框架职责</li>
+    <li>不改写当前状态帧同步核心实现</li>
+    <li>不作为当前阶段真实客户端强制验收的唯一前置依赖</li>
+  </ul>
+  <div class="callout conclusion">
+    <strong>阶段产物：</strong>一个最小 PoC + 一两个真实客户端测试脚本 + 一份是否正式接入的收益评估结论。
+  </div>
+
+  <hr>
+
+  <!-- 分层职责划分 -->
+  <h2>分层职责划分</h2>
+  <table>
+    <thead>
+      <tr><th>验收问题</th><th>推荐层级</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>确定性 / 哈希一致性</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>纯逻辑问题，优先无头</td></tr>
+      <tr><td>快照保存 / 恢复</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>纯逻辑问题，优先无头</td></tr>
+      <tr><td>回滚 / 重播</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>纯逻辑问题，优先无头</td></tr>
+      <tr><td>物理状态恢复</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>纯逻辑问题，优先无头</td></tr>
+      <tr><td>属性快照 / 脏同步</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>纯逻辑问题，优先无头</td></tr>
+      <tr><td>Buff / Skill 命令链路</td><td><span class="layer-badge l1" style="font-size:0.75em">L1</span></td><td>先建立纯逻辑闭环</td></tr>
+      <tr><td>JoinBattle / 协议收发</td><td><span class="layer-badge l2" style="font-size:0.75em">L2</span></td><td>真实链路问题，强制验收</td></tr>
+      <tr><td>双客户端基础联调</td><td><span class="layer-badge l2" style="font-size:0.75em">L2</span></td><td>真实链路问题，强制验收</td></tr>
+      <tr><td>Unity 生命周期 / 表现壳层</td><td><span class="layer-badge l2" style="font-size:0.75em">L2</span> / <span class="layer-badge l3" style="font-size:0.75em">L3</span></td><td>真实客户端问题</td></tr>
+      <tr><td>客户端自动输入脚本</td><td><span class="layer-badge l3" style="font-size:0.75em">L3</span></td><td>更适合 <code>puerts</code> 驱动</td></tr>
+      <tr><td>测试控制台 / 调试工具</td><td><span class="layer-badge l3" style="font-size:0.75em">L3</span></td><td><code>puerts</code> 价值较高</td></tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <!-- 日志与判定策略 -->
+  <h2>日志与判定策略</h2>
+  <p>真实 <code>server + 真客户端</code> 验收中，推荐采用<strong>"日志判流程，结构化状态判结果"</strong>的双轨策略。</p>
+
+  <div class="dual-track">
+    <div class="track-card">
+      <h4 style="color: var(--accent);">日志的职责</h4>
+      <p>判断<strong>链路是否按预期发生</strong>：</p>
+      <ul>
+        <li>客户端是否成功 <code>JoinBattle</code></li>
+        <li>服务端是否收到了某帧输入</li>
+        <li>权威快照是否成功广播并应用</li>
+        <li>是否触发 <code>MISMATCH</code></li>
+        <li>是否触发 <code>ROLLBACK</code></li>
+        <li>某个属性 / Buff / 技能命令是否在目标帧执行</li>
+      </ul>
+    </div>
+    <div class="track-card">
+      <h4 style="color: var(--accent-green);">结构化状态的职责</h4>
+      <p>判断<strong>最终结果是否真正正确</strong>：</p>
+      <ul>
+        <li>指定帧时 <code>server / clientA / clientB</code> 的位置是否一致</li>
+        <li>指定帧时属性是否一致</li>
+        <li>Buff 列表是否一致</li>
+        <li>回滚后是否回到权威状态</li>
+        <li>最终哈希 / 统计值是否满足断言</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>判定原则</h3>
+  <p>自动验收时建议统一采用三层判断：</p>
+  <ol>
+    <li><strong>进程是否正常</strong> — server 是否正常启动、clientA / clientB 是否正常启动、是否有崩溃 / 未处理异常</li>
+    <li><strong>关键流程日志是否出现</strong> — <code>JoinBattle success</code>、<code>Input accepted</code>、<code>Snapshot applied</code>、<code>Rollback triggered</code>、<code>Buff added/removed</code></li>
+    <li><strong>结构化状态断言是否满足</strong> — 指定帧位置 / 属性 / Buff / 哈希 / 回滚统计是否满足预期</li>
+  </ol>
+  <div class="callout">
+    <strong>日志</strong>更适合判断"链路有没有走通"；<strong>结构化状态</strong>更适合判断"结果到底对不对"。
+  </div>
+
+  <hr>
+
+  <!-- 强制验收规则 -->
+  <h2>强制验收规则</h2>
+  <p>后续所有实现步骤统一采用以下验收规则：</p>
+
+  <div class="rule-block">
+    <h3>Step 完成定义</h3>
+    <p>任一开发步骤只有同时满足以下条件，才可视为完成：</p>
+    <div class="rule-item">
+      <span class="rule-num">1</span>
+      <span>无头逻辑验收通过</span>
+    </div>
+    <div class="rule-item">
+      <span class="rule-num">2</span>
+      <span>真 <code>server + 真客户端</code> 验收通过</span>
+    </div>
+  </div>
+
+  <h3>真客户端验收最小要求</h3>
+  <p>每个步骤至少需要：</p>
+  <ul>
+    <li>1 条标准真实联调用例</li>
+    <li>1 组 <code>server / clientA / clientB</code> 日志记录</li>
+    <li>1 组结构化结果断言</li>
+  </ul>
+
+  <h3>人工体验确认</h3>
+  <p>在自动化流程尚未完全覆盖前，仍允许保留少量人工体验确认，但它<strong>不替代</strong>上述两层强制验收。</p>
+
+  <!-- Gate diagram -->
+  <div class="gate-diagram">
+    <div class="gate-box g1">
+      <h4>快速门</h4>
+      <p>无头逻辑验收</p>
+    </div>
+    <div class="gate-arrow">→</div>
+    <div class="gate-box g2">
+      <h4>强制门</h4>
+      <p>真 server + 真客户端验收</p>
+    </div>
+    <div class="gate-arrow">→</div>
+    <div class="gate-box" style="background: rgba(188,140,255,0.12); border: 1px solid var(--accent-purple);">
+      <h4 style="color: var(--accent-purple);">增强门</h4>
+      <p>puerts 自动驱动</p>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- 推荐里程碑 -->
+  <h2>推荐里程碑</h2>
+
+  <div class="milestone">
+    <h3>Milestone 1：无头快速回归门收敛</h3>
+    <p><strong>目标：</strong>让无头测试入口真正成为高频可用的主力工具。</p>
+    <ul class="task-list">
+      <li>统一 <code>--mode=test</code> 入口参数</li>
+      <li>支持 <code>--scenario</code></li>
+      <li>支持 <code>--frames</code></li>
+      <li>支持 <code>--clients</code></li>
+      <li>支持 <code>--output</code></li>
+      <li>支持 <code>--report</code></li>
+      <li>固定 <code>0/1</code> 退出码</li>
+      <li>补齐属性同步相关测试场景</li>
+      <li>明确控制台 / Markdown / JSON 输出格式</li>
+    </ul>
+    <p><strong>完成标准：</strong>agent 修改主逻辑后可直接自主回归；输出稳定可读；<code>v0.4b</code> 相关属性链路可无头验证。</p>
+  </div>
+
+  <div class="milestone">
+    <h3>Milestone 2：真 server + 双客户端强制验收闭环</h3>
+    <p><strong>目标：</strong>减少"必须人工手动拉三进程"的频率。</p>
+    <ul class="task-list">
+      <li>自动启动 <code>server</code></li>
+      <li>基于 <code>ParrelSync</code> 启动两个客户端实例</li>
+      <li>自动 JoinBattle</li>
+      <li>自动执行一段预设输入脚本</li>
+      <li>自动收集 <code>server / clientA / clientB</code> 日志</li>
+      <li>自动导出关键状态摘要</li>
+      <li>自动给出 PASS / FAIL 结论</li>
+    </ul>
+    <p><strong>完成标准：</strong>至少 2~3 条高价值联调场景可标准化执行；每个主线步骤都可挂接真实客户端强制验收。</p>
+  </div>
+
+  <div class="milestone">
+    <h3>Milestone 3：puerts PoC 评估</h3>
+    <p><strong>目标：</strong>验证 <code>puerts</code> 是否适合承接客户端自动驾驶层。</p>
+    <ul class="task-list">
+      <li>在 Unity 客户端完成最小接入验证</li>
+      <li>编写 1 条自动驱动测试脚本</li>
+      <li>编写 1 条自动日志收集脚本</li>
+      <li>编写 1 条结构化状态导出脚本</li>
+      <li>评估脚本编写效率、调试体验、集成复杂度</li>
+      <li>输出正式接入 / 暂缓接入结论</li>
+    </ul>
+    <p><strong>完成标准：</strong>能明确回答 puerts 是否值得作为客户端自动化增强方案继续推进。</p>
+  </div>
+
+  <hr>
+
+  <!-- 风险与应对 -->
+  <h2>风险与应对</h2>
+  <table>
+    <thead>
+      <tr><th>风险</th><th>影响</th><th>应对</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>过早把所有验证都压到真实双客户端</td><td>运行慢、定位难、反馈周期长</td><td>保留 Layer 1 作为快速门，Layer 2 作为强制门</td></tr>
+      <tr><td>过早引入 puerts 取代底层测试框架</td><td>引入额外技术栈治理成本</td><td>只做 PoC，不提前替代 CLI</td></tr>
+      <tr><td>测试入口继续分散</td><td>agent 不知道该跑什么</td><td>统一命令入口和输出规范</td></tr>
+      <tr><td>后续 Buff / Skill 测试场景爆炸</td><td>测试维护困难</td><td>先建立通用快照 / 命令 / 回滚测试骨架</td></tr>
+      <tr><td>只靠日志字符串判定正确性</td><td>容易误判，结果不稳</td><td>增加结构化状态导出与断言</td></tr>
+      <tr><td>过度依赖人工体验确认</td><td>回归速度持续受限</td><td>将人工验收收敛为少量体验确认，不替代强制门</td></tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <!-- 最终建议 -->
+  <h2>最终建议</h2>
+  <div class="final-block">
+    <p>当前最优先、性价比最高的路线是：</p>
+    <ol>
+      <li><strong>优先强化现有 CLI / TestHarness，形成真正可高频使用的快速回归门</strong></li>
+      <li><strong>将真 <code>server + 真客户端</code> 升级为每个实现步骤都必须通过的强制验收门</strong></li>
+      <li><strong>优先基于 <code>ParrelSync</code> 标准化双客户端联调环境</strong></li>
+      <li><strong>以 PoC 方式评估 <code>puerts</code> 是否适合作为客户端自动驱动与状态导出增强层</strong></li>
+    </ol>
+    <p style="margin-top:16px;">换句话说：</p>
+    <ul>
+      <li><strong>CLI</strong> 解决的是"主逻辑能不能高频、稳定、低成本回归"</li>
+      <li><strong>真 server + 真客户端</strong> 解决的是"真实链路和真实运行时是否真的正确"</li>
+      <li><strong>ParrelSync</strong> 解决的是"多客户端环境能不能稳定、低成本拉起"</li>
+      <li><strong>puerts</strong> 解决的是"真实客户端能不能更快自动驾驶、导出状态和编排测试"</li>
+    </ul>
+    <div class="emphasis">
+      保留无头快速门，强制真实客户端门，再用 ParrelSync + puerts 持续降低真实联调成本。
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- 后续衔接 -->
+  <h2>后续衔接</h2>
+  <p>本方案通过后，建议继续拆出两份更细化的实施文档：</p>
+  <ol>
+    <li><strong>自动化验收实施方案 v0.1</strong>
+      <ul>
+        <li>明确第一批 CLI 场景清单</li>
+        <li>明确命令接口与输出格式</li>
+        <li>明确 <code>v0.4b → v0.5a</code> 测试护栏如何落地</li>
+      </ul>
+    </li>
+    <li><strong>puerts 客户端自动化 PoC 方案</strong>
+      <ul>
+        <li>明确 PoC 范围</li>
+        <li>明确接入点</li>
+        <li>明确成功标准与退出条件</li>
+      </ul>
+    </li>
+  </ol>
+
+</div>
+</body>
+</html>

@@ -24,12 +24,24 @@ public static class TestRunner
 
     public static int Run(string[] args)
     {
-        TestRunOptions options = TestRunOptions.Parse(args);
-        TestExecutionReport report = Execute(options);
+        try
+        {
+            TestRunOptions options = TestRunOptions.Parse(args);
+            TestExecutionReport report = Execute(options);
 
-        PrintConsoleReport(report);
-        EmitStructuredReport(report, options);
-        return report.Passed ? 0 : 1;
+            if (ShouldPrintConsoleReport(options))
+            {
+                PrintConsoleReport(report);
+            }
+
+            EmitStructuredReport(report, options);
+            return report.Passed ? 0 : 1;
+        }
+        catch (ArgumentException exception)
+        {
+            Console.Error.WriteLine($"[TestRun] ERROR: {exception.Message}");
+            return 1;
+        }
     }
 
     private static TestExecutionReport Execute(TestRunOptions options)
@@ -53,6 +65,18 @@ public static class TestRunner
 
             case TestScenario.SnapshotSelf:
                 checks.Add(RunSnapshotSelfTest());
+                break;
+
+            case TestScenario.BasicRoundTrip:
+            case TestScenario.CapacityEviction:
+            case TestScenario.SameFrameOverride:
+            case TestScenario.HashNormalization:
+            case TestScenario.PhysicsRoundTrip:
+            case TestScenario.PhysicsAffectsHash:
+            case TestScenario.SnapshotAttributeRoundTrip:
+            case TestScenario.AttributesAffectHash:
+            case TestScenario.AttributeDirtyMerge:
+                checks.Add(RunSnapshotSelfCase(options.Scenario));
                 break;
 
             case TestScenario.FrameSchedule:
@@ -98,6 +122,8 @@ public static class TestRunner
             case TestScenario.PredictionBufferUsesGlobalFrame:
             case TestScenario.SkippedNoRecord:
             case TestScenario.EvictionDoesNotCrash:
+            case TestScenario.AcceptedInputFeedbackRaisesLead:
+            case TestScenario.AuthoritativeSnapshotRestoresPhysicsWorld:
             case TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes:
             case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
             case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
@@ -129,6 +155,12 @@ public static class TestRunner
         }
 
         return new TestExecutionReport(options, checks, scenarios);
+    }
+
+    private static bool ShouldPrintConsoleReport(TestRunOptions options)
+    {
+        return options.Output == TestOutputFormat.Console ||
+               !string.IsNullOrWhiteSpace(options.ReportPath);
     }
 
     private static void PrintConsoleReport(TestExecutionReport report)
@@ -215,7 +247,7 @@ public static class TestRunner
         for (int i = 0; i < report.Checks.Count; i++)
         {
             CheckResult check = report.Checks[i];
-            builder.AppendLine($"- {check.SuiteName}: {(check.Passed ? "PASS" : "FAIL")} {check.Details}".TrimEnd());
+            builder.AppendLine($"- {FormatCheckLabel(check)}: {(check.Passed ? "PASS" : "FAIL")} {check.Details}".TrimEnd());
         }
 
         if (report.Scenarios.Count > 0)
@@ -251,7 +283,7 @@ public static class TestRunner
             for (int i = 0; i < report.Checks.Count; i++)
             {
                 CheckResult check = report.Checks[i];
-                builder.AppendLine($"- `{check.SuiteName}`：`{(check.Passed ? "通过" : "失败")}` {check.Details}".TrimEnd());
+                builder.AppendLine($"- `{FormatCheckLabel(check)}`：`{(check.Passed ? "通过" : "失败")}` {check.Details}".TrimEnd());
             }
 
             builder.AppendLine();
@@ -275,6 +307,13 @@ public static class TestRunner
         builder.AppendLine($"- 检查项：`{report.PassedChecks}/{report.Checks.Count}` 通过");
         builder.AppendLine($"- 场景：`{report.PassedScenarios}/{report.Scenarios.Count}` 通过");
         return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatCheckLabel(CheckResult check)
+    {
+        return IsAggregateCheck(check)
+            ? check.SuiteName
+            : $"{check.SuiteName}/{check.Name}";
     }
 
     private static string BuildJsonReport(TestExecutionReport report)
@@ -324,6 +363,14 @@ public static class TestRunner
         return passed
             ? CheckResult.Pass("SnapshotTest", TestScenario.SnapshotSelf)
             : CheckResult.Fail("SnapshotTest", TestScenario.SnapshotSelf, failedCase);
+    }
+
+    private static CheckResult RunSnapshotSelfCase(string caseName)
+    {
+        bool passed = SnapshotSelfTestSuite.RunCase(caseName, out string failedCase);
+        return passed
+            ? CheckResult.Pass("SnapshotTest", caseName)
+            : CheckResult.Fail("SnapshotTest", caseName, failedCase);
     }
 
     private static CheckResult RunFrameScheduleSelfTest()
@@ -1094,76 +1141,69 @@ public static class TestRunner
             for (int i = 0; i < args.Length; i++)
             {
                 string arg = args[i];
-                if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase) ||
-                    arg.Equals("--mode=test", StringComparison.OrdinalIgnoreCase))
+                if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                if (arg.Equals("--scenario", StringComparison.OrdinalIgnoreCase))
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--mode", out string modeValue))
                 {
-                    scenario = NormalizeScenario(ReadRequiredValue(args, ref i, "--scenario"));
-                    continue;
-                }
-
-                if (arg.Equals("--frames", StringComparison.OrdinalIgnoreCase))
-                {
-                    string value = ReadRequiredValue(args, ref i, "--frames");
-                    if (!uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out frames) || frames == 0)
+                    if (modeValue.Equals("test", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new ArgumentException($"Invalid --frames value: {value}");
+                        continue;
                     }
 
                     continue;
                 }
 
-                if (arg.Equals("--clients", StringComparison.OrdinalIgnoreCase))
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--scenario", out string scenarioValue))
                 {
-                    string value = ReadRequiredValue(args, ref i, "--clients");
-                    if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out clients) || clients <= 0)
+                    scenario = NormalizeScenario(scenarioValue);
+                    continue;
+                }
+
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--frames", out string framesValue))
+                {
+                    if (!uint.TryParse(framesValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out frames) || frames == 0)
                     {
-                        throw new ArgumentException($"Invalid --clients value: {value}");
+                        throw new ArgumentException($"Invalid --frames value: {framesValue}");
                     }
 
                     continue;
                 }
 
-                if (arg.Equals("--output", StringComparison.OrdinalIgnoreCase))
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--clients", out string clientsValue))
                 {
-                    string value = ReadRequiredValue(args, ref i, "--output");
-                    output = value.ToLowerInvariant() switch
+                    if (!int.TryParse(clientsValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out clients) || clients <= 0)
+                    {
+                        throw new ArgumentException($"Invalid --clients value: {clientsValue}");
+                    }
+
+                    continue;
+                }
+
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--output", out string outputValue))
+                {
+                    output = outputValue.ToLowerInvariant() switch
                     {
                         "console" => TestOutputFormat.Console,
                         "markdown" => TestOutputFormat.Markdown,
                         "json" => TestOutputFormat.Json,
-                        _ => throw new ArgumentException($"Invalid --output value: {value}")
+                        _ => throw new ArgumentException($"Invalid --output value: {outputValue}")
                     };
                     continue;
                 }
 
-                if (arg.Equals("--report", StringComparison.OrdinalIgnoreCase))
+                if (CommandLineOptionReader.TryReadOption(args, ref i, "--report", out string reportValue))
                 {
-                    string value = ReadRequiredValue(args, ref i, "--report");
-                    reportPath = Path.IsPathRooted(value)
-                        ? value
-                        : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), value));
+                    reportPath = Path.IsPathRooted(reportValue)
+                        ? reportValue
+                        : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), reportValue));
                     continue;
                 }
             }
 
             return new TestRunOptions(scenario, frames, clients, output, reportPath);
-        }
-
-        private static string ReadRequiredValue(string[] args, ref int index, string optionName)
-        {
-            int valueIndex = index + 1;
-            if (valueIndex >= args.Length)
-            {
-                throw new ArgumentException($"{optionName} requires a value.");
-            }
-
-            index = valueIndex;
-            return args[valueIndex];
         }
 
         private static string NormalizeScenario(string scenario)
@@ -1174,6 +1214,16 @@ public static class TestRunner
                 "" => TestScenario.All,
                 "all" => TestScenario.All,
                 "snapshot-self" => TestScenario.SnapshotSelf,
+                "basic-roundtrip" => TestScenario.BasicRoundTrip,
+                "capacity-eviction" => TestScenario.CapacityEviction,
+                "same-frame-override" => TestScenario.SameFrameOverride,
+                "hash-normalization" => TestScenario.HashNormalization,
+                "physics-roundtrip" => TestScenario.PhysicsRoundTrip,
+                "physics-affects-hash" => TestScenario.PhysicsAffectsHash,
+                "snapshot-attribute-roundtrip" => TestScenario.SnapshotAttributeRoundTrip,
+                "attribute-roundtrip" => TestScenario.SnapshotAttributeRoundTrip,
+                "attributes-affect-hash" => TestScenario.AttributesAffectHash,
+                "attribute-dirty-merge" => TestScenario.AttributeDirtyMerge,
                 "frame-schedule" => TestScenario.FrameSchedule,
                 "future-frame-input-applies-on-target-frame" => TestScenario.FutureFrameInputAppliesOnTargetFrame,
                 "server-input" => TestScenario.ServerInput,
@@ -1193,7 +1243,10 @@ public static class TestRunner
                 "prediction-buffer-uses-global-frame" => TestScenario.PredictionBufferUsesGlobalFrame,
                 "skipped-no-record" => TestScenario.SkippedNoRecord,
                 "eviction-does-not-crash" => TestScenario.EvictionDoesNotCrash,
+                "accepted-input-feedback-raises-lead" => TestScenario.AcceptedInputFeedbackRaisesLead,
+                "authoritative-snapshot-restores-physics-world" => TestScenario.AuthoritativeSnapshotRestoresPhysicsWorld,
                 "authoritative-snapshot-restores-player-attributes" => TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes,
+                "authoritative-snapshot-restores-attributes" => TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes,
                 "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
                 "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
                 "determinism" => TestScenario.Determinism,
@@ -1217,6 +1270,15 @@ public static class TestRunner
     {
         public const string All = "all";
         public const string SnapshotSelf = "snapshot-self";
+        public const string BasicRoundTrip = "basic-roundtrip";
+        public const string CapacityEviction = "capacity-eviction";
+        public const string SameFrameOverride = "same-frame-override";
+        public const string HashNormalization = "hash-normalization";
+        public const string PhysicsRoundTrip = "physics-roundtrip";
+        public const string PhysicsAffectsHash = "physics-affects-hash";
+        public const string SnapshotAttributeRoundTrip = "snapshot-attribute-roundtrip";
+        public const string AttributesAffectHash = "attributes-affect-hash";
+        public const string AttributeDirtyMerge = "attribute-dirty-merge";
         public const string FrameSchedule = "frame-schedule";
         public const string FutureFrameInputAppliesOnTargetFrame = "future-frame-input-applies-on-target-frame";
         public const string ServerInput = "server-input";
@@ -1236,6 +1298,8 @@ public static class TestRunner
         public const string PredictionBufferUsesGlobalFrame = "prediction-buffer-uses-global-frame";
         public const string SkippedNoRecord = "skipped-no-record";
         public const string EvictionDoesNotCrash = "eviction-does-not-crash";
+        public const string AcceptedInputFeedbackRaisesLead = "accepted-input-feedback-raises-lead";
+        public const string AuthoritativeSnapshotRestoresPhysicsWorld = "authoritative-snapshot-restores-physics-world";
         public const string AuthoritativeSnapshotRestoresPlayerAttributes = "authoritative-snapshot-restores-player-attributes";
         public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
         public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";

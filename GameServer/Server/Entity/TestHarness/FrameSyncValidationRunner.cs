@@ -13,29 +13,38 @@ public static class FrameSyncValidationRunner
 {
     public static int Run(string[] args)
     {
-        FrameSyncValidationOptions options = FrameSyncValidationOptions.Parse(args);
-        FrameSyncValidatorReport report = FrameSyncValidator.Run(options);
-
-        if (!string.IsNullOrWhiteSpace(report.ReportPath))
+        try
         {
-            string reportDirectory = Path.GetDirectoryName(report.ReportPath) ?? ".";
-            Directory.CreateDirectory(reportDirectory);
-            File.WriteAllText(report.ReportPath, report.ReportContent, new UTF8Encoding(false));
-            Console.WriteLine($"[FrameSyncMvpAValidator] Report: {report.ReportPath}");
+            FrameSyncValidationOptions options = FrameSyncValidationOptions.Parse(args);
+            FrameSyncValidatorReport report = FrameSyncValidator.Run(options);
+            bool wroteReport = !string.IsNullOrWhiteSpace(report.ReportPath);
+
+            if (wroteReport)
+            {
+                string reportDirectory = Path.GetDirectoryName(report.ReportPath) ?? ".";
+                Directory.CreateDirectory(reportDirectory);
+                File.WriteAllText(report.ReportPath, report.ReportContent, new UTF8Encoding(false));
+                Console.WriteLine($"[FrameSyncMvpAValidator] Report: {report.ReportPath}");
+            }
+
+            if (!wroteReport && options.Output != FrameSyncValidationOutputFormat.Console)
+            {
+                Console.WriteLine(report.ReportContent);
+                return report.Passed ? 0 : 1;
+            }
+
+            Console.WriteLine($"[FrameSyncMvpAValidator] Result: {(report.Passed ? "PASS" : "FAIL")}");
+            Console.WriteLine(
+                $"[FrameSyncMvpAValidator] TickP95={report.TickP95Ms:F3}ms Drift={report.DriftSeconds:F6}s Frames={report.TotalFrames}");
+            Console.WriteLine($"[FrameSyncMvpAValidator] Issues={report.Failures.Count} Warnings={report.Warnings.Count}");
+
+            return report.Passed ? 0 : 1;
         }
-
-        Console.WriteLine($"[FrameSyncMvpAValidator] Result: {(report.Passed ? "PASS" : "FAIL")}");
-        Console.WriteLine(
-            $"[FrameSyncMvpAValidator] TickP95={report.TickP95Ms:F3}ms Drift={report.DriftSeconds:F6}s Frames={report.TotalFrames}");
-        Console.WriteLine($"[FrameSyncMvpAValidator] Issues={report.Failures.Count} Warnings={report.Warnings.Count}");
-
-        if (options.Output != FrameSyncValidationOutputFormat.Console &&
-            string.IsNullOrWhiteSpace(report.ReportPath))
+        catch (ArgumentException exception)
         {
-            Console.WriteLine(report.ReportContent);
+            Console.Error.WriteLine($"[FrameSyncMvpAValidator] ERROR: {exception.Message}");
+            return 1;
         }
-
-        return report.Passed ? 0 : 1;
     }
 }
 
@@ -69,33 +78,41 @@ public sealed class FrameSyncValidationOptions
         string repoRoot = FindRepoRoot();
         double durationSeconds = DefaultDurationSeconds;
         double updateHz = DefaultUpdateHz;
-        string? reportPath = null;
-        FrameSyncValidationOutputFormat output = FrameSyncValidationOutputFormat.Markdown;
+        string reportPath = string.Empty;
+        FrameSyncValidationOutputFormat output = FrameSyncValidationOutputFormat.Console;
 
         for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i];
-            if (arg.Equals("--validate", StringComparison.OrdinalIgnoreCase) ||
-                arg.Equals("--mode=validate", StringComparison.OrdinalIgnoreCase))
+            if (arg.Equals("--validate", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (arg.Equals("--repo-root", StringComparison.OrdinalIgnoreCase))
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--mode", out string modeValue))
             {
-                repoRoot = ReadRequiredValue(args, ref i, "--repo-root");
+                if (modeValue.Equals("validate", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 continue;
             }
 
-            if (arg.Equals("--report", StringComparison.OrdinalIgnoreCase))
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--repo-root", out string repoRootValue))
             {
-                reportPath = ReadRequiredValue(args, ref i, "--report");
+                repoRoot = repoRootValue;
                 continue;
             }
 
-            if (arg.Equals("--output", StringComparison.OrdinalIgnoreCase))
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--report", out string reportPathValue))
             {
-                string value = ReadRequiredValue(args, ref i, "--output");
+                reportPath = reportPathValue;
+                continue;
+            }
+
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--output", out string value))
+            {
                 output = value.ToLowerInvariant() switch
                 {
                     "console" => FrameSyncValidationOutputFormat.Console,
@@ -106,56 +123,33 @@ public sealed class FrameSyncValidationOptions
                 continue;
             }
 
-            if (arg.Equals("--duration-seconds", StringComparison.OrdinalIgnoreCase))
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--duration-seconds", out string durationValue))
             {
-                string value = ReadRequiredValue(args, ref i, "--duration-seconds");
-                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out durationSeconds) ||
+                if (!double.TryParse(durationValue, NumberStyles.Float, CultureInfo.InvariantCulture, out durationSeconds) ||
                     durationSeconds <= 0.0d)
                 {
-                    throw new ArgumentException($"Invalid --duration-seconds value: {value}");
+                    throw new ArgumentException($"Invalid --duration-seconds value: {durationValue}");
                 }
 
                 continue;
             }
 
-            if (arg.Equals("--update-hz", StringComparison.OrdinalIgnoreCase))
+            if (CommandLineOptionReader.TryReadOption(args, ref i, "--update-hz", out string updateHzValue))
             {
-                string value = ReadRequiredValue(args, ref i, "--update-hz");
-                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out updateHz) ||
+                if (!double.TryParse(updateHzValue, NumberStyles.Float, CultureInfo.InvariantCulture, out updateHz) ||
                     updateHz <= 0.0d)
                 {
-                    throw new ArgumentException($"Invalid --update-hz value: {value}");
+                    throw new ArgumentException($"Invalid --update-hz value: {updateHzValue}");
                 }
             }
         }
 
-        if (string.IsNullOrWhiteSpace(reportPath))
-        {
-            reportPath = output switch
-            {
-                FrameSyncValidationOutputFormat.Console => string.Empty,
-                FrameSyncValidationOutputFormat.Json => Path.Combine(repoRoot, "Plan", "状态帧同步", "状态帧同步-MVP-a验收报告.json"),
-                _ => Path.Combine(repoRoot, "Plan", "状态帧同步", "状态帧同步-MVP-a验收报告.md")
-            };
-        }
-        else if (!Path.IsPathRooted(reportPath))
+        if (!string.IsNullOrWhiteSpace(reportPath) && !Path.IsPathRooted(reportPath))
         {
             reportPath = Path.GetFullPath(Path.Combine(repoRoot, reportPath));
         }
 
         return new FrameSyncValidationOptions(repoRoot, reportPath, durationSeconds, updateHz, output);
-    }
-
-    private static string ReadRequiredValue(string[] args, ref int index, string optionName)
-    {
-        int valueIndex = index + 1;
-        if (valueIndex >= args.Length)
-        {
-            throw new ArgumentException($"{optionName} requires a value.");
-        }
-
-        index = valueIndex;
-        return args[valueIndex];
     }
 
     private static string FindRepoRoot()

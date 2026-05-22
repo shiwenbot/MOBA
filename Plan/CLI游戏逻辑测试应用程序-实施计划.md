@@ -1,8 +1,8 @@
 # CLI游戏逻辑测试应用程序 - 实施计划（修订版）
 
-- 修订日期：`2026-05-16`
+- 修订日期：`2026-05-19`
 - 当前判断：`推荐先做测试 MVP，再用它护航状态帧同步主线重构，完整独立 CLI 产品化后置`
-- 当前执行状态：`测试 MVP 仍未完整实现；但现有无头入口已于 2026-05-16 实测通过，并已支撑 v0.3b 完成验收`
+- 当前执行状态：`测试入口 MVP 已落地；独立 CLI 产品化与后续高阶场景仍待继续`
 - 关联文档：
   - [状态帧同步-架构重构计划.md](/D:/unity/Tencent/TEngine/Plan/状态帧同步/状态帧同步-架构重构计划.md:1)
   - [状态帧同步-v0.3-test计划.md](/D:/unity/Tencent/TEngine/Plan/状态帧同步/状态帧同步-v0.3-test计划.md:1)
@@ -11,7 +11,7 @@
 ## 当前决策（2026-05-16）
 
 - 本计划当前仍保留为推荐工程化支线。
-- `Milestone 0` ~ `Milestone 2` 仍未完整实现，但现有基础入口已实际跑通。
+- `Milestone 1` 已于 `2026-05-19` 落地，`Milestone 0 / 2 / 3` 仍待继续推进。
 - 需求方已明确接受先不做本阶段测试增强，直接开启 `v0.3b` 主线改造。
 - `2026-05-16` 已验证现有命令可用：
   - `--mode=test` → `PASS`
@@ -178,12 +178,12 @@ GameServer/Tools/GameLogicTester/
 
 **任务清单**：
 
-- [ ] 在现有 `--mode=test` 基础上增加 `--scenario`
-- [ ] 增加 `--frames`、`--clients`、`--output`、`--report`
-- [ ] 增加 `--mode=validate` 或等价路由，统一触发 validator
-- [ ] 输出 Console / Markdown / JSON 三种结果
-- [ ] 保证退出码稳定：0 = PASS，1 = FAIL
-- [ ] 输出格式固定，便于 agent 直接解析
+- [x] 在现有 `--mode=test` 基础上增加 `--scenario`
+- [x] 增加 `--frames`、`--clients`、`--output`、`--report`
+- [x] 增加 `--mode=validate` 或等价路由，统一触发 validator
+- [x] 输出 Console / Markdown / JSON 三种结果
+- [x] 保证退出码稳定：0 = PASS，1 = FAIL
+- [x] 输出格式固定，便于 agent 直接解析
 
 **验证**：
 
