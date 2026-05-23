@@ -28,3 +28,6 @@ openspec/
 
 #ParrelSync clones
 UnityProject_clone_*/
+
+#analyze-report skill 生成的临时报告
+analysis-report-*.html
