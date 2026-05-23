@@ -64,6 +64,7 @@ message C2B_PlayerInput // IMessage
 	uint32 InputSeq = 2;
 	float Dx = 3;
 	float Dy = 4;
+	int32 SkillId = 5;
 }
 
 message BuffSnapshot

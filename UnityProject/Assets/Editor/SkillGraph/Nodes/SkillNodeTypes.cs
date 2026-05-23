@@ -10,7 +10,10 @@ namespace TEngine.Editor.SkillGraph
         Condition,
         Branch,
         SetVariable,
-        Delay
+        Delay,
+        ApplyBuff,
+        RemoveBuff,
+        BuffCondition
     }
 
     internal enum SkillActionType
@@ -40,6 +43,12 @@ namespace TEngine.Editor.SkillGraph
         LessOrEqual,
         IsTrue,
         IsFalse
+    }
+
+    internal enum SkillBuffTargetSelector
+    {
+        Target,
+        Caster
     }
 
     internal static class SkillNodeTypeUtility

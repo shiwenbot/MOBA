@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Fantasy.Async;
+using GameShared.FrameSync.Battle;
 using NUnit.Framework;
 
 namespace GameShared.SkillGraph.Tests
@@ -110,6 +111,148 @@ namespace GameShared.SkillGraph.Tests
             Assert.That(result.LastNodeId, Is.EqualTo(2));
             Assert.That(result.Message, Does.Contain("Animation failed"));
             Assert.That(runtime.PlayAnimationCalls, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Run_QueuesApplyBuffCommand_InLockstep()
+        {
+            RuntimeSkillGraph graph = new RuntimeSkillGraph
+            {
+                SkillName = "ApplyBuffLockstep",
+                SyncMode = RuntimeSyncModes.Lockstep,
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    CreateNode(1, RuntimeNodeTypes.Entry),
+                    CreateNode(2, RuntimeNodeTypes.ApplyBuff,
+                        CreateProperty(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Caster),
+                        CreateProperty(RuntimePropertyKeys.BuffId, "9001"),
+                        CreateProperty(RuntimePropertyKeys.DurationFrames, "45"),
+                        CreateProperty(RuntimePropertyKeys.StackCount, "2"))
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    CreateConnection(1, "Next", 2)
+                }
+            };
+
+            TestBuffCommandSink buffCommandSink = new TestBuffCommandSink();
+            TestRuntimeServices runtime = new TestRuntimeServices();
+            SkillGraphRunResult result = RunGraph(
+                graph,
+                runtime,
+                context =>
+                {
+                    context.CasterId = 7;
+                    context.TargetId = 99;
+                    context.BuffCommandSink = buffCommandSink;
+                });
+
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(buffCommandSink.ApplyCommands.Count, Is.EqualTo(1));
+            ApplyBuffCommand command = buffCommandSink.ApplyCommands[0];
+            Assert.That(command.CasterId, Is.EqualTo(7));
+            Assert.That(command.TargetId, Is.EqualTo(7));
+            Assert.That(command.BuffId, Is.EqualTo(9001));
+            Assert.That(command.DurationFrames, Is.EqualTo(45));
+            Assert.That(command.StackCount, Is.EqualTo(2));
+            Assert.That(command.FrameIndex, Is.EqualTo(0u));
+        }
+
+        [Test]
+        public void Run_SkipsApplyBuffQueue_InLocalOnly()
+        {
+            RuntimeSkillGraph graph = new RuntimeSkillGraph
+            {
+                SkillName = "ApplyBuffLocalOnly",
+                SyncMode = RuntimeSyncModes.LocalOnly,
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    CreateNode(1, RuntimeNodeTypes.Entry),
+                    CreateNode(2, RuntimeNodeTypes.ApplyBuff,
+                        CreateProperty(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target),
+                        CreateProperty(RuntimePropertyKeys.BuffId, "9001"),
+                        CreateProperty(RuntimePropertyKeys.DurationFrames, "30"),
+                        CreateProperty(RuntimePropertyKeys.StackCount, "1"))
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    CreateConnection(1, "Next", 2)
+                }
+            };
+
+            TestBuffCommandSink buffCommandSink = new TestBuffCommandSink();
+            SkillGraphRunResult result = RunGraph(
+                graph,
+                new TestRuntimeServices(),
+                context =>
+                {
+                    context.CasterId = 7;
+                    context.TargetId = 9;
+                    context.BuffCommandSink = buffCommandSink;
+                });
+
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(buffCommandSink.ApplyCommands, Is.Empty);
+        }
+
+        [Test]
+        public void Run_BuffConditionRoutesByStackCount()
+        {
+            RuntimeSkillGraph graph = new RuntimeSkillGraph
+            {
+                SkillName = "BuffConditionBranch",
+                SyncMode = RuntimeSyncModes.Lockstep,
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    CreateNode(1, RuntimeNodeTypes.Entry),
+                    CreateNode(2, RuntimeNodeTypes.BuffCondition,
+                        CreateProperty(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target),
+                        CreateProperty(RuntimePropertyKeys.BuffId, "9001"),
+                        CreateProperty(RuntimePropertyKeys.MinimumStackCount, "2")),
+                    CreateNode(3, RuntimeNodeTypes.Debug,
+                        CreateProperty("message", "True path")),
+                    CreateNode(4, RuntimeNodeTypes.Debug,
+                        CreateProperty("message", "False path"))
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    CreateConnection(1, "Next", 2),
+                    CreateConnection(2, "True", 3),
+                    CreateConnection(2, "False", 4)
+                }
+            };
+
+            TestBuffCommandSink successSink = new TestBuffCommandSink();
+            successSink.SetBuffStackCount(9, 9001, 3);
+            TestRuntimeServices successRuntime = new TestRuntimeServices();
+            SkillGraphRunResult successResult = RunGraph(
+                graph,
+                successRuntime,
+                context =>
+                {
+                    context.TargetId = 9;
+                    context.BuffCommandSink = successSink;
+                });
+
+            Assert.That(successResult.IsSuccess, Is.True);
+            Assert.That(successResult.LastNodeId, Is.EqualTo(3));
+            Assert.That(successRuntime.Logs, Is.EqualTo(new[] { "True path" }));
+
+            TestBuffCommandSink failSink = new TestBuffCommandSink();
+            failSink.SetBuffStackCount(9, 9001, 1);
+            TestRuntimeServices failRuntime = new TestRuntimeServices();
+            SkillGraphRunResult failResult = RunGraph(
+                graph,
+                failRuntime,
+                context =>
+                {
+                    context.TargetId = 9;
+                    context.BuffCommandSink = failSink;
+                });
+
+            Assert.That(failResult.IsSuccess, Is.True);
+            Assert.That(failResult.LastNodeId, Is.EqualTo(4));
+            Assert.That(failRuntime.Logs, Is.EqualTo(new[] { "False path" }));
         }
 
         [Test]
@@ -752,6 +895,63 @@ namespace GameShared.SkillGraph.Tests
                 }
 
                 return FTask<bool>.FromResult(PlayAnimationResult);
+            }
+        }
+
+        private sealed class TestBuffCommandSink : IBuffCommandSink
+        {
+            private readonly Dictionary<string, int> _stackCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            public List<ApplyBuffCommand> ApplyCommands { get; } = new List<ApplyBuffCommand>();
+
+            public List<RemoveBuffCommand> RemoveCommands { get; } = new List<RemoveBuffCommand>();
+
+            public void SetBuffStackCount(long targetId, int buffId, int stackCount)
+            {
+                _stackCounts[BuildKey(targetId, buffId)] = Math.Max(0, stackCount);
+            }
+
+            public void EnqueueApplyBuff(ApplyBuffCommand command)
+            {
+                ApplyCommands.Add(new ApplyBuffCommand
+                {
+                    CasterId = command.CasterId,
+                    TargetId = command.TargetId,
+                    BuffId = command.BuffId,
+                    DurationFrames = command.DurationFrames,
+                    StackCount = command.StackCount,
+                    FrameIndex = command.FrameIndex,
+                    Flags = command.Flags
+                });
+            }
+
+            public void EnqueueRemoveBuff(RemoveBuffCommand command)
+            {
+                RemoveCommands.Add(new RemoveBuffCommand
+                {
+                    TargetId = command.TargetId,
+                    RuntimeBuffId = command.RuntimeBuffId,
+                    BuffId = command.BuffId,
+                    RemoveReason = command.RemoveReason,
+                    FrameIndex = command.FrameIndex
+                });
+            }
+
+            public bool HasBuff(long targetId, int buffId)
+            {
+                return GetBuffStackCount(targetId, buffId) > 0;
+            }
+
+            public int GetBuffStackCount(long targetId, int buffId)
+            {
+                return _stackCounts.TryGetValue(BuildKey(targetId, buffId), out int stackCount)
+                    ? stackCount
+                    : 0;
+            }
+
+            private static string BuildKey(long targetId, int buffId)
+            {
+                return $"{targetId}:{buffId}";
             }
         }
     }

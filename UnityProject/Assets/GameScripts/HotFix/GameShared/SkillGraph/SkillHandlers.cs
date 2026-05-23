@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Fantasy.Async;
+using GameShared.FrameSync.Battle;
 
 namespace GameShared.SkillGraph
 {
@@ -18,6 +19,9 @@ namespace GameShared.SkillGraph
             registry.Register(RuntimeNodeTypes.Branch, new BranchNodeHandler());
             registry.Register(RuntimeNodeTypes.SetVariable, new SetVariableNodeHandler());
             registry.Register(RuntimeNodeTypes.Delay, new DelayNodeHandler());
+            registry.Register(RuntimeNodeTypes.ApplyBuff, new ApplyBuffNodeHandler());
+            registry.Register(RuntimeNodeTypes.RemoveBuff, new RemoveBuffNodeHandler());
+            registry.Register(RuntimeNodeTypes.BuffCondition, new BuffConditionNodeHandler());
         }
     }
 
@@ -31,7 +35,7 @@ namespace GameShared.SkillGraph
     {
         public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
         {
-            context.Runtime.Log(node.GetPropertyValue("message"));
+            context.Runtime?.Log(node.GetPropertyValue("message"));
             return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
         }
     }
@@ -83,6 +87,73 @@ namespace GameShared.SkillGraph
             }
 
             return SkillExecuteResult.Success("Out");
+        }
+    }
+
+    public sealed class ApplyBuffNodeHandler : ISkillNodeHandler
+    {
+        public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
+        {
+            int buffId = SkillHandlerUtility.RequirePositiveIntProperty(node, RuntimePropertyKeys.BuffId);
+            int durationFrames = Math.Max(0, node.GetIntPropertyValue(RuntimePropertyKeys.DurationFrames, 0));
+            int stackCount = Math.Max(1, node.GetIntPropertyValue(RuntimePropertyKeys.StackCount, 1));
+            long targetId = SkillHandlerUtility.ResolveTargetId(node, context);
+            if (!context.IsLockstepMode)
+            {
+                return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
+            }
+
+            IBuffCommandSink buffCommandSink = SkillHandlerUtility.RequireBuffCommandSink(context);
+            buffCommandSink.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = context.CasterId,
+                TargetId = targetId,
+                BuffId = buffId,
+                DurationFrames = durationFrames,
+                StackCount = stackCount,
+                FrameIndex = SkillHandlerUtility.ResolveFrameIndex(context),
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            });
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
+        }
+    }
+
+    public sealed class RemoveBuffNodeHandler : ISkillNodeHandler
+    {
+        public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
+        {
+            int buffId = SkillHandlerUtility.RequirePositiveIntProperty(node, RuntimePropertyKeys.BuffId);
+            long targetId = SkillHandlerUtility.ResolveTargetId(node, context);
+            if (!context.IsLockstepMode)
+            {
+                return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
+            }
+
+            IBuffCommandSink buffCommandSink = SkillHandlerUtility.RequireBuffCommandSink(context);
+            buffCommandSink.EnqueueRemoveBuff(new RemoveBuffCommand
+            {
+                TargetId = targetId,
+                RuntimeBuffId = 0,
+                BuffId = buffId,
+                RemoveReason = RemoveReason.Manual,
+                FrameIndex = SkillHandlerUtility.ResolveFrameIndex(context)
+            });
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
+        }
+    }
+
+    public sealed class BuffConditionNodeHandler : ISkillNodeHandler
+    {
+        public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
+        {
+            int buffId = SkillHandlerUtility.RequirePositiveIntProperty(node, RuntimePropertyKeys.BuffId);
+            int minimumStackCount = Math.Max(1, node.GetIntPropertyValue(RuntimePropertyKeys.MinimumStackCount, 1));
+            long targetId = SkillHandlerUtility.ResolveTargetId(node, context);
+            IBuffCommandSink buffCommandSink = SkillHandlerUtility.RequireBuffCommandSink(context);
+            bool hasBuff = minimumStackCount <= 1
+                ? buffCommandSink.HasBuff(targetId, buffId)
+                : buffCommandSink.GetBuffStackCount(targetId, buffId) >= minimumStackCount;
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success(hasBuff ? "True" : "False"));
         }
     }
 
@@ -378,6 +449,45 @@ namespace GameShared.SkillGraph
                 return value;
 
             throw new InvalidOperationException($"Node {node.NodeId} requires non-empty property '{key}'.");
+        }
+
+        public static int RequirePositiveIntProperty(RuntimeSkillNode node, string key)
+        {
+            int value = node.GetIntPropertyValue(key, 0);
+            if (value > 0)
+            {
+                return value;
+            }
+
+            throw new InvalidOperationException($"Node {node.NodeId} requires positive integer property '{key}'.");
+        }
+
+        public static IBuffCommandSink RequireBuffCommandSink(SkillContext context)
+        {
+            if (context.BuffCommandSink != null)
+            {
+                return context.BuffCommandSink;
+            }
+
+            throw new InvalidOperationException("SkillContext.BuffCommandSink must be assigned before executing buff nodes.");
+        }
+
+        public static long ResolveTargetId(RuntimeSkillNode node, SkillContext context)
+        {
+            string selector = node.GetPropertyValue(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target);
+            if (string.Equals(selector, RuntimeBuffTargetSelectors.Caster, StringComparison.OrdinalIgnoreCase))
+            {
+                return context.CasterId;
+            }
+
+            return context.TargetId;
+        }
+
+        public static uint ResolveFrameIndex(SkillContext context)
+        {
+            return context.CurrentFrameIndex <= 0
+                ? 0u
+                : checked((uint)context.CurrentFrameIndex);
         }
     }
 }

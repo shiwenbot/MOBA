@@ -1,4 +1,5 @@
 using Fantasy.Async;
+using GameShared.FrameSync.Battle;
 using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
@@ -34,7 +35,13 @@ namespace GameShared.SkillGraph
 
         public ISkillRuntimeServices? Runtime { get; set; }
 
+        public IBuffCommandSink? BuffCommandSink { get; set; }
+
         public FCancellationToken? CancellationToken { get; set; }
+
+        public bool IsLockstepMode { get; internal set; }
+
+        public int CurrentFrameIndex { get; internal set; } = -1;
 
         public bool IsCancellationRequested =>
             IsCancelled || (CancellationToken != null && CancellationToken.IsCancel);
@@ -166,5 +173,26 @@ namespace GameShared.SkillGraph
 
         [JsonProperty("bools")]
         public Dictionary<string, bool> Bools { get; set; } = new Dictionary<string, bool>(StringComparer.Ordinal);
+    }
+
+    public sealed class NullSkillRuntimeServices : ISkillRuntimeServices
+    {
+        public void Log(string message)
+        {
+        }
+
+        public FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)
+        {
+            return FTask<bool>.FromResult(true);
+        }
+
+        public FTask<bool> PlayAnimationAsync(
+            SkillContext context,
+            string prefabLocation,
+            float speed,
+            FCancellationToken? cancellationToken = null)
+        {
+            return FTask<bool>.FromResult(true);
+        }
     }
 }

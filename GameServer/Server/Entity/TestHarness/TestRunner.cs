@@ -8,6 +8,7 @@ using GameLogic;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
+using GameShared.SkillGraph;
 
 namespace Fantasy;
 
@@ -79,6 +80,7 @@ public static class TestRunner
             case TestScenario.BuffRoundTrip:
             case TestScenario.BuffsAffectHash:
             case TestScenario.RuntimeBuffIdRoundTrip:
+            case TestScenario.SkillBuffRoundTrip:
                 checks.Add(RunSnapshotSelfCase(options.Scenario));
                 break;
 
@@ -133,6 +135,10 @@ public static class TestRunner
             case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
             case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
+                break;
+
+            case TestScenario.SkillTriggerBuff:
+                checks.Add(RunSingleCheck("BattleSkillTest", TestScenario.SkillTriggerBuff, SkillTriggerBuff));
                 break;
 
             case TestScenario.Determinism:
@@ -763,6 +769,25 @@ public static class TestRunner
         return true;
     }
 
+    private static bool SkillTriggerBuff()
+    {
+        int skillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
+        int expectedBuffId = BattleSkillGraphLibrary.ResolveConfiguredBuffId();
+        BattleLogic battleLogic = new BattleLogic(skillGraphs: BattleSkillGraphLibrary.CreateBuiltInGraphs());
+        PlayerState player = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+
+        battleLogic.SubmitInput(1, 5, 1, 0.0f, 0.0f, skillId);
+        for (uint frame = 0; frame <= 5; frame++)
+        {
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+        }
+
+        return player.ActiveBuffs.Count == 1 &&
+               player.ActiveBuffs[0].BuffId == expectedBuffId &&
+               player.ActiveBuffs[0].CasterId == player.PlayerId &&
+               player.ActiveBuffs[0].TargetId == player.PlayerId;
+    }
+
     private static bool RunHeadOnBodyBlockScenario(
         uint totalFrames,
         float minimumExpectedSeparation,
@@ -1232,6 +1257,7 @@ public static class TestRunner
                 "buff-roundtrip" => TestScenario.BuffRoundTrip,
                 "buffs-affect-hash" => TestScenario.BuffsAffectHash,
                 "runtime-buff-id-roundtrip" => TestScenario.RuntimeBuffIdRoundTrip,
+                "skill-buff-roundtrip" => TestScenario.SkillBuffRoundTrip,
                 "frame-schedule" => TestScenario.FrameSchedule,
                 "future-frame-input-applies-on-target-frame" => TestScenario.FutureFrameInputAppliesOnTargetFrame,
                 "server-input" => TestScenario.ServerInput,
@@ -1259,6 +1285,7 @@ public static class TestRunner
                 "predicted-buff-consistency-hit" => TestScenario.PredictedBuffConsistencyHit,
                 "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
                 "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
+                "skill-trigger-buff" => TestScenario.SkillTriggerBuff,
                 "determinism" => TestScenario.Determinism,
                 "consistency" => TestScenario.Consistency,
                 "convergence" => TestScenario.Convergence,
@@ -1292,6 +1319,7 @@ public static class TestRunner
         public const string BuffRoundTrip = "buff-roundtrip";
         public const string BuffsAffectHash = "buffs-affect-hash";
         public const string RuntimeBuffIdRoundTrip = "runtime-buff-id-roundtrip";
+        public const string SkillBuffRoundTrip = "skill-buff-roundtrip";
         public const string FrameSchedule = "frame-schedule";
         public const string FutureFrameInputAppliesOnTargetFrame = "future-frame-input-applies-on-target-frame";
         public const string ServerInput = "server-input";
@@ -1318,6 +1346,7 @@ public static class TestRunner
         public const string PredictedBuffConsistencyHit = "predicted-buff-consistency-hit";
         public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
         public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";
+        public const string SkillTriggerBuff = "skill-trigger-buff";
         public const string Determinism = "determinism";
         public const string Consistency = "consistency";
         public const string Convergence = "convergence";

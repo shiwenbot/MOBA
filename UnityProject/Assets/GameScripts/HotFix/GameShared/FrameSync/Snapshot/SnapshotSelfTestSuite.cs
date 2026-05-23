@@ -1,5 +1,6 @@
 using System;
 using GameShared.FrameSync.Battle;
+using GameShared.SkillGraph;
 
 namespace GameShared.FrameSync.Snapshot
 {
@@ -19,7 +20,8 @@ namespace GameShared.FrameSync.Snapshot
             "attribute-dirty-merge",
             "buff-roundtrip",
             "buffs-affect-hash",
-            "runtime-buff-id-roundtrip"
+            "runtime-buff-id-roundtrip",
+            "skill-buff-roundtrip"
         };
 
         public static bool Run(out string failedCase)
@@ -55,6 +57,7 @@ namespace GameShared.FrameSync.Snapshot
                     "buff-roundtrip" => BuffRoundTrip(),
                     "buffs-affect-hash" => BuffsAffectHash(),
                     "runtime-buff-id-roundtrip" => RuntimeBuffIdRoundTrip(),
+                    "skill-buff-roundtrip" => SkillBuffRoundTrip(),
                     _ => throw new ArgumentException($"Unknown snapshot self test case: {caseName}", nameof(caseName))
                 };
 
@@ -413,6 +416,46 @@ namespace GameShared.FrameSync.Snapshot
                    restoredPlayer.NextRuntimeBuffId == 3;
         }
 
+        private static bool SkillBuffRoundTrip()
+        {
+            int skillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
+            int expectedBuffId = BattleSkillGraphLibrary.ResolveConfiguredBuffId();
+
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            TestWorldBuffCommandSink commandSink = new TestWorldBuffCommandSink(worldState);
+            BattleSkillGraphRuntime runtime = new BattleSkillGraphRuntime(
+                commandSink,
+                BattleSkillGraphLibrary.CreateBuiltInGraphs());
+
+            runtime.QueueSkillRequest(1, 1, skillId, 0);
+            runtime.Step(0);
+            commandSink.Process(0);
+            player.Numeric.Recalculate(player);
+            BuffSystem.ApplyTick(player, 0);
+
+            BattleWorldSnapshot snapshotA = worldState.TakeSnapshot().WithFrameIndex(500);
+            ulong hashA = StateHasher.Hash(snapshotA);
+
+            BattleWorldState restoredWorldState = new BattleWorldState();
+            restoredWorldState.RestoreSnapshot(snapshotA);
+            BattleWorldSnapshot snapshotB = restoredWorldState.TakeSnapshot().WithFrameIndex(500);
+            ulong hashB = StateHasher.Hash(snapshotB);
+            if (!restoredWorldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            return restoredPlayer.ActiveBuffs.Count == 1 &&
+                   restoredPlayer.ActiveBuffs[0].BuffId == expectedBuffId &&
+                   hashA == hashB;
+        }
+
         private static BattleWorldSnapshot CreateSinglePlayerSnapshot(uint frameIndex, float x)
         {
             return new BattleWorldSnapshot(
@@ -470,6 +513,93 @@ namespace GameShared.FrameSync.Snapshot
             {
                 snapshot = default;
                 return false;
+            }
+        }
+
+        private sealed class TestWorldBuffCommandSink : IBuffCommandSink
+        {
+            private readonly BattleWorldState _worldState;
+            private readonly System.Collections.Generic.List<ApplyBuffCommand> _pendingApplyCommands =
+                new System.Collections.Generic.List<ApplyBuffCommand>();
+            private readonly System.Collections.Generic.List<RemoveBuffCommand> _pendingRemoveCommands =
+                new System.Collections.Generic.List<RemoveBuffCommand>();
+
+            public TestWorldBuffCommandSink(BattleWorldState worldState)
+            {
+                _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
+            }
+
+            public void EnqueueApplyBuff(ApplyBuffCommand command)
+            {
+                _pendingApplyCommands.Add(new ApplyBuffCommand
+                {
+                    CasterId = command.CasterId,
+                    TargetId = command.TargetId,
+                    BuffId = command.BuffId,
+                    DurationFrames = command.DurationFrames,
+                    StackCount = command.StackCount,
+                    FrameIndex = command.FrameIndex,
+                    Flags = command.Flags
+                });
+            }
+
+            public void EnqueueRemoveBuff(RemoveBuffCommand command)
+            {
+                _pendingRemoveCommands.Add(new RemoveBuffCommand
+                {
+                    TargetId = command.TargetId,
+                    RuntimeBuffId = command.RuntimeBuffId,
+                    BuffId = command.BuffId,
+                    RemoveReason = command.RemoveReason,
+                    FrameIndex = command.FrameIndex
+                });
+            }
+
+            public bool HasBuff(long targetId, int buffId)
+            {
+                return _worldState.TryGetPlayer(targetId, out PlayerState targetState) &&
+                       BuffSystem.HasBuff(targetState, buffId);
+            }
+
+            public int GetBuffStackCount(long targetId, int buffId)
+            {
+                return _worldState.TryGetPlayer(targetId, out PlayerState targetState)
+                    ? BuffSystem.GetBuffStackCount(targetState, buffId)
+                    : 0;
+            }
+
+            public void Process(uint frameIndex)
+            {
+                for (int i = 0; i < _pendingApplyCommands.Count; i++)
+                {
+                    ApplyBuffCommand command = _pendingApplyCommands[i];
+                    if (command.FrameIndex > frameIndex)
+                    {
+                        continue;
+                    }
+
+                    if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
+                    {
+                        BuffSystem.AddBuff(targetState, command);
+                    }
+                }
+
+                for (int i = 0; i < _pendingRemoveCommands.Count; i++)
+                {
+                    RemoveBuffCommand command = _pendingRemoveCommands[i];
+                    if (command.FrameIndex > frameIndex)
+                    {
+                        continue;
+                    }
+
+                    if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
+                    {
+                        BuffSystem.RemoveBuff(targetState, command);
+                    }
+                }
+
+                _pendingApplyCommands.Clear();
+                _pendingRemoveCommands.Clear();
             }
         }
     }

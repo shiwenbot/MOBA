@@ -15,6 +15,9 @@ namespace TEngine.Editor.SkillGraph
                 SkillNodeType.Branch => new BranchNode(),
                 SkillNodeType.SetVariable => new SetVariableNode(),
                 SkillNodeType.Delay => new DelayNode(),
+                SkillNodeType.ApplyBuff => new ApplyBuffNode(),
+                SkillNodeType.RemoveBuff => new RemoveBuffNode(),
+                SkillNodeType.BuffCondition => new BuffConditionNode(),
                 _ => new ActionNode()
             };
 

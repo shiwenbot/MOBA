@@ -1,0 +1,148 @@
+let state = {
+  joined: false,
+  joinedFrame: 0,
+  allPlayersPresentFrame: 0,
+  observedTargetPlayerCount: false,
+  observedExpectedBuffAppearance: false,
+  observedExpectedBuffExpiry: false
+};
+
+let config = {
+  clientId: "client",
+  minimumPlayerCount: 2,
+  settleFrames: 30,
+  skillId: 1001,
+  expectedBuffId: 9001,
+  buffApplyDelayFrames: 30,
+  buffDurationFrames: 45
+};
+
+function countPlayersWithExpectedBuff(snapshot) {
+  if (!snapshot.players) {
+    return 0;
+  }
+
+  let count = 0;
+  for (let i = 0; i < snapshot.players.length; i++) {
+    const player = snapshot.players[i];
+    if (!player || !player.activeBuffs) {
+      continue;
+    }
+
+    for (let j = 0; j < player.activeBuffs.length; j++) {
+      const buff = player.activeBuffs[j];
+      if (buff && (buff.buffId | 0) === config.expectedBuffId) {
+        count++;
+        break;
+      }
+    }
+  }
+
+  return count;
+}
+
+module.exports = {
+  initialize(configJson) {
+    const parsed = JSON.parse(configJson || "{}");
+    config.clientId = parsed.clientId || "client";
+    config.minimumPlayerCount = parsed.minimumPlayerCount || 2;
+    config.settleFrames = parsed.settleFrames || 30;
+    config.skillId = parsed.skillId || 1001;
+    config.expectedBuffId = parsed.expectedBuffId || 9001;
+    config.buffApplyDelayFrames = parsed.buffApplyDelayFrames || 30;
+    config.buffDurationFrames = parsed.buffDurationFrames || 45;
+
+    state = {
+      joined: false,
+      joinedFrame: 0,
+      allPlayersPresentFrame: 0,
+      observedTargetPlayerCount: false,
+      observedExpectedBuffAppearance: false,
+      observedExpectedBuffExpiry: false
+    };
+  },
+
+  tryGetInput(payloadJson) {
+    return JSON.stringify({ hasInput: false, dx: 0.0, dy: 0.0 });
+  },
+
+  tryGetSkillRequest(payloadJson) {
+    return JSON.stringify({ hasSkillRequest: false, skillId: 0 });
+  },
+
+  evaluate(snapshotJson) {
+    const snapshot = JSON.parse(snapshotJson || "{}");
+
+    if (snapshot.joined && !state.joined) {
+      state.joined = true;
+      state.joinedFrame = snapshot.localFrame | 0;
+    }
+
+    if ((snapshot.activePlayerCount | 0) >= config.minimumPlayerCount) {
+      state.observedTargetPlayerCount = true;
+      if (!state.allPlayersPresentFrame) {
+        state.allPlayersPresentFrame = snapshot.localFrame | 0;
+      }
+    }
+
+    if (!state.joined) {
+      return JSON.stringify({ completed: false, passed: false, reason: "" });
+    }
+
+    const joinElapsedFrames = (snapshot.localFrame | 0) - state.joinedFrame;
+    if (!state.observedTargetPlayerCount) {
+      if (joinElapsedFrames >= 900) {
+        return JSON.stringify({
+          completed: true,
+          passed: false,
+          reason: "timeout-waiting-for-players need=" + config.minimumPlayerCount + " have=" + (snapshot.activePlayerCount | 0)
+        });
+      }
+      return JSON.stringify({ completed: false, passed: false, reason: "" });
+    }
+
+    const elapsedFrames = (snapshot.localFrame | 0) - state.allPlayersPresentFrame;
+    const playersWithExpectedBuff = countPlayersWithExpectedBuff(snapshot);
+
+    if (playersWithExpectedBuff >= config.minimumPlayerCount) {
+      state.observedExpectedBuffAppearance = true;
+    }
+
+    if (state.observedExpectedBuffAppearance &&
+        playersWithExpectedBuff === 0 &&
+        elapsedFrames >= config.buffApplyDelayFrames + config.buffDurationFrames) {
+      state.observedExpectedBuffExpiry = true;
+    }
+
+    const completionFrame =
+      config.buffApplyDelayFrames + config.buffDurationFrames + config.settleFrames;
+
+    if (elapsedFrames >= completionFrame) {
+      if (state.observedExpectedBuffAppearance && state.observedExpectedBuffExpiry) {
+        return JSON.stringify({
+          completed: true,
+          passed: true,
+          reason: "skill-buff-lifecycle-complete buffId=" + config.expectedBuffId + " skillId=" + config.skillId
+        });
+      }
+
+      if (!state.observedExpectedBuffAppearance) {
+        return JSON.stringify({
+          completed: true,
+          passed: false,
+          reason: "skill-buff-never-appeared buffId=" + config.expectedBuffId + " skillId=" + config.skillId
+        });
+      }
+
+      return JSON.stringify({
+        completed: true,
+        passed: false,
+        reason: "skill-buff-never-expired buffId=" + config.expectedBuffId + " skillId=" + config.skillId
+      });
+    }
+
+    return JSON.stringify({ completed: false, passed: false, reason: "" });
+  },
+
+  dispose() {}
+};

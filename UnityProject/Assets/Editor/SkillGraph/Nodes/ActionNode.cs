@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using GameShared.SkillGraph;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
@@ -106,6 +107,148 @@ namespace TEngine.Editor.SkillGraph
             _prefabField.style.display = _actionType == SkillActionType.PlayAnimation
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
+        }
+    }
+
+    internal sealed class ApplyBuffNode : SkillGraphNode
+    {
+        private readonly IntegerField _buffIdField;
+        private readonly IntegerField _durationFramesField;
+        private readonly IntegerField _stackCountField;
+        private readonly EnumField _targetSelectorField;
+
+        private int _buffId;
+        private int _durationFrames = 45;
+        private int _stackCount = 1;
+        private SkillBuffTargetSelector _targetSelector = SkillBuffTargetSelector.Target;
+
+        public ApplyBuffNode()
+            : base(SkillNodeType.ApplyBuff, "Apply Buff")
+        {
+            AddFlowInput("In");
+            AddFlowOutput("Out");
+
+            _targetSelectorField = new EnumField("Target", _targetSelector);
+            _targetSelectorField.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue is SkillBuffTargetSelector selector)
+                {
+                    _targetSelector = selector;
+                    NotifyPropertiesChanged();
+                }
+            });
+            AddPropertyField(_targetSelectorField);
+
+            _buffIdField = new IntegerField("Buff Id") { value = _buffId };
+            _buffIdField.RegisterValueChangedCallback(evt =>
+            {
+                _buffId = evt.newValue;
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_buffIdField);
+
+            _durationFramesField = new IntegerField("Duration") { value = _durationFrames };
+            _durationFramesField.RegisterValueChangedCallback(evt =>
+            {
+                _durationFrames = Math.Max(0, evt.newValue);
+                _durationFramesField.SetValueWithoutNotify(_durationFrames);
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_durationFramesField);
+
+            _stackCountField = new IntegerField("Stacks") { value = _stackCount };
+            _stackCountField.RegisterValueChangedCallback(evt =>
+            {
+                _stackCount = Math.Max(1, evt.newValue);
+                _stackCountField.SetValueWithoutNotify(_stackCount);
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_stackCountField);
+        }
+
+        protected override void WriteProperties(List<SkillNodePropertyData> properties)
+        {
+            AddProperty(properties, RuntimePropertyKeys.TargetSelector, _targetSelector);
+            AddProperty(properties, RuntimePropertyKeys.BuffId, _buffId);
+            AddProperty(properties, RuntimePropertyKeys.DurationFrames, _durationFrames);
+            AddProperty(properties, RuntimePropertyKeys.StackCount, _stackCount);
+        }
+
+        protected override void ReadProperties(IReadOnlyList<SkillNodePropertyData> properties)
+        {
+            if (Enum.TryParse(
+                    GetPropertyValue(properties, RuntimePropertyKeys.TargetSelector, _targetSelector.ToString()),
+                    true,
+                    out SkillBuffTargetSelector parsedSelector))
+            {
+                _targetSelector = parsedSelector;
+            }
+
+            _buffId = Math.Max(0, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.BuffId, _buffId));
+            _durationFrames = Math.Max(0, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.DurationFrames, _durationFrames));
+            _stackCount = Math.Max(1, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.StackCount, _stackCount));
+
+            _targetSelectorField.SetValueWithoutNotify(_targetSelector);
+            _buffIdField.SetValueWithoutNotify(_buffId);
+            _durationFramesField.SetValueWithoutNotify(_durationFrames);
+            _stackCountField.SetValueWithoutNotify(_stackCount);
+        }
+    }
+
+    internal sealed class RemoveBuffNode : SkillGraphNode
+    {
+        private readonly IntegerField _buffIdField;
+        private readonly EnumField _targetSelectorField;
+
+        private int _buffId;
+        private SkillBuffTargetSelector _targetSelector = SkillBuffTargetSelector.Target;
+
+        public RemoveBuffNode()
+            : base(SkillNodeType.RemoveBuff, "Remove Buff")
+        {
+            AddFlowInput("In");
+            AddFlowOutput("Out");
+
+            _targetSelectorField = new EnumField("Target", _targetSelector);
+            _targetSelectorField.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue is SkillBuffTargetSelector selector)
+                {
+                    _targetSelector = selector;
+                    NotifyPropertiesChanged();
+                }
+            });
+            AddPropertyField(_targetSelectorField);
+
+            _buffIdField = new IntegerField("Buff Id") { value = _buffId };
+            _buffIdField.RegisterValueChangedCallback(evt =>
+            {
+                _buffId = Math.Max(0, evt.newValue);
+                _buffIdField.SetValueWithoutNotify(_buffId);
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_buffIdField);
+        }
+
+        protected override void WriteProperties(List<SkillNodePropertyData> properties)
+        {
+            AddProperty(properties, RuntimePropertyKeys.TargetSelector, _targetSelector);
+            AddProperty(properties, RuntimePropertyKeys.BuffId, _buffId);
+        }
+
+        protected override void ReadProperties(IReadOnlyList<SkillNodePropertyData> properties)
+        {
+            if (Enum.TryParse(
+                    GetPropertyValue(properties, RuntimePropertyKeys.TargetSelector, _targetSelector.ToString()),
+                    true,
+                    out SkillBuffTargetSelector parsedSelector))
+            {
+                _targetSelector = parsedSelector;
+            }
+
+            _buffId = Math.Max(0, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.BuffId, _buffId));
+            _targetSelectorField.SetValueWithoutNotify(_targetSelector);
+            _buffIdField.SetValueWithoutNotify(_buffId);
         }
     }
 }

@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using Fantasy.Async;
+using GameShared.FrameSync.Battle;
+using GameShared.FrameSync.Determinism;
 using Newtonsoft.Json;
 
 namespace GameShared.SkillGraph
@@ -14,6 +18,9 @@ namespace GameShared.SkillGraph
         public const string Branch = "Branch";
         public const string SetVariable = "SetVariable";
         public const string Delay = "Delay";
+        public const string ApplyBuff = "ApplyBuff";
+        public const string RemoveBuff = "RemoveBuff";
+        public const string BuffCondition = "BuffCondition";
     }
 
     public static class RuntimeActionTypes
@@ -31,6 +38,11 @@ namespace GameShared.SkillGraph
         public const string Duration = "duration";
         public const string PrefabAssetPath = "prefabAssetPath";
         public const string PrefabLocation = "prefabLocation";
+        public const string BuffId = "buffId";
+        public const string DurationFrames = "durationFrames";
+        public const string StackCount = "stackCount";
+        public const string TargetSelector = "targetSelector";
+        public const string MinimumStackCount = "minimumStackCount";
     }
 
     public static class RuntimeValueTypes
@@ -58,6 +70,12 @@ namespace GameShared.SkillGraph
     {
         public const string Lockstep = "Lockstep";
         public const string LocalOnly = "LocalOnly";
+    }
+
+    public static class RuntimeBuffTargetSelectors
+    {
+        public const string Target = "Target";
+        public const string Caster = "Caster";
     }
 
     public sealed class RuntimeSkillGraph
@@ -183,6 +201,14 @@ namespace GameShared.SkillGraph
                 ? parsedValue
                 : fallbackValue;
         }
+
+        public int GetIntPropertyValue(string key, int fallbackValue)
+        {
+            string rawValue = GetPropertyValue(key, fallbackValue.ToString(CultureInfo.InvariantCulture));
+            return int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedValue)
+                ? parsedValue
+                : fallbackValue;
+        }
     }
 
     public sealed class RuntimeConnection
@@ -204,5 +230,446 @@ namespace GameShared.SkillGraph
 
         [JsonProperty("value")]
         public string Value { get; set; } = string.Empty;
+    }
+
+    public static class BattleSkillGraphLibrary
+    {
+        public const int DefaultSkillId = 1001;
+        public const int DefaultBuffId = 9001;
+        public const int DefaultBuffDurationFrames = 45;
+        public const int DefaultBuffStackCount = 1;
+
+        private const string RuntimeGraphDirectoryEnvVar = "BATTLE_SKILL_GRAPH_DIR";
+        private const string SkillIdEnvVar = "BATTLE_AUTOMATION_SKILL_ID";
+        private const string BuffIdEnvVar = "BATTLE_AUTOMATION_BUFF_ID";
+        private const string BuffDurationEnvVar = "BATTLE_AUTOMATION_BUFF_DURATION_FRAMES";
+        private const string BuffStackEnvVar = "BATTLE_AUTOMATION_BUFF_STACK_COUNT";
+
+        public static int ResolveConfiguredSkillId() => GetEnvInt(SkillIdEnvVar, DefaultSkillId);
+
+        public static int ResolveConfiguredBuffId() => GetEnvInt(BuffIdEnvVar, DefaultBuffId);
+
+        public static int ResolveConfiguredBuffDurationFrames() =>
+            Math.Max(1, GetEnvInt(BuffDurationEnvVar, DefaultBuffDurationFrames));
+
+        public static int ResolveConfiguredBuffStackCount() =>
+            Math.Max(1, GetEnvInt(BuffStackEnvVar, DefaultBuffStackCount));
+
+        public static IReadOnlyDictionary<int, RuntimeSkillGraph> LoadDefaultGraphs()
+        {
+            Dictionary<int, RuntimeSkillGraph> graphs = CreateBuiltInGraphs();
+            foreach (string directory in EnumerateRuntimeGraphDirectories())
+            {
+                LoadDirectoryInto(directory, graphs);
+            }
+
+            return graphs;
+        }
+
+        public static Dictionary<int, RuntimeSkillGraph> CreateBuiltInGraphs()
+        {
+            int skillId = ResolveConfiguredSkillId();
+            int buffId = ResolveConfiguredBuffId();
+            int durationFrames = ResolveConfiguredBuffDurationFrames();
+            int stackCount = ResolveConfiguredBuffStackCount();
+
+            return new Dictionary<int, RuntimeSkillGraph>
+            {
+                [skillId] = CreateSelfBuffGraph(skillId, buffId, durationFrames, stackCount)
+            };
+        }
+
+        public static RuntimeSkillGraph CreateSelfBuffGraph(
+            int skillId,
+            int buffId,
+            int durationFrames,
+            int stackCount)
+        {
+            return new RuntimeSkillGraph
+            {
+                Version = RuntimeSkillGraph.CurrentVersion,
+                SkillName = skillId.ToString(CultureInfo.InvariantCulture),
+                SyncMode = RuntimeSyncModes.Lockstep,
+                DeterministicFlags = CreateLockstepDeterministicFlags(),
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    new RuntimeSkillNode
+                    {
+                        NodeId = 0,
+                        NodeType = RuntimeNodeTypes.Entry
+                    },
+                    new RuntimeSkillNode
+                    {
+                        NodeId = 1,
+                        NodeType = RuntimeNodeTypes.ApplyBuff,
+                        Properties = new List<RuntimeProperty>
+                        {
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.TargetSelector,
+                                Value = RuntimeBuffTargetSelectors.Caster
+                            },
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.BuffId,
+                                Value = buffId.ToString(CultureInfo.InvariantCulture)
+                            },
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.DurationFrames,
+                                Value = Math.Max(0, durationFrames).ToString(CultureInfo.InvariantCulture)
+                            },
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.StackCount,
+                                Value = Math.Max(1, stackCount).ToString(CultureInfo.InvariantCulture)
+                            }
+                        }
+                    }
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    new RuntimeConnection
+                    {
+                        FromNodeId = 0,
+                        FromPort = "Next",
+                        ToNodeId = 1
+                    }
+                }
+            };
+        }
+
+        private static void LoadDirectoryInto(string directory, IDictionary<int, RuntimeSkillGraph> graphs)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return;
+            }
+
+            string[] files = Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly);
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+
+            foreach (string filePath in files)
+            {
+                if (!TryGetSkillIdFromPath(filePath, out int skillId))
+                {
+                    continue;
+                }
+
+                RuntimeSkillGraph graph = LoadGraph(filePath);
+                graphs[skillId] = graph;
+            }
+        }
+
+        private static RuntimeSkillGraph LoadGraph(string filePath)
+        {
+            string json = File.ReadAllText(filePath);
+            RuntimeSkillGraph? graph = JsonConvert.DeserializeObject<RuntimeSkillGraph>(json);
+            if (graph != null)
+            {
+                return graph;
+            }
+
+            throw new InvalidDataException($"Failed to deserialize runtime skill graph '{filePath}'.");
+        }
+
+        private static bool TryGetSkillIdFromPath(string filePath, out int skillId)
+        {
+            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(filePath);
+            return int.TryParse(fileNameWithoutExtension, NumberStyles.Integer, CultureInfo.InvariantCulture, out skillId) &&
+                   skillId > 0;
+        }
+
+        private static IEnumerable<string> EnumerateRuntimeGraphDirectories()
+        {
+            HashSet<string> directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            string explicitDirectory = Environment.GetEnvironmentVariable(RuntimeGraphDirectoryEnvVar) ?? string.Empty;
+            AddDirectoryIfExists(explicitDirectory, directories);
+
+            foreach (string root in EnumerateSearchRoots())
+            {
+                AddDirectoryIfExists(Path.Combine(root, "Assets", "AssetRaw", "Configs", "SkillGraphs"), directories);
+                AddDirectoryIfExists(Path.Combine(root, "UnityProject", "Assets", "AssetRaw", "Configs", "SkillGraphs"), directories);
+            }
+
+            return directories;
+        }
+
+        private static IEnumerable<string> EnumerateSearchRoots()
+        {
+            HashSet<string> roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddSearchRoots(Directory.GetCurrentDirectory(), roots);
+            AddSearchRoots(AppContext.BaseDirectory, roots);
+            return roots;
+        }
+
+        private static void AddSearchRoots(string path, ISet<string> roots)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            DirectoryInfo? current = new DirectoryInfo(Path.GetFullPath(path));
+            while (current != null)
+            {
+                roots.Add(current.FullName);
+                current = current.Parent;
+            }
+        }
+
+        private static void AddDirectoryIfExists(string path, ISet<string> directories)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            string fullPath = Path.GetFullPath(path);
+            if (Directory.Exists(fullPath))
+            {
+                directories.Add(fullPath);
+            }
+        }
+
+        private static List<string> CreateLockstepDeterministicFlags()
+        {
+            return new List<string>
+            {
+                "Delay.FrameStep",
+                "Action.CommandOnly",
+                "Trace.ExecutionEventsV1"
+            };
+        }
+
+        private static int GetEnvInt(string variableName, int fallbackValue)
+        {
+            string? rawValue = Environment.GetEnvironmentVariable(variableName);
+            return int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedValue)
+                ? parsedValue
+                : fallbackValue;
+        }
+    }
+
+    public sealed class BattleSkillGraphRuntime
+    {
+        private readonly SkillNodeHandlerRegistry _handlerRegistry = new SkillNodeHandlerRegistry();
+        private readonly Dictionary<long, ActiveSkillExecution> _activeExecutionsByCasterId = new Dictionary<long, ActiveSkillExecution>();
+        private readonly List<QueuedSkillRequest> _queuedRequests = new List<QueuedSkillRequest>();
+        private readonly List<long> _sortedCasterIds = new List<long>();
+        private readonly IReadOnlyDictionary<int, RuntimeSkillGraph> _graphsBySkillId;
+        private readonly IBuffCommandSink _buffCommandSink;
+        private readonly ISkillRuntimeServices _runtimeServices;
+
+        public BattleSkillGraphRuntime(
+            IBuffCommandSink buffCommandSink,
+            IReadOnlyDictionary<int, RuntimeSkillGraph>? graphsBySkillId = null,
+            ISkillRuntimeServices? runtimeServices = null)
+        {
+            _buffCommandSink = buffCommandSink ?? throw new ArgumentNullException(nameof(buffCommandSink));
+            _graphsBySkillId = graphsBySkillId ?? new Dictionary<int, RuntimeSkillGraph>();
+            _runtimeServices = runtimeServices ?? new NullSkillRuntimeServices();
+            SkillHandlers.RegisterDefaults(_handlerRegistry);
+        }
+
+        public int PreloadedSkillCount => _graphsBySkillId.Count;
+
+        public bool HasSkill(int skillId)
+        {
+            return _graphsBySkillId.ContainsKey(skillId);
+        }
+
+        public void QueueSkillRequest(long casterId, long targetId, int skillId, uint frameIndex)
+        {
+            if (casterId <= 0 || skillId <= 0)
+            {
+                return;
+            }
+
+            _queuedRequests.Add(new QueuedSkillRequest(casterId, targetId, skillId, frameIndex));
+        }
+
+        public void Step(uint frameIndex)
+        {
+            StartQueuedExecutions(frameIndex);
+            if (_activeExecutionsByCasterId.Count == 0)
+            {
+                return;
+            }
+
+            _sortedCasterIds.Clear();
+            foreach (long casterId in _activeExecutionsByCasterId.Keys)
+            {
+                _sortedCasterIds.Add(casterId);
+            }
+
+            _sortedCasterIds.Sort();
+            for (int i = 0; i < _sortedCasterIds.Count; i++)
+            {
+                long casterId = _sortedCasterIds[i];
+                if (!_activeExecutionsByCasterId.TryGetValue(casterId, out ActiveSkillExecution? execution))
+                {
+                    continue;
+                }
+
+                SkillGraphRunResult result = execution.Runner.Step(unchecked((int)frameIndex), null).GetAwaiter().GetResult();
+                if (!result.IsRunning)
+                {
+                    _activeExecutionsByCasterId.Remove(casterId);
+                }
+            }
+        }
+
+        public void RemovePlayer(long playerId)
+        {
+            if (_activeExecutionsByCasterId.Count == 0)
+            {
+                return;
+            }
+
+            _sortedCasterIds.Clear();
+            foreach (KeyValuePair<long, ActiveSkillExecution> pair in _activeExecutionsByCasterId)
+            {
+                if (pair.Key == playerId || pair.Value.TargetId == playerId)
+                {
+                    _sortedCasterIds.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < _sortedCasterIds.Count; i++)
+            {
+                _activeExecutionsByCasterId.Remove(_sortedCasterIds[i]);
+            }
+        }
+
+        public void Clear()
+        {
+            _queuedRequests.Clear();
+            _activeExecutionsByCasterId.Clear();
+            _sortedCasterIds.Clear();
+        }
+
+        private void StartQueuedExecutions(uint frameIndex)
+        {
+            if (_queuedRequests.Count == 0)
+            {
+                return;
+            }
+
+            _queuedRequests.Sort(QueuedSkillRequestComparer.Instance);
+            for (int i = 0; i < _queuedRequests.Count; i++)
+            {
+                QueuedSkillRequest request = _queuedRequests[i];
+                if (request.FrameIndex > frameIndex)
+                {
+                    continue;
+                }
+
+                if (!_graphsBySkillId.TryGetValue(request.SkillId, out RuntimeSkillGraph? graph) || graph == null)
+                {
+                    continue;
+                }
+
+                SkillContext context = CreateContext(request, graph);
+                SkillGraphRunner runner = new SkillGraphRunner(_handlerRegistry);
+                SkillGraphRunResult initializeResult = runner.Initialize(
+                    graph,
+                    context,
+                    CreateRunnerOptions(graph));
+                if (initializeResult.IsRunning)
+                {
+                    _activeExecutionsByCasterId[request.CasterId] = new ActiveSkillExecution(request.TargetId, runner);
+                }
+            }
+
+            _queuedRequests.Clear();
+        }
+
+        private SkillContext CreateContext(QueuedSkillRequest request, RuntimeSkillGraph graph)
+        {
+            return new SkillContext
+            {
+                CasterId = request.CasterId,
+                TargetId = request.TargetId,
+                SkillId = request.SkillId,
+                MaxExecutionSteps = ResolveExecutionStepLimit(graph),
+                Runtime = _runtimeServices,
+                BuffCommandSink = _buffCommandSink
+            };
+        }
+
+        private static SkillGraphRunnerOptions CreateRunnerOptions(RuntimeSkillGraph graph)
+        {
+            int maxExecutionSteps = ResolveExecutionStepLimit(graph);
+            return new SkillGraphRunnerOptions
+            {
+                MaxNodesPerStep = maxExecutionSteps,
+                MaxExecutionSteps = maxExecutionSteps,
+                StepDeltaSeconds = DeterminismRules.FixedDeltaTime,
+                UseLegacyAsyncNodesInLocalOnly = false,
+                EnableTrace = true
+            };
+        }
+
+        private static int ResolveExecutionStepLimit(RuntimeSkillGraph graph)
+        {
+            int nodeCount = graph?.Nodes?.Count ?? 0;
+            return Math.Max(16, nodeCount * 8);
+        }
+
+        private sealed class ActiveSkillExecution
+        {
+            public ActiveSkillExecution(long targetId, SkillGraphRunner runner)
+            {
+                TargetId = targetId;
+                Runner = runner ?? throw new ArgumentNullException(nameof(runner));
+            }
+
+            public long TargetId { get; }
+
+            public SkillGraphRunner Runner { get; }
+        }
+
+        private readonly struct QueuedSkillRequest
+        {
+            public QueuedSkillRequest(long casterId, long targetId, int skillId, uint frameIndex)
+            {
+                CasterId = casterId;
+                TargetId = targetId;
+                SkillId = skillId;
+                FrameIndex = frameIndex;
+            }
+
+            public long CasterId { get; }
+
+            public long TargetId { get; }
+
+            public int SkillId { get; }
+
+            public uint FrameIndex { get; }
+        }
+
+        private sealed class QueuedSkillRequestComparer : IComparer<QueuedSkillRequest>
+        {
+            public static readonly QueuedSkillRequestComparer Instance = new QueuedSkillRequestComparer();
+
+            public int Compare(QueuedSkillRequest left, QueuedSkillRequest right)
+            {
+                int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+                if (byFrame != 0)
+                {
+                    return byFrame;
+                }
+
+                int byCaster = left.CasterId.CompareTo(right.CasterId);
+                if (byCaster != 0)
+                {
+                    return byCaster;
+                }
+
+                return left.SkillId.CompareTo(right.SkillId);
+            }
+        }
     }
 }

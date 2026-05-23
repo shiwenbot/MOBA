@@ -408,6 +408,8 @@ namespace GameShared.SkillGraph
             _options = options ?? new SkillGraphRunnerOptions();
             if (_options.StepDeltaSeconds <= 0f)
                 _options.StepDeltaSeconds = 1f / 60f;
+            _context.IsLockstepMode = IsLockstepMode();
+            _context.CurrentFrameIndex = -1;
 
             _currentNodeId = entryNode.NodeId;
             _executedSteps = 0;
@@ -440,6 +442,7 @@ namespace GameShared.SkillGraph
             }
 
             _lastFrameIndex = frameIndex;
+            _context.CurrentFrameIndex = frameIndex;
             if (_status != SkillExecutionStatus.Running)
                 return BuildCurrentResult();
 
@@ -590,6 +593,7 @@ namespace GameShared.SkillGraph
             _status = snapshot.Status;
             _executedSteps = snapshot.ExecutedSteps;
             _lastFrameIndex = snapshot.FrameIndex;
+            _context.CurrentFrameIndex = snapshot.FrameIndex;
             _lastMessage = snapshot.Message ?? string.Empty;
             _lastException = null;
             _executionEndEmitted = _status != SkillExecutionStatus.Running;
@@ -724,13 +728,34 @@ namespace GameShared.SkillGraph
             }
 
             if (string.Equals(node.NodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
-                string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal))
+                string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal) ||
+                string.Equals(node.NodeType, RuntimeNodeTypes.BuffCondition, StringComparison.Ordinal))
             {
                 EmitEvent(
                     frameIndex,
                     node.NodeId,
                     SkillExecutionEventTypes.BranchTaken,
                     $"nextPort={result.NextPort}");
+                return;
+            }
+
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.ApplyBuff, StringComparison.Ordinal))
+            {
+                EmitEvent(
+                    frameIndex,
+                    node.NodeId,
+                    SkillExecutionEventTypes.CommandIssued,
+                    BuildBuffApplyPayload(node));
+                return;
+            }
+
+            if (string.Equals(node.NodeType, RuntimeNodeTypes.RemoveBuff, StringComparison.Ordinal))
+            {
+                EmitEvent(
+                    frameIndex,
+                    node.NodeId,
+                    SkillExecutionEventTypes.CommandIssued,
+                    BuildBuffRemovePayload(node));
             }
         }
 
@@ -877,6 +902,22 @@ namespace GameShared.SkillGraph
 
             int nodeCount = graph.Nodes == null ? 0 : graph.Nodes.Count;
             return Math.Max(MinimumExecutionStepLimit, nodeCount * 8);
+        }
+
+        private static string BuildBuffApplyPayload(RuntimeSkillNode node)
+        {
+            return
+                $"buffId={node.GetPropertyValue(RuntimePropertyKeys.BuffId)};" +
+                $"durationFrames={node.GetPropertyValue(RuntimePropertyKeys.DurationFrames)};" +
+                $"stackCount={node.GetPropertyValue(RuntimePropertyKeys.StackCount, "1")};" +
+                $"targetSelector={node.GetPropertyValue(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target)}";
+        }
+
+        private static string BuildBuffRemovePayload(RuntimeSkillNode node)
+        {
+            return
+                $"buffId={node.GetPropertyValue(RuntimePropertyKeys.BuffId)};" +
+                $"targetSelector={node.GetPropertyValue(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target)}";
         }
 
         private static string BuildNodeResultMessage(RuntimeSkillNode node, SkillExecuteResult result, string fallbackVerb)

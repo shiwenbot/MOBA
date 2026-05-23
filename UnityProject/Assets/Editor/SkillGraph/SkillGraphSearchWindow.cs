@@ -72,6 +72,22 @@ namespace TEngine.Editor.SkillGraph
                 {
                     level = 2,
                     userData = SkillNodeType.Delay
+                },
+                new SearchTreeGroupEntry(new GUIContent("Buff"), 1),
+                new SearchTreeEntry(new GUIContent("Apply Buff Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.ApplyBuff
+                },
+                new SearchTreeEntry(new GUIContent("Remove Buff Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.RemoveBuff
+                },
+                new SearchTreeEntry(new GUIContent("Buff Condition Node", _indentationIcon))
+                {
+                    level = 2,
+                    userData = SkillNodeType.BuffCondition
                 }
             };
         }

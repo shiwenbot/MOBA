@@ -371,22 +371,25 @@ namespace Fantasy
         public void Dispose()
         {
             if (!IsPool()) return; 
-            FrameIndex = default;
-            InputSeq = default;
-            Dx = default;
-            Dy = default;
-            MessageObjectPool<C2B_PlayerInput>.Return(this);
-        }
+              FrameIndex = default;
+              InputSeq = default;
+              Dx = default;
+              Dy = default;
+              SkillId = default;
+              MessageObjectPool<C2B_PlayerInput>.Return(this);
+          }
         public uint OpCode() { return OuterOpcode.C2B_PlayerInput; } 
         [ProtoMember(1)]
         public uint FrameIndex { get; set; }
         [ProtoMember(2)]
         public uint InputSeq { get; set; }
-        [ProtoMember(3)]
-        public float Dx { get; set; }
-        [ProtoMember(4)]
-        public float Dy { get; set; }
-    }
+          [ProtoMember(3)]
+          public float Dx { get; set; }
+          [ProtoMember(4)]
+          public float Dy { get; set; }
+          [ProtoMember(5)]
+          public int SkillId { get; set; }
+      }
     [Serializable]
     [ProtoContract]
     public partial class BuffSnapshot : AMessage, IDisposable

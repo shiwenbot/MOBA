@@ -306,7 +306,8 @@ namespace TEngine.Editor.SkillGraph
                 }
 
                 if (string.Equals(node.NodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
-                    string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal))
+                    string.Equals(node.NodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal) ||
+                    string.Equals(node.NodeType, RuntimeNodeTypes.BuffCondition, StringComparison.Ordinal))
                 {
                     if (runtimeGraph.GetNextConnections(node.NodeId, "True").Count == 0 ||
                         runtimeGraph.GetNextConnections(node.NodeId, "False").Count == 0)
@@ -340,6 +341,12 @@ namespace TEngine.Editor.SkillGraph
                     return ValidateBranchNode(node, out errorMessage);
                 case RuntimeNodeTypes.SetVariable:
                     return ValidateSetVariableNode(node, out errorMessage);
+                case RuntimeNodeTypes.ApplyBuff:
+                    return ValidateApplyBuffNode(node, out errorMessage);
+                case RuntimeNodeTypes.RemoveBuff:
+                    return ValidateRemoveBuffNode(node, out errorMessage);
+                case RuntimeNodeTypes.BuffCondition:
+                    return ValidateBuffConditionNode(node, out errorMessage);
                 default:
                     errorMessage = $"Unsupported runtime node type '{node.NodeType}'.";
                     return false;
@@ -512,6 +519,75 @@ namespace TEngine.Editor.SkillGraph
             return false;
         }
 
+        private static bool ValidateApplyBuffNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            if (!TryValidateBuffTargetSelector(node, out errorMessage))
+            {
+                return false;
+            }
+
+            if (!TryParsePositiveInt(node.GetPropertyValue(RuntimePropertyKeys.BuffId), out _))
+            {
+                errorMessage = $"ApplyBuff node {node.NodeId} buffId must be a positive integer.";
+                return false;
+            }
+
+            if (!TryParseNonNegativeInt(node.GetPropertyValue(RuntimePropertyKeys.DurationFrames, "0"), out _))
+            {
+                errorMessage = $"ApplyBuff node {node.NodeId} durationFrames must be a non-negative integer.";
+                return false;
+            }
+
+            if (!TryParsePositiveInt(node.GetPropertyValue(RuntimePropertyKeys.StackCount, "1"), out _))
+            {
+                errorMessage = $"ApplyBuff node {node.NodeId} stackCount must be a positive integer.";
+                return false;
+            }
+
+            errorMessage = string.Empty;
+            return true;
+        }
+
+        private static bool ValidateRemoveBuffNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            if (!TryValidateBuffTargetSelector(node, out errorMessage))
+            {
+                return false;
+            }
+
+            if (!TryParsePositiveInt(node.GetPropertyValue(RuntimePropertyKeys.BuffId), out _))
+            {
+                errorMessage = $"RemoveBuff node {node.NodeId} buffId must be a positive integer.";
+                return false;
+            }
+
+            errorMessage = string.Empty;
+            return true;
+        }
+
+        private static bool ValidateBuffConditionNode(RuntimeSkillNode node, out string errorMessage)
+        {
+            if (!TryValidateBuffTargetSelector(node, out errorMessage))
+            {
+                return false;
+            }
+
+            if (!TryParsePositiveInt(node.GetPropertyValue(RuntimePropertyKeys.BuffId), out _))
+            {
+                errorMessage = $"BuffCondition node {node.NodeId} buffId must be a positive integer.";
+                return false;
+            }
+
+            if (!TryParsePositiveInt(node.GetPropertyValue(RuntimePropertyKeys.MinimumStackCount, "1"), out _))
+            {
+                errorMessage = $"BuffCondition node {node.NodeId} minimumStackCount must be a positive integer.";
+                return false;
+            }
+
+            errorMessage = string.Empty;
+            return true;
+        }
+
         private static List<RuntimeProperty> BuildRuntimeProperties(
             SkillNodeData nodeData,
             string nodeType,
@@ -610,6 +686,29 @@ namespace TEngine.Editor.SkillGraph
             return false;
         }
 
+        private static bool TryValidateBuffTargetSelector(RuntimeSkillNode node, out string errorMessage)
+        {
+            string targetSelector = node.GetPropertyValue(RuntimePropertyKeys.TargetSelector, RuntimeBuffTargetSelectors.Target);
+            if (IsSupportedBuffTargetSelector(targetSelector))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Node {node.NodeId} targetSelector '{targetSelector}' is invalid.";
+            return false;
+        }
+
+        private static bool TryParsePositiveInt(string rawValue, out int value)
+        {
+            return int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) && value > 0;
+        }
+
+        private static bool TryParseNonNegativeInt(string rawValue, out int value)
+        {
+            return int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) && value >= 0;
+        }
+
         private static bool IsSupportedRuntimeNode(string nodeType) =>
             string.Equals(nodeType, RuntimeNodeTypes.Entry, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Debug, StringComparison.Ordinal) ||
@@ -617,7 +716,10 @@ namespace TEngine.Editor.SkillGraph
             string.Equals(nodeType, RuntimeNodeTypes.Condition, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.Branch, StringComparison.Ordinal) ||
             string.Equals(nodeType, RuntimeNodeTypes.SetVariable, StringComparison.Ordinal) ||
-            string.Equals(nodeType, RuntimeNodeTypes.Delay, StringComparison.Ordinal);
+            string.Equals(nodeType, RuntimeNodeTypes.Delay, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.ApplyBuff, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.RemoveBuff, StringComparison.Ordinal) ||
+            string.Equals(nodeType, RuntimeNodeTypes.BuffCondition, StringComparison.Ordinal);
 
         private static bool IsSupportedValueType(string valueType) =>
             string.Equals(valueType, RuntimeValueTypes.String, StringComparison.OrdinalIgnoreCase) ||
@@ -852,6 +954,15 @@ namespace TEngine.Editor.SkillGraph
             if (string.Equals(nodeType, SkillNodeType.Delay.ToString(), StringComparison.OrdinalIgnoreCase))
                 return RuntimeNodeTypes.Delay;
 
+            if (string.Equals(nodeType, SkillNodeType.ApplyBuff.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.ApplyBuff;
+
+            if (string.Equals(nodeType, SkillNodeType.RemoveBuff.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.RemoveBuff;
+
+            if (string.Equals(nodeType, SkillNodeType.BuffCondition.ToString(), StringComparison.OrdinalIgnoreCase))
+                return RuntimeNodeTypes.BuffCondition;
+
             return nodeType.Trim();
         }
 
@@ -868,6 +979,9 @@ namespace TEngine.Editor.SkillGraph
                 case RuntimeNodeTypes.Branch:
                 case RuntimeNodeTypes.SetVariable:
                 case RuntimeNodeTypes.Delay:
+                case RuntimeNodeTypes.ApplyBuff:
+                case RuntimeNodeTypes.RemoveBuff:
+                case RuntimeNodeTypes.BuffCondition:
                     return string.Equals(portName, "In", StringComparison.Ordinal);
                 default:
                     return false;
@@ -887,9 +1001,12 @@ namespace TEngine.Editor.SkillGraph
                 case RuntimeNodeTypes.Action:
                 case RuntimeNodeTypes.SetVariable:
                 case RuntimeNodeTypes.Delay:
+                case RuntimeNodeTypes.ApplyBuff:
+                case RuntimeNodeTypes.RemoveBuff:
                     return string.Equals(portName, "Out", StringComparison.Ordinal);
                 case RuntimeNodeTypes.Condition:
                 case RuntimeNodeTypes.Branch:
+                case RuntimeNodeTypes.BuffCondition:
                     return string.Equals(portName, "True", StringComparison.Ordinal) ||
                            string.Equals(portName, "False", StringComparison.Ordinal);
                 default:
@@ -969,5 +1086,9 @@ namespace TEngine.Editor.SkillGraph
 
             return $"Node#{index}";
         }
+
+        private static bool IsSupportedBuffTargetSelector(string targetSelector) =>
+            string.Equals(targetSelector, RuntimeBuffTargetSelectors.Target, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(targetSelector, RuntimeBuffTargetSelectors.Caster, StringComparison.OrdinalIgnoreCase);
     }
 }

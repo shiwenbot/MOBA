@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using GameShared.SkillGraph;
 using UnityEditor.UIElements;
 using UnityEngine.UIElements;
 
@@ -330,6 +331,79 @@ namespace TEngine.Editor.SkillGraph
             SkillVariableDef selectedVariable = _availableVariables.FirstOrDefault(variable =>
                 string.Equals(variable.name, _key, StringComparison.Ordinal));
             return selectedVariable != null ? selectedVariable.type.ToString() : MissingTypeText;
+        }
+    }
+
+    internal sealed class BuffConditionNode : SkillGraphNode
+    {
+        private readonly IntegerField _buffIdField;
+        private readonly IntegerField _minimumStackCountField;
+        private readonly EnumField _targetSelectorField;
+
+        private int _buffId;
+        private int _minimumStackCount = 1;
+        private SkillBuffTargetSelector _targetSelector = SkillBuffTargetSelector.Target;
+
+        public BuffConditionNode()
+            : base(SkillNodeType.BuffCondition, "Buff Condition")
+        {
+            AddFlowInput("In");
+            AddFlowOutput("True");
+            AddFlowOutput("False");
+
+            _targetSelectorField = new EnumField("Target", _targetSelector);
+            _targetSelectorField.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue is SkillBuffTargetSelector selector)
+                {
+                    _targetSelector = selector;
+                    NotifyPropertiesChanged();
+                }
+            });
+            AddPropertyField(_targetSelectorField);
+
+            _buffIdField = new IntegerField("Buff Id") { value = _buffId };
+            _buffIdField.RegisterValueChangedCallback(evt =>
+            {
+                _buffId = Math.Max(0, evt.newValue);
+                _buffIdField.SetValueWithoutNotify(_buffId);
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_buffIdField);
+
+            _minimumStackCountField = new IntegerField("Min Stacks") { value = _minimumStackCount };
+            _minimumStackCountField.RegisterValueChangedCallback(evt =>
+            {
+                _minimumStackCount = Math.Max(1, evt.newValue);
+                _minimumStackCountField.SetValueWithoutNotify(_minimumStackCount);
+                NotifyPropertiesChanged();
+            });
+            AddPropertyField(_minimumStackCountField);
+        }
+
+        protected override void WriteProperties(List<SkillNodePropertyData> properties)
+        {
+            AddProperty(properties, RuntimePropertyKeys.TargetSelector, _targetSelector);
+            AddProperty(properties, RuntimePropertyKeys.BuffId, _buffId);
+            AddProperty(properties, RuntimePropertyKeys.MinimumStackCount, _minimumStackCount);
+        }
+
+        protected override void ReadProperties(IReadOnlyList<SkillNodePropertyData> properties)
+        {
+            if (Enum.TryParse(
+                    GetPropertyValue(properties, RuntimePropertyKeys.TargetSelector, _targetSelector.ToString()),
+                    true,
+                    out SkillBuffTargetSelector parsedSelector))
+            {
+                _targetSelector = parsedSelector;
+            }
+
+            _buffId = Math.Max(0, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.BuffId, _buffId));
+            _minimumStackCount = Math.Max(1, (int)GetFloatPropertyValue(properties, RuntimePropertyKeys.MinimumStackCount, _minimumStackCount));
+
+            _targetSelectorField.SetValueWithoutNotify(_targetSelector);
+            _buffIdField.SetValueWithoutNotify(_buffId);
+            _minimumStackCountField.SetValueWithoutNotify(_minimumStackCount);
         }
     }
 }

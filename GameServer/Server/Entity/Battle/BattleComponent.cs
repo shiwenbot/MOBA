@@ -70,7 +70,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.Dx, input.Dy);
+        _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.Dx, input.Dy, input.SkillId);
     }
 
     public void Tick(uint frameIndex, float fixedDt)
@@ -255,7 +255,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private void RunAutomationScenario(uint frameIndex)
     {
-        if (!_automationConfig.IsBuffLifecycleScenario)
+        if (!_automationConfig.IsBuffLifecycleScenario &&
+            !_automationConfig.IsSkillBuffScenario)
         {
             return;
         }
@@ -282,6 +283,27 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         _playerIdBuffer.Sort();
+        if (_automationConfig.IsSkillBuffScenario)
+        {
+            for (int i = 0; i < _playerIdBuffer.Count; i++)
+            {
+                long playerId = _playerIdBuffer[i];
+                uint automationInputSeq = unchecked(frameIndex + 1024u);
+                _battleLogic.SubmitInput(
+                    playerId,
+                    frameIndex,
+                    automationInputSeq,
+                    0.0f,
+                    0.0f,
+                    _automationConfig.ExpectedSkillId);
+            }
+
+            _automationBuffCommandsQueued = true;
+            Log.Warning(
+                $"[Automation][BattleServer] Queued skill buff commands. scenario={_automationConfig.Scenario} skillId={_automationConfig.ExpectedSkillId} buffId={_automationConfig.ExpectedBuffId} players={_playerIdBuffer.Count}");
+            return;
+        }
+
         for (int i = 0; i < _playerIdBuffer.Count; i++)
         {
             long playerId = _playerIdBuffer[i];

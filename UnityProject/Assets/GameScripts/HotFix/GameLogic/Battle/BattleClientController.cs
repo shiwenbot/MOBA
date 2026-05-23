@@ -6,6 +6,7 @@ using Fantasy.Network.Interface;
 using GameLogic.FrameSync;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
+using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
 using Log = TEngine.Log;
@@ -39,6 +40,7 @@ namespace GameLogic
         private int _pongMessageCount;
         private float _cachedDx;
         private float _cachedDy;
+        private int _queuedSkillId;
         private IBattleAutomationInputSource _automationInputSource;
 
         public int Priority => 0;
@@ -87,6 +89,7 @@ namespace GameLogic
             _pongMessageCount = 0;
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
+            _queuedSkillId = 0;
             _automationInputSource = null;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
@@ -112,6 +115,10 @@ namespace GameLogic
             }
 
             ReadKeyboardDirection(out _cachedDx, out _cachedDy);
+            if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.J))
+            {
+                _queuedSkillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
+            }
         }
 
         public void Tick(uint frameIndex, float fixedDt)
@@ -130,7 +137,15 @@ namespace GameLogic
                 dy = automationDy;
             }
 
-            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, dx, dy);
+            int skillId = _queuedSkillId;
+            _queuedSkillId = 0;
+            if (_automationInputSource != null &&
+                _automationInputSource.TryGetSkillRequest(frameIndex, out int automationSkillId))
+            {
+                skillId = automationSkillId;
+            }
+
+            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, dx, dy, skillId);
             SyncRendering();
 
             if (tickResult.TargetFrameExclusive > 0 && _tickDriver != null)
@@ -540,14 +555,15 @@ namespace GameLogic
             }
         }
 
-        private static void SendInputCommand(uint frameIndex, uint inputSeq, float dx, float dy)
+        private static void SendInputCommand(uint frameIndex, uint inputSeq, float dx, float dy, int skillId)
         {
             GameClient.Instance.Send(new C2B_PlayerInput
             {
                 FrameIndex = frameIndex,
                 InputSeq = inputSeq,
                 Dx = dx,
-                Dy = dy
+                Dy = dy,
+                SkillId = skillId
             });
         }
 

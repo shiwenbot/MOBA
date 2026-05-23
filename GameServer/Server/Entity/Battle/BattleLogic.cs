@@ -4,6 +4,7 @@ using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
+using GameShared.SkillGraph;
 
 namespace Fantasy;
 
@@ -20,14 +21,19 @@ public sealed class BattleLogic : IBuffCommandSink
     private readonly List<RemoveBuffCommand> _pendingRemoveBuffCommands = new();
     private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new();
     private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new();
+    private readonly BattleSkillGraphRuntime _skillGraphRuntime;
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
     private bool _hasProcessedFrame;
 
-    public BattleLogic(Action<string>? logDebug = null, Action<string>? logWarning = null)
+    public BattleLogic(
+        Action<string>? logDebug = null,
+        Action<string>? logWarning = null,
+        IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
     {
         _logDebug = logDebug;
         _logWarning = logWarning;
+        _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
     }
 
     public uint LastFrameIndex { get; private set; }
@@ -58,6 +64,7 @@ public sealed class BattleLogic : IBuffCommandSink
         _lastSubmittedInputByPlayerId.Remove(playerId);
         _latestAcceptedInputFrameByPlayerId.Remove(playerId);
         RemovePendingBuffCommands(playerId);
+        _skillGraphRuntime.RemovePlayer(playerId);
         _physicsWorld.RemoveBody(checked((int)playerId));
         return _statesByPlayerId.Remove(playerId);
     }
@@ -81,7 +88,7 @@ public sealed class BattleLogic : IBuffCommandSink
             : 0u;
     }
 
-    public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, float dx, float dy)
+    public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, float dx, float dy, int skillId = 0)
     {
         if (!_statesByPlayerId.ContainsKey(playerId))
         {
@@ -129,7 +136,7 @@ public sealed class BattleLogic : IBuffCommandSink
             return;
         }
 
-        playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy);
+        playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy, skillId);
         _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, dx, dy);
         if (!_latestAcceptedInputFrameByPlayerId.TryGetValue(playerId, out uint latestAcceptedFrame) ||
             frameIndex >= latestAcceptedFrame)
@@ -146,6 +153,8 @@ public sealed class BattleLogic : IBuffCommandSink
         _hasProcessedFrame = true;
 
         BuildSortedPlayerBuffer();
+        QueueSkillRequests(frameIndex);
+        _skillGraphRuntime.Step(frameIndex);
         ProcessBuffCommands(frameIndex);
 
         for (int i = 0; i < _playerIdBuffer.Count; i++)
@@ -330,6 +339,22 @@ public sealed class BattleLogic : IBuffCommandSink
         }
     }
 
+    private void QueueSkillRequests(uint frameIndex)
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            if (!_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) ||
+                !playerInputs.TryGetValue(frameIndex, out PendingInput input) ||
+                input.SkillId <= 0)
+            {
+                continue;
+            }
+
+            _skillGraphRuntime.QueueSkillRequest(playerId, playerId, input.SkillId, frameIndex);
+        }
+    }
+
     private void ProcessBuffCommands(uint frameIndex)
     {
         while (_pendingApplyBuffCommands.Count > 0 && _pendingApplyBuffCommands[0].FrameIndex <= frameIndex)
@@ -499,18 +524,20 @@ public sealed class BattleLogic : IBuffCommandSink
 
     private readonly struct PendingInput
     {
-        public PendingInput(uint frameIndex, uint inputSeq, float dx, float dy)
+        public PendingInput(uint frameIndex, uint inputSeq, float dx, float dy, int skillId)
         {
             FrameIndex = frameIndex;
             InputSeq = inputSeq;
             Dx = dx;
             Dy = dy;
+            SkillId = skillId;
         }
 
         public uint FrameIndex { get; }
         public uint InputSeq { get; }
         public float Dx { get; }
         public float Dy { get; }
+        public int SkillId { get; }
     }
 
     private readonly struct SubmittedInput

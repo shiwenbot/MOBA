@@ -5,10 +5,13 @@ using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
+using GameShared.SkillGraph;
 using Log = TEngine.Log;
 
 namespace GameLogic
 {
+    public delegate void BattleInputSender(uint frameIndex, uint inputSeq, float dx, float dy, int skillId);
+
     public sealed class BattleSimulation : IBuffCommandSink
     {
         private const int PingIntervalFrames = 30;
@@ -20,9 +23,10 @@ namespace GameLogic
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
-        private readonly Action<uint, uint, float, float> _onSendInput;
+        private readonly BattleInputSender _onSendInput;
         private readonly Action<ulong> _onSendPing;
         private readonly GameShared.FrameSync.Core.IFrameSyncLogger? _logger;
+        private readonly BattleSkillGraphRuntime _skillGraphRuntime;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
         private readonly Queue<PendingAuthoritativeSnapshot> _pendingServerSnapshots =
             new Queue<PendingAuthoritativeSnapshot>(4);
@@ -69,11 +73,27 @@ namespace GameLogic
             Action<uint, uint, float, float> onSendInput,
             Action<ulong> onSendPing,
             GameShared.FrameSync.Core.IFrameSyncLogger? logger = null)
+            : this(
+                worldState,
+                AdaptInputSender(onSendInput),
+                onSendPing,
+                logger,
+                null)
+        {
+        }
+
+        public BattleSimulation(
+            BattleWorldState worldState,
+            BattleInputSender onSendInput,
+            Action<ulong> onSendPing,
+            GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
+            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
         {
             _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
             _onSendPing = onSendPing ?? throw new ArgumentNullException(nameof(onSendPing));
             _logger = logger;
+            _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
         }
 
         public bool IsJoined => _isJoined;
@@ -134,7 +154,7 @@ namespace GameLogic
             RefreshBaselineLeadFrames();
         }
 
-        public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy)
+        public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy, int skillId = 0)
         {
             if (!_isJoined)
             {
@@ -150,10 +170,10 @@ namespace GameLogic
                 _localFrame = frameIndex;
                 NormalizeInput(ref dx, ref dy);
 
-                SaveInputHistory(frameIndex, dx, dy);
+                SaveInputHistory(frameIndex, dx, dy, skillId);
                 LogInputEdgeIfNeeded(frameIndex, dx, dy);
                 SendPingIfNeeded();
-                _onSendInput(frameIndex, ++_inputSeq, dx, dy);
+                _onSendInput(frameIndex, ++_inputSeq, dx, dy, skillId);
 
                 bool snapshotApplied = ApplyPendingServerSnapshot(
                     frameIndex,
@@ -207,6 +227,7 @@ namespace GameLogic
             _pendingServerSnapshots.Clear();
             _authoritativeSnapshots.Clear();
             ClearPendingBuffCommands();
+            _skillGraphRuntime.Clear();
             _hasQueuedServerSnapshot = false;
             _latestQueuedSnapshotFrame = serverFrame;
             _rollbackCount = 0;
@@ -381,6 +402,7 @@ namespace GameLogic
             ApplySnapshotToWorldState(snapshot);
             _lastPredictedFrame = snapshot.FrameIndex;
             RemoveConfirmedInputHistory(snapshot.FrameIndex);
+            _skillGraphRuntime.Clear();
         }
 
         private void ReconcileAuthoritativeSnapshot(
@@ -530,13 +552,13 @@ namespace GameLogic
                 BufferedInput input = _inputHistory.TryGetValue(replayFrame, out BufferedInput bufferedInput)
                     ? bufferedInput
                     : default;
-                ApplyLocalPrediction(replayFrame, input.Dx, input.Dy, fixedDt);
+                ApplyLocalPrediction(replayFrame, input.Dx, input.Dy, input.SkillId, fixedDt);
             }
 
             _lastPredictedFrame = targetFrame;
         }
 
-        private void SaveInputHistory(uint frameIndex, float dx, float dy)
+        private void SaveInputHistory(uint frameIndex, float dx, float dy, int skillId)
         {
             if (!_inputHistory.ContainsKey(frameIndex) && _inputHistory.Count >= InputHistoryCapacity)
             {
@@ -555,7 +577,7 @@ namespace GameLogic
                 }
             }
 
-            _inputHistory[frameIndex] = new BufferedInput(dx, dy);
+            _inputHistory[frameIndex] = new BufferedInput(dx, dy, skillId);
         }
 
         private void RemoveConfirmedInputHistory(uint confirmedFrame)
@@ -607,13 +629,19 @@ namespace GameLogic
             }
         }
 
-        private void ApplyLocalPrediction(uint frameIndex, float dx, float dy, float fixedDt)
+        private void ApplyLocalPrediction(uint frameIndex, float dx, float dy, int skillId, float fixedDt)
         {
             if (!_worldState.TryGetPlayer(_selfPlayerId, out PlayerState selfPlayer))
             {
                 return;
             }
 
+            if (skillId > 0)
+            {
+                _skillGraphRuntime.QueueSkillRequest(_selfPlayerId, _selfPlayerId, skillId, frameIndex);
+            }
+
+            _skillGraphRuntime.Step(frameIndex);
             ProcessBuffCommands(frameIndex);
             MoveSystem.Apply(_worldState, selfPlayer, dx, dy, fixedDt);
             _worldState.PhysicsWorld.Step(fixedDt);
@@ -723,6 +751,16 @@ namespace GameLogic
             return _worldState.TryGetPlayer(targetId, out PlayerState targetState)
                 ? BuffSystem.GetBuffStackCount(targetState, buffId)
                 : 0;
+        }
+
+        private static BattleInputSender AdaptInputSender(Action<uint, uint, float, float> legacySender)
+        {
+            if (legacySender == null)
+            {
+                throw new ArgumentNullException(nameof(legacySender));
+            }
+
+            return (frameIndex, inputSeq, dx, dy, skillId) => legacySender(frameIndex, inputSeq, dx, dy);
         }
 
         private static void NormalizeInput(ref float dx, ref float dy)
@@ -970,14 +1008,16 @@ namespace GameLogic
 
     internal readonly struct BufferedInput
     {
-        public BufferedInput(float dx, float dy)
+        public BufferedInput(float dx, float dy, int skillId)
         {
             Dx = dx;
             Dy = dy;
+            SkillId = skillId;
         }
 
         public float Dx { get; }
         public float Dy { get; }
+        public int SkillId { get; }
     }
 
     internal readonly struct PendingAuthoritativeSnapshot

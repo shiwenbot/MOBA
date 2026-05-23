@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
 
@@ -18,6 +19,7 @@ namespace GameLogic
     public interface IBattleAutomationInputSource
     {
         bool TryGetInput(uint frameIndex, out float dx, out float dy);
+        bool TryGetSkillRequest(uint frameIndex, out int skillId);
     }
 
     internal interface IBattleAutomationBridge : IBattleAutomationInputSource, IDisposable
@@ -132,6 +134,7 @@ namespace GameLogic
             int movementFrames,
             int settleFrames,
             int disconnectFrame,
+            int skillId,
             int expectedBuffId,
             int buffApplyDelayFrames,
             int buffDurationFrames,
@@ -154,6 +157,7 @@ namespace GameLogic
             MovementFrames = movementFrames;
             SettleFrames = settleFrames;
             DisconnectFrame = disconnectFrame;
+            SkillId = skillId;
             ExpectedBuffId = expectedBuffId;
             BuffApplyDelayFrames = buffApplyDelayFrames;
             BuffDurationFrames = buffDurationFrames;
@@ -177,6 +181,7 @@ namespace GameLogic
         public int MovementFrames { get; }
         public int SettleFrames { get; }
         public int DisconnectFrame { get; }
+        public int SkillId { get; }
         public int ExpectedBuffId { get; }
         public int BuffApplyDelayFrames { get; }
         public int BuffDurationFrames { get; }
@@ -223,6 +228,7 @@ namespace GameLogic
                 GetInt(args, "movementFrames", 90),
                 GetInt(args, "settleFrames", 30),
                 GetInt(args, "disconnectFrame", 60),
+                GetInt(args, "skillId", BattleSkillGraphLibrary.ResolveConfiguredSkillId()),
                 GetInt(args, "expectedBuffId", 9001),
                 GetInt(args, "buffApplyDelayFrames", 30),
                 GetInt(args, "buffDurationFrames", 45),
@@ -480,6 +486,7 @@ namespace GameLogic
         private bool _observedPlayerDrop;
         private bool _observedExpectedBuffAppearance;
         private bool _observedExpectedBuffExpiry;
+        private bool _emittedSkillRequest;
 
         public string BridgeName => "builtin";
 
@@ -502,6 +509,26 @@ namespace GameLogic
 
             uint relativeFrame = frameIndex - _joinedFrame;
             return _plan.TryGetInput(relativeFrame, out dx, out dy);
+        }
+
+        public bool TryGetSkillRequest(uint frameIndex, out int skillId)
+        {
+            skillId = 0;
+            if (!_hasJoinedFrame || !_plan.emitSkillRequest || _emittedSkillRequest)
+            {
+                return false;
+            }
+
+            uint relativeFrame = frameIndex - _joinedFrame;
+            if (relativeFrame < _plan.skillTriggerFrame)
+            {
+                return false;
+            }
+
+            _emittedSkillRequest = true;
+            skillId = _plan.expectedSkillId;
+            _eventSink?.Invoke($"[Automation] Emit skill request skillId={skillId} relativeFrame={relativeFrame}");
+            return skillId > 0;
         }
 
         public BattleAutomationEvaluation Evaluate(BattleAutomationClientSnapshot snapshot)
@@ -610,10 +637,11 @@ namespace GameLogic
 
                     break;
 
-                case BattleAutomationScenarioKind.BuffLifecycle:
-                    int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
-                    if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
-                    {
+                  case BattleAutomationScenarioKind.BuffLifecycle:
+                  case BattleAutomationScenarioKind.SkillBuffLifecycle:
+                      int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+                      if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
+                      {
                         _observedExpectedBuffAppearance = true;
                     }
 
@@ -628,27 +656,33 @@ namespace GameLogic
                     {
                         if (_observedExpectedBuffAppearance && _observedExpectedBuffExpiry)
                         {
-                            return new BattleAutomationEvaluation(
-                                true,
-                                true,
-                                $"buff-lifecycle-complete buffId={_plan.expectedBuffId}");
-                        }
+                              return new BattleAutomationEvaluation(
+                                  true,
+                                  true,
+                                  _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                                      ? $"skill-buff-lifecycle-complete buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                                      : $"buff-lifecycle-complete buffId={_plan.expectedBuffId}");
+                          }
 
-                        if (!_observedExpectedBuffAppearance)
-                        {
-                            return new BattleAutomationEvaluation(
-                                true,
-                                false,
-                                $"buff-never-appeared buffId={_plan.expectedBuffId}");
-                        }
+                          if (!_observedExpectedBuffAppearance)
+                          {
+                              return new BattleAutomationEvaluation(
+                                  true,
+                                  false,
+                                  _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                                      ? $"skill-buff-never-appeared buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                                      : $"buff-never-appeared buffId={_plan.expectedBuffId}");
+                          }
 
-                        return new BattleAutomationEvaluation(
-                            true,
-                            false,
-                            $"buff-never-expired buffId={_plan.expectedBuffId}");
-                    }
+                          return new BattleAutomationEvaluation(
+                              true,
+                              false,
+                              _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                                  ? $"skill-buff-never-expired buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                                  : $"buff-never-expired buffId={_plan.expectedBuffId}");
+                      }
 
-                    break;
+                      break;
             }
 
             return default;
@@ -687,6 +721,7 @@ namespace GameLogic
         private Type _scriptObjectType;
         private Func<string, string> _evaluate;
         private Func<string, string> _tryGetInput;
+        private Func<string, string> _tryGetSkillRequest;
         private Action<string> _initialize;
         private Action _dispose;
         private Action<string> _eventSink;
@@ -737,6 +772,37 @@ namespace GameLogic
             }
 
             return _fallback.TryGetInput(frameIndex, out dx, out dy);
+        }
+
+        public bool TryGetSkillRequest(uint frameIndex, out int skillId)
+        {
+            if (_jsEnv != null && _tryGetSkillRequest != null)
+            {
+                try
+                {
+                    string payload = "{\"frameIndex\":" + frameIndex.ToString(CultureInfo.InvariantCulture) + "}";
+                    string result = _tryGetSkillRequest(payload);
+                    if (!string.IsNullOrWhiteSpace(result))
+                    {
+                        BattleAutomationSkillRequestResult parsed =
+                            JsonUtility.FromJson<BattleAutomationSkillRequestResult>(result);
+                        if (parsed != null && parsed.hasSkillRequest)
+                        {
+                            skillId = parsed.skillId;
+                            return skillId > 0;
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    _eventSink?.Invoke("[Automation] Puerts tryGetSkillRequest failed: " + exception.Message);
+                }
+
+                skillId = 0;
+                return false;
+            }
+
+            return _fallback.TryGetSkillRequest(frameIndex, out skillId);
         }
 
         public BattleAutomationEvaluation Evaluate(BattleAutomationClientSnapshot snapshot)
@@ -838,6 +904,7 @@ namespace GameLogic
 
                 _initialize = GetDelegate<Action<string>>("initialize");
                 _tryGetInput = GetDelegate<Func<string, string>>("tryGetInput");
+                _tryGetSkillRequest = GetDelegate<Func<string, string>>("tryGetSkillRequest");
                 _evaluate = GetDelegate<Func<string, string>>("evaluate");
                 _dispose = GetDelegate<Action>("dispose");
 
@@ -852,6 +919,7 @@ namespace GameLogic
                     movementFrames = config.MovementFrames,
                     settleFrames = config.SettleFrames,
                     disconnectFrame = config.DisconnectFrame,
+                    skillId = config.SkillId,
                     movementDistanceThreshold = config.MovementDistanceThreshold,
                     expectedBuffId = config.ExpectedBuffId,
                     buffApplyDelayFrames = config.BuffApplyDelayFrames,
@@ -874,6 +942,16 @@ namespace GameLogic
             if (!string.IsNullOrWhiteSpace(config.ControllerScriptPath) && File.Exists(config.ControllerScriptPath))
             {
                 return config.ControllerScriptPath;
+            }
+
+            string scenarioScriptPath = Path.Combine(
+                Application.streamingAssetsPath,
+                "BattleAutomation",
+                "Puerts",
+                $"{config.Scenario}.js.txt");
+            if (File.Exists(scenarioScriptPath))
+            {
+                return scenarioScriptPath;
             }
 
             return Path.Combine(Application.streamingAssetsPath, "BattleAutomation", "Puerts", "sample-controller.js.txt");
@@ -944,7 +1022,8 @@ namespace GameLogic
         DisconnectActor,
         DisconnectObserver,
         Scripted,
-        BuffLifecycle
+        BuffLifecycle,
+        SkillBuffLifecycle
     }
 
     internal sealed class BattleAutomationScenarioPlan
@@ -955,6 +1034,9 @@ namespace GameLogic
         public int completionFrame;
         public int disconnectFrame;
         public float movementDistanceThreshold;
+        public int expectedSkillId;
+        public int skillTriggerFrame;
+        public bool emitSkillRequest;
         public int expectedBuffId;
         public int buffApplyDelayFrames;
         public int buffDurationFrames;
@@ -1038,6 +1120,24 @@ namespace GameLogic
                         inputSegments = Array.Empty<BattleAutomationInputSegment>()
                     };
 
+                case "two-client-skill-buff":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "two-client-skill-buff",
+                        kind = BattleAutomationScenarioKind.SkillBuffLifecycle,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.BuffApplyDelayFrames + config.BuffDurationFrames + config.SettleFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedSkillId = config.SkillId,
+                        skillTriggerFrame = config.BuffApplyDelayFrames,
+                        emitSkillRequest = false,
+                        expectedBuffId = config.ExpectedBuffId,
+                        buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                        buffDurationFrames = config.BuffDurationFrames,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = Array.Empty<BattleAutomationInputSegment>()
+                    };
+
                 default:
                     return new BattleAutomationScenarioPlan
                     {
@@ -1067,6 +1167,20 @@ namespace GameLogic
 
             dx = 0.0f;
             dy = 0.0f;
+            return false;
+        }
+
+        public bool TryGetSkillRequest(uint relativeFrame, out int skillId)
+        {
+            if (emitSkillRequest &&
+                expectedSkillId > 0 &&
+                relativeFrame >= (uint)Math.Max(0, skillTriggerFrame))
+            {
+                skillId = expectedSkillId;
+                return true;
+            }
+
+            skillId = 0;
             return false;
         }
 
@@ -1262,6 +1376,13 @@ namespace GameLogic
     }
 
     [Serializable]
+    internal sealed class BattleAutomationSkillRequestResult
+    {
+        public bool hasSkillRequest;
+        public int skillId;
+    }
+
+    [Serializable]
     internal sealed class BattleAutomationEvaluationPayload
     {
         public bool completed;
@@ -1281,6 +1402,7 @@ namespace GameLogic
         public int movementFrames;
         public int settleFrames;
         public int disconnectFrame;
+        public int skillId;
         public float movementDistanceThreshold;
         public int expectedBuffId;
         public int buffApplyDelayFrames;
