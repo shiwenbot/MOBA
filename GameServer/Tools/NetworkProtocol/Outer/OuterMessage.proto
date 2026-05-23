@@ -66,6 +66,36 @@ message C2B_PlayerInput // IMessage
 	float Dy = 4;
 }
 
+message BuffSnapshot
+{
+	int64 RuntimeBuffId = 1;
+	int32 BuffId = 2;
+	int64 CasterId = 3;
+	int64 TargetId = 4;
+	int32 StackCount = 5;
+	int32 RemainingFrames = 6;
+	uint32 AppliedFrame = 7;
+	uint32 Flags = 8;
+}
+
+message NumericModifierSnapshot
+{
+	int64 SourceBuffId = 1;
+	uint32 ValueType = 2;
+	uint32 AttributeKind = 3;
+	int32 Value = 4;
+}
+
+message NumericSnapshot
+{
+	int32 BaseHealth = 1;
+	int32 BaseMaxHealth = 2;
+	int32 BaseMana = 3;
+	int32 BaseMaxMana = 4;
+	int32 BaseAttack = 5;
+	repeated NumericModifierSnapshot Modifiers = 6;
+}
+
 message PlayerSnapshot
 {
 	int64 PlayerId = 1;
@@ -84,6 +114,9 @@ message PlayerSnapshot
 	int32 Mana = 14;
 	int32 MaxMana = 15;
 	int32 Attack = 16;
+	repeated BuffSnapshot ActiveBuffs = 17;
+	int64 NextRuntimeBuffId = 18;
+	NumericSnapshot Numeric = 19;
 }
 
 message FrameContactSnapshot

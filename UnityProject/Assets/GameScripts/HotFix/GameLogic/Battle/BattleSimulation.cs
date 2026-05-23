@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using GameShared.FrameSync.Battle;
+using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
 using Log = TEngine.Log;
 
 namespace GameLogic
 {
-    public sealed class BattleSimulation
+    public sealed class BattleSimulation : IBuffCommandSink
     {
         private const int PingIntervalFrames = 30;
         private const int PredictionBufferCapacity = 32;
@@ -31,6 +32,10 @@ namespace GameLogic
             new Dictionary<uint, BufferedInput>(InputHistoryCapacity);
         private readonly SnapshotBuffer<BattleWorldSnapshot> _authoritativeSnapshots =
             new SnapshotBuffer<BattleWorldSnapshot>(AuthoritativeSnapshotHistoryCapacity);
+        private readonly List<ApplyBuffCommand> _pendingApplyBuffCommands = new List<ApplyBuffCommand>();
+        private readonly List<RemoveBuffCommand> _pendingRemoveBuffCommands = new List<RemoveBuffCommand>();
+        private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new CommandPool<ApplyBuffCommand>();
+        private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new CommandPool<RemoveBuffCommand>();
 
         private bool _isJoined;
         private bool _hasRttSample;
@@ -201,6 +206,7 @@ namespace GameLogic
             _inputHistory.Clear();
             _pendingServerSnapshots.Clear();
             _authoritativeSnapshots.Clear();
+            ClearPendingBuffCommands();
             _hasQueuedServerSnapshot = false;
             _latestQueuedSnapshotFrame = serverFrame;
             _rollbackCount = 0;
@@ -326,7 +332,7 @@ namespace GameLogic
             _checked++;
             bool matched = prediction.X == authoritativeSelf.X &&
                            prediction.Y == authoritativeSelf.Y &&
-                           AreAttributesEqual(prediction.Attributes, authoritativeSelf.Attributes);
+                           ArePlayerSnapshotsEquivalent(prediction.Snapshot, authoritativeSelf);
             if (matched)
             {
                 _hits++;
@@ -340,7 +346,8 @@ namespace GameLogic
                     $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
                     $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({deltaX:F4},{deltaY:F4}) " +
                     $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
-                    $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack})");
+                    $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack}) " +
+                    $"predBuffs={FormatBuffs(prediction.Snapshot.ActiveBuffs)} authBuffs={FormatBuffs(authoritativeSelf.ActiveBuffs)}");
             }
 
             return !matched;
@@ -607,10 +614,13 @@ namespace GameLogic
                 return;
             }
 
+            ProcessBuffCommands(frameIndex);
             MoveSystem.Apply(_worldState, selfPlayer, dx, dy, fixedDt);
             _worldState.PhysicsWorld.Step(fixedDt);
             SyncAllPlayersFromPhysics();
-            SaveSelfPrediction(frameIndex, selfPlayer.X, selfPlayer.Y, selfPlayer.CaptureAttributeSnapshot());
+            RecalculateNumericStates();
+            ApplyBuffTicks(frameIndex);
+            SaveSelfPrediction(frameIndex, selfPlayer);
         }
 
         private void SyncAllPlayersFromPhysics()
@@ -621,7 +631,7 @@ namespace GameLogic
             }
         }
 
-        private void SaveSelfPrediction(uint frameIndex, float x, float y, PlayerAttributeSnapshot attributes)
+        private void SaveSelfPrediction(uint frameIndex, PlayerState selfPlayer)
         {
             if (!_selfPredictions.ContainsKey(frameIndex) && _selfPredictions.Count >= PredictionBufferCapacity)
             {
@@ -641,7 +651,15 @@ namespace GameLogic
                 }
             }
 
-            _selfPredictions[frameIndex] = new SelfPrediction(x, y, attributes);
+            _selfPredictions[frameIndex] = new SelfPrediction(
+                new PlayerStateSnapshot(
+                    selfPlayer.PlayerId,
+                    selfPlayer.X,
+                    selfPlayer.Y,
+                    selfPlayer.CaptureAttributeSnapshot(),
+                    selfPlayer.ActiveBuffs,
+                    selfPlayer.NextRuntimeBuffId,
+                    selfPlayer.Numeric.CaptureSnapshot()));
         }
 
         private void ClearWorldState()
@@ -658,6 +676,53 @@ namespace GameLogic
             }
 
             _stalePlayerIds.Clear();
+        }
+
+        public void EnqueueApplyBuff(ApplyBuffCommand command)
+        {
+            if (command == null)
+            {
+                throw new ArgumentNullException(nameof(command));
+            }
+
+            ApplyBuffCommand queuedCommand = _applyBuffCommandPool.Rent();
+            queuedCommand.CasterId = command.CasterId;
+            queuedCommand.TargetId = command.TargetId;
+            queuedCommand.BuffId = command.BuffId;
+            queuedCommand.DurationFrames = command.DurationFrames;
+            queuedCommand.StackCount = command.StackCount;
+            queuedCommand.FrameIndex = command.FrameIndex;
+            queuedCommand.Flags = command.Flags;
+            InsertApplyCommand(queuedCommand);
+        }
+
+        public void EnqueueRemoveBuff(RemoveBuffCommand command)
+        {
+            if (command == null)
+            {
+                throw new ArgumentNullException(nameof(command));
+            }
+
+            RemoveBuffCommand queuedCommand = _removeBuffCommandPool.Rent();
+            queuedCommand.TargetId = command.TargetId;
+            queuedCommand.RuntimeBuffId = command.RuntimeBuffId;
+            queuedCommand.BuffId = command.BuffId;
+            queuedCommand.RemoveReason = command.RemoveReason;
+            queuedCommand.FrameIndex = command.FrameIndex;
+            InsertRemoveCommand(queuedCommand);
+        }
+
+        public bool HasBuff(long targetId, int buffId)
+        {
+            return _worldState.TryGetPlayer(targetId, out PlayerState targetState) &&
+                   BuffSystem.HasBuff(targetState, buffId);
+        }
+
+        public int GetBuffStackCount(long targetId, int buffId)
+        {
+            return _worldState.TryGetPlayer(targetId, out PlayerState targetState)
+                ? BuffSystem.GetBuffStackCount(targetState, buffId)
+                : 0;
         }
 
         private static void NormalizeInput(ref float dx, ref float dy)
@@ -686,20 +751,221 @@ namespace GameLogic
                    left.MaxMana == right.MaxMana &&
                    left.Attack == right.Attack;
         }
+
+        private bool ArePlayerSnapshotsEquivalent(PlayerStateSnapshot predicted, PlayerStateSnapshot authoritative)
+        {
+            return predicted.X == authoritative.X &&
+                   predicted.Y == authoritative.Y &&
+                   AreAttributesEqual(predicted.Attributes, authoritative.Attributes) &&
+                   predicted.NextRuntimeBuffId == authoritative.NextRuntimeBuffId &&
+                   AreBuffsEqual(predicted.ActiveBuffs, authoritative.ActiveBuffs) &&
+                   AreNumericSnapshotsEqual(predicted.Numeric, authoritative.Numeric);
+        }
+
+        private static bool AreBuffsEqual(IReadOnlyList<BuffState> left, IReadOnlyList<BuffState> right)
+        {
+            if (left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Count; i++)
+            {
+                BuffState leftBuff = left[i];
+                BuffState rightBuff = right[i];
+                if (leftBuff.RuntimeBuffId != rightBuff.RuntimeBuffId ||
+                    leftBuff.BuffId != rightBuff.BuffId ||
+                    leftBuff.CasterId != rightBuff.CasterId ||
+                    leftBuff.TargetId != rightBuff.TargetId ||
+                    leftBuff.StackCount != rightBuff.StackCount ||
+                    leftBuff.RemainingFrames != rightBuff.RemainingFrames ||
+                    leftBuff.AppliedFrame != rightBuff.AppliedFrame ||
+                    leftBuff.Flags != rightBuff.Flags)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AreNumericSnapshotsEqual(NumericModifierSnapshot left, NumericModifierSnapshot right)
+        {
+            if (!AreAttributesEqual(left.BaseAttributes, right.BaseAttributes) ||
+                left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Modifiers.Count; i++)
+            {
+                NumericModifier leftModifier = left.Modifiers[i];
+                NumericModifier rightModifier = right.Modifiers[i];
+                if (leftModifier.SourceBuffId != rightModifier.SourceBuffId ||
+                    leftModifier.ValueType != rightModifier.ValueType ||
+                    leftModifier.AttributeKind != rightModifier.AttributeKind ||
+                    leftModifier.Value != rightModifier.Value)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static string FormatBuffs(IReadOnlyList<BuffState> buffs)
+        {
+            if (buffs == null || buffs.Count == 0)
+            {
+                return "[]";
+            }
+
+            List<string> values = new List<string>(buffs.Count);
+            for (int i = 0; i < buffs.Count; i++)
+            {
+                BuffState buff = buffs[i];
+                values.Add($"{buff.RuntimeBuffId}:{buff.BuffId}:{buff.StackCount}:{buff.RemainingFrames}");
+            }
+
+            return $"[{string.Join(",", values)}]";
+        }
+
+        private void ProcessBuffCommands(uint frameIndex)
+        {
+            while (_pendingApplyBuffCommands.Count > 0 && _pendingApplyBuffCommands[0].FrameIndex <= frameIndex)
+            {
+                ApplyBuffCommand command = _pendingApplyBuffCommands[0];
+                _pendingApplyBuffCommands.RemoveAt(0);
+                if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
+                {
+                    BuffSystem.AddBuff(targetState, command);
+                }
+
+                _applyBuffCommandPool.Return(command);
+            }
+
+            while (_pendingRemoveBuffCommands.Count > 0 && _pendingRemoveBuffCommands[0].FrameIndex <= frameIndex)
+            {
+                RemoveBuffCommand command = _pendingRemoveBuffCommands[0];
+                _pendingRemoveBuffCommands.RemoveAt(0);
+                if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
+                {
+                    BuffSystem.RemoveBuff(targetState, command);
+                }
+
+                _removeBuffCommandPool.Return(command);
+            }
+        }
+
+        private void RecalculateNumericStates()
+        {
+            foreach (PlayerState player in _worldState.Players)
+            {
+                player.Numeric.Recalculate(player);
+            }
+        }
+
+        private void ApplyBuffTicks(uint frameIndex)
+        {
+            foreach (PlayerState player in _worldState.Players)
+            {
+                BuffSystem.ApplyTick(player, frameIndex);
+            }
+        }
+
+        private void ClearPendingBuffCommands()
+        {
+            for (int i = 0; i < _pendingApplyBuffCommands.Count; i++)
+            {
+                _applyBuffCommandPool.Return(_pendingApplyBuffCommands[i]);
+            }
+
+            _pendingApplyBuffCommands.Clear();
+
+            for (int i = 0; i < _pendingRemoveBuffCommands.Count; i++)
+            {
+                _removeBuffCommandPool.Return(_pendingRemoveBuffCommands[i]);
+            }
+
+            _pendingRemoveBuffCommands.Clear();
+        }
+
+        private void InsertApplyCommand(ApplyBuffCommand command)
+        {
+            int insertIndex = _pendingApplyBuffCommands.Count;
+            for (int i = 0; i < _pendingApplyBuffCommands.Count; i++)
+            {
+                if (Compare(_pendingApplyBuffCommands[i], command) > 0)
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+
+            _pendingApplyBuffCommands.Insert(insertIndex, command);
+        }
+
+        private void InsertRemoveCommand(RemoveBuffCommand command)
+        {
+            int insertIndex = _pendingRemoveBuffCommands.Count;
+            for (int i = 0; i < _pendingRemoveBuffCommands.Count; i++)
+            {
+                if (Compare(_pendingRemoveBuffCommands[i], command) > 0)
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+
+            _pendingRemoveBuffCommands.Insert(insertIndex, command);
+        }
+
+        private static int Compare(ApplyBuffCommand left, ApplyBuffCommand right)
+        {
+            int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+            if (byFrame != 0)
+            {
+                return byFrame;
+            }
+
+            int byTarget = left.TargetId.CompareTo(right.TargetId);
+            if (byTarget != 0)
+            {
+                return byTarget;
+            }
+
+            return left.BuffId.CompareTo(right.BuffId);
+        }
+
+        private static int Compare(RemoveBuffCommand left, RemoveBuffCommand right)
+        {
+            int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+            if (byFrame != 0)
+            {
+                return byFrame;
+            }
+
+            int byTarget = left.TargetId.CompareTo(right.TargetId);
+            if (byTarget != 0)
+            {
+                return byTarget;
+            }
+
+            return left.RuntimeBuffId.CompareTo(right.RuntimeBuffId);
+        }
     }
 
     internal readonly struct SelfPrediction
     {
-        public SelfPrediction(float x, float y, PlayerAttributeSnapshot attributes)
+        public SelfPrediction(PlayerStateSnapshot snapshot)
         {
-            X = x;
-            Y = y;
-            Attributes = attributes;
+            Snapshot = snapshot;
         }
 
-        public float X { get; }
-        public float Y { get; }
-        public PlayerAttributeSnapshot Attributes { get; }
+        public PlayerStateSnapshot Snapshot { get; }
+        public float X => Snapshot.X;
+        public float Y => Snapshot.Y;
+        public PlayerAttributeSnapshot Attributes => Snapshot.Attributes;
     }
 
     internal readonly struct BufferedInput

@@ -76,6 +76,9 @@ public static class TestRunner
             case TestScenario.SnapshotAttributeRoundTrip:
             case TestScenario.AttributesAffectHash:
             case TestScenario.AttributeDirtyMerge:
+            case TestScenario.BuffRoundTrip:
+            case TestScenario.BuffsAffectHash:
+            case TestScenario.RuntimeBuffIdRoundTrip:
                 checks.Add(RunSnapshotSelfCase(options.Scenario));
                 break;
 
@@ -125,6 +128,8 @@ public static class TestRunner
             case TestScenario.AcceptedInputFeedbackRaisesLead:
             case TestScenario.AuthoritativeSnapshotRestoresPhysicsWorld:
             case TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes:
+            case TestScenario.AuthoritativeSnapshotRestoresPlayerBuffs:
+            case TestScenario.PredictedBuffConsistencyHit:
             case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
             case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
@@ -1224,6 +1229,9 @@ public static class TestRunner
                 "attribute-roundtrip" => TestScenario.SnapshotAttributeRoundTrip,
                 "attributes-affect-hash" => TestScenario.AttributesAffectHash,
                 "attribute-dirty-merge" => TestScenario.AttributeDirtyMerge,
+                "buff-roundtrip" => TestScenario.BuffRoundTrip,
+                "buffs-affect-hash" => TestScenario.BuffsAffectHash,
+                "runtime-buff-id-roundtrip" => TestScenario.RuntimeBuffIdRoundTrip,
                 "frame-schedule" => TestScenario.FrameSchedule,
                 "future-frame-input-applies-on-target-frame" => TestScenario.FutureFrameInputAppliesOnTargetFrame,
                 "server-input" => TestScenario.ServerInput,
@@ -1247,6 +1255,8 @@ public static class TestRunner
                 "authoritative-snapshot-restores-physics-world" => TestScenario.AuthoritativeSnapshotRestoresPhysicsWorld,
                 "authoritative-snapshot-restores-player-attributes" => TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes,
                 "authoritative-snapshot-restores-attributes" => TestScenario.AuthoritativeSnapshotRestoresPlayerAttributes,
+                "authoritative-snapshot-restores-player-buffs" => TestScenario.AuthoritativeSnapshotRestoresPlayerBuffs,
+                "predicted-buff-consistency-hit" => TestScenario.PredictedBuffConsistencyHit,
                 "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
                 "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
                 "determinism" => TestScenario.Determinism,
@@ -1279,6 +1289,9 @@ public static class TestRunner
         public const string SnapshotAttributeRoundTrip = "snapshot-attribute-roundtrip";
         public const string AttributesAffectHash = "attributes-affect-hash";
         public const string AttributeDirtyMerge = "attribute-dirty-merge";
+        public const string BuffRoundTrip = "buff-roundtrip";
+        public const string BuffsAffectHash = "buffs-affect-hash";
+        public const string RuntimeBuffIdRoundTrip = "runtime-buff-id-roundtrip";
         public const string FrameSchedule = "frame-schedule";
         public const string FutureFrameInputAppliesOnTargetFrame = "future-frame-input-applies-on-target-frame";
         public const string ServerInput = "server-input";
@@ -1301,6 +1314,8 @@ public static class TestRunner
         public const string AcceptedInputFeedbackRaisesLead = "accepted-input-feedback-raises-lead";
         public const string AuthoritativeSnapshotRestoresPhysicsWorld = "authoritative-snapshot-restores-physics-world";
         public const string AuthoritativeSnapshotRestoresPlayerAttributes = "authoritative-snapshot-restores-player-attributes";
+        public const string AuthoritativeSnapshotRestoresPlayerBuffs = "authoritative-snapshot-restores-player-buffs";
+        public const string PredictedBuffConsistencyHit = "predicted-buff-consistency-hit";
         public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
         public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";
         public const string Determinism = "determinism";

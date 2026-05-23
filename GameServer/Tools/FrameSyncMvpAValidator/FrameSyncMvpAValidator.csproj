@@ -8,7 +8,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="Box2DSharp">
+      <HintPath>..\..\..\UnityProject\Assets\GameScripts\HotFix\ThirdParty\Box2DSharp\Box2DSharp.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\FrameSync\**\*.cs" />
+    <Compile Include="..\..\Server\Entity\TestHarness\CommandLineOptionReader.cs" Link="CommandLineOptionReader.cs" />
     <Compile Include="..\..\Server\Entity\TestHarness\FrameSyncValidationRunner.cs" Link="FrameSyncValidationRunner.cs" />
   </ItemGroup>
 </Project>

@@ -54,7 +54,10 @@ namespace GameShared.FrameSync.Battle
                     playerState.PlayerId,
                     playerState.X,
                     playerState.Y,
-                    playerState.CaptureAttributeSnapshot());
+                    playerState.CaptureAttributeSnapshot(),
+                    playerState.ActiveBuffs,
+                    playerState.NextRuntimeBuffId,
+                    playerState.Numeric.CaptureSnapshot());
             }
 
             Array.Sort(snapshots, PlayerStateSnapshotComparer.Instance);
@@ -74,7 +77,9 @@ namespace GameShared.FrameSync.Battle
             for (int i = 0; i < players.Count; i++)
             {
                 PlayerStateSnapshot player = players[i];
-                _players[player.PlayerId] = new PlayerState(player.PlayerId, player.X, player.Y, player.Attributes);
+                PlayerState restoredPlayer = new PlayerState(player.PlayerId, player.X, player.Y, player.Attributes);
+                restoredPlayer.RestoreRuntimeState(player.ActiveBuffs, player.NextRuntimeBuffId, player.Numeric);
+                _players[player.PlayerId] = restoredPlayer;
             }
 
             if (snapshot.PhysicsSnapshot != null)

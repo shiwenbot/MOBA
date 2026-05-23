@@ -153,11 +153,14 @@ namespace GameLogic
         {
             BattleWorldState worldState = _tickDriver?.WorldState;
             List<BattleAutomationPlayerSnapshot> players = new List<BattleAutomationPlayerSnapshot>();
+            int totalActiveBuffCount = 0;
             if (worldState != null)
             {
                 foreach (PlayerState player in worldState.Players)
                 {
                     bool isSelf = _simulation != null && player.PlayerId == _simulation.SelfPlayerId;
+                    BattleAutomationBuffSnapshot[] activeBuffs = BuildAutomationBuffSnapshots(player.ActiveBuffs);
+                    totalActiveBuffCount += activeBuffs.Length;
                     players.Add(new BattleAutomationPlayerSnapshot
                     {
                         playerId = player.PlayerId,
@@ -168,7 +171,11 @@ namespace GameLogic
                         maxHealth = player.MaxHealth,
                         mana = player.Mana,
                         maxMana = player.MaxMana,
-                        attack = player.Attack
+                        attack = player.Attack,
+                        activeBuffCount = activeBuffs.Length,
+                        activeBuffs = activeBuffs,
+                        nextRuntimeBuffId = player.NextRuntimeBuffId,
+                        numericModifierCount = player.Numeric.Count
                     });
                 }
             }
@@ -193,6 +200,7 @@ namespace GameLogic
                 rollbackCount = _simulation?.RollbackCount ?? 0,
                 lastRollbackReplayFrames = _simulation?.LastRollbackReplayFrames ?? 0,
                 lastRollbackElapsedMs = (float)(_simulation?.LastRollbackElapsedMs ?? 0.0d),
+                totalActiveBuffCount = totalActiveBuffCount,
                 players = players.ToArray()
             };
         }
@@ -392,7 +400,14 @@ namespace GameLogic
                     player.MaxMana,
                     player.Attack);
                 _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
-                players[i] = new PlayerStateSnapshot(player.PlayerId, player.X, player.Y, mergedAttributes);
+                players[i] = new PlayerStateSnapshot(
+                    player.PlayerId,
+                    player.X,
+                    player.Y,
+                    mergedAttributes,
+                    BuildBuffStates(player.ActiveBuffs),
+                    player.NextRuntimeBuffId,
+                    BuildNumericSnapshot(player.Numeric, mergedAttributes));
                 bodies[i] = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
                     player.X,
@@ -423,6 +438,59 @@ namespace GameLogic
 
             PhysicsWorldSnapshot physicsSnapshot = new PhysicsWorldSnapshot(bodies, contacts);
             return new BattleWorldSnapshot(snapshot.FrameIndex, players, physicsSnapshot);
+        }
+
+        private static BuffState[] BuildBuffStates(IReadOnlyList<BuffSnapshot> buffs)
+        {
+            if (buffs == null || buffs.Count == 0)
+            {
+                return Array.Empty<BuffState>();
+            }
+
+            BuffState[] states = new BuffState[buffs.Count];
+            for (int i = 0; i < buffs.Count; i++)
+            {
+                BuffSnapshot buff = buffs[i];
+                states[i] = new BuffState(
+                    buff.RuntimeBuffId,
+                    buff.BuffId,
+                    buff.CasterId,
+                    buff.TargetId,
+                    buff.StackCount,
+                    buff.RemainingFrames,
+                    buff.AppliedFrame,
+                    (BuffFlags)buff.Flags);
+            }
+
+            return states;
+        }
+
+        private static GameShared.FrameSync.Battle.NumericModifierSnapshot BuildNumericSnapshot(Fantasy.NumericSnapshot numeric, PlayerAttributeSnapshot fallbackAttributes)
+        {
+            if (numeric == null)
+            {
+                return GameShared.FrameSync.Battle.NumericModifierSnapshot.FromAttributes(fallbackAttributes);
+            }
+
+            NumericModifier[] modifiers = new NumericModifier[numeric.Modifiers.Count];
+            for (int i = 0; i < numeric.Modifiers.Count; i++)
+            {
+                Fantasy.NumericModifierSnapshot modifier = numeric.Modifiers[i];
+                modifiers[i] = new NumericModifier(
+                    modifier.SourceBuffId,
+                    (ModifierValueType)modifier.ValueType,
+                    (AttributeKind)modifier.AttributeKind,
+                    modifier.Value);
+            }
+
+            return new GameShared.FrameSync.Battle.NumericModifierSnapshot(
+                new PlayerAttributeSnapshot(
+                    numeric.BaseHealth,
+                    numeric.BaseMaxHealth,
+                    numeric.BaseMana,
+                    numeric.BaseMaxMana,
+                    numeric.BaseAttack),
+                modifiers);
         }
 
         private void CleanupStaleAuthoritativeAttributes()
@@ -515,6 +583,33 @@ namespace GameLogic
         private static Vector3 ToWorldPosition(float x, float y)
         {
             return new Vector3(x, 0.5f, y);
+        }
+
+        private static BattleAutomationBuffSnapshot[] BuildAutomationBuffSnapshots(IReadOnlyList<BuffState> activeBuffs)
+        {
+            if (activeBuffs == null || activeBuffs.Count == 0)
+            {
+                return Array.Empty<BattleAutomationBuffSnapshot>();
+            }
+
+            BattleAutomationBuffSnapshot[] snapshots = new BattleAutomationBuffSnapshot[activeBuffs.Count];
+            for (int i = 0; i < activeBuffs.Count; i++)
+            {
+                BuffState buff = activeBuffs[i];
+                snapshots[i] = new BattleAutomationBuffSnapshot
+                {
+                    runtimeBuffId = buff.RuntimeBuffId,
+                    buffId = buff.BuffId,
+                    casterId = buff.CasterId,
+                    targetId = buff.TargetId,
+                    stackCount = buff.StackCount,
+                    remainingFrames = buff.RemainingFrames,
+                    appliedFrame = (int)buff.AppliedFrame,
+                    flags = (uint)buff.Flags
+                };
+            }
+
+            return snapshots;
         }
 
         private sealed class PlayerSnapshotComparer : IComparer<PlayerStateSnapshot>

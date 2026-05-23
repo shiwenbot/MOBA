@@ -8,6 +8,7 @@ namespace Fantasy;
 
 public sealed class BattleComponent : Entitas.Entity, ITickable
 {
+    private readonly BattleAutomationServerConfig _automationConfig = BattleAutomationServerConfig.Current;
     private readonly BattleLogic _battleLogic = new(null, Log.Warning);
     private readonly Dictionary<long, PlayerSession> _sessionsByPlayerId = new();
     private readonly Dictionary<long, long> _playerIdBySessionId = new();
@@ -15,6 +16,9 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     private readonly List<long> _playerIdBuffer = new();
 
     private long _nextPlayerId = 1;
+    private bool _automationPlayerThresholdObserved;
+    private bool _automationBuffCommandsQueued;
+    private uint _automationBuffApplyFrame;
 
     public int Priority => 0;
     public uint LastFrameIndex => _battleLogic.LastFrameIndex;
@@ -72,6 +76,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     public void Tick(uint frameIndex, float fixedDt)
     {
         CleanupDisconnectedPlayers();
+        RunAutomationScenario(frameIndex);
         _battleLogic.Tick(frameIndex, fixedDt);
     }
 
@@ -148,7 +153,10 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
                 Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, currentAttributes.Mana),
                 MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, currentAttributes.MaxMana),
-                Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack)
+                Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack),
+                ActiveBuffs = BuildBuffSnapshots(player.ActiveBuffs),
+                NextRuntimeBuffId = player.NextRuntimeBuffId,
+                Numeric = BuildNumericSnapshot(player.Numeric)
             });
 
             _lastBroadcastAttributesByPlayerId[player.PlayerId] = currentAttributes;
@@ -195,6 +203,103 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         return lookup;
+    }
+
+    private static List<BuffSnapshot> BuildBuffSnapshots(IReadOnlyList<BuffState> buffs)
+    {
+        List<BuffSnapshot> snapshots = new List<BuffSnapshot>(buffs.Count);
+        for (int i = 0; i < buffs.Count; i++)
+        {
+            BuffState buff = buffs[i];
+            snapshots.Add(new BuffSnapshot
+            {
+                RuntimeBuffId = buff.RuntimeBuffId,
+                BuffId = buff.BuffId,
+                CasterId = buff.CasterId,
+                TargetId = buff.TargetId,
+                StackCount = buff.StackCount,
+                RemainingFrames = buff.RemainingFrames,
+                AppliedFrame = buff.AppliedFrame,
+                Flags = (uint)buff.Flags
+            });
+        }
+
+        return snapshots;
+    }
+
+    private static NumericSnapshot BuildNumericSnapshot(GameShared.FrameSync.Battle.NumericModifierSnapshot numericState)
+    {
+        NumericSnapshot snapshot = new NumericSnapshot
+        {
+            BaseHealth = numericState.BaseAttributes.Health,
+            BaseMaxHealth = numericState.BaseAttributes.MaxHealth,
+            BaseMana = numericState.BaseAttributes.Mana,
+            BaseMaxMana = numericState.BaseAttributes.MaxMana,
+            BaseAttack = numericState.BaseAttributes.Attack
+        };
+
+        for (int i = 0; i < numericState.Modifiers.Count; i++)
+        {
+            NumericModifier modifier = numericState.Modifiers[i];
+            snapshot.Modifiers.Add(new NumericModifierSnapshot
+            {
+                SourceBuffId = modifier.SourceBuffId,
+                ValueType = (uint)modifier.ValueType,
+                AttributeKind = (uint)modifier.AttributeKind,
+                Value = modifier.Value
+            });
+        }
+
+        return snapshot;
+    }
+
+    private void RunAutomationScenario(uint frameIndex)
+    {
+        if (!_automationConfig.IsBuffLifecycleScenario)
+        {
+            return;
+        }
+
+        if (!_automationPlayerThresholdObserved && _sessionsByPlayerId.Count >= _automationConfig.MinimumPlayerCount)
+        {
+            _automationPlayerThresholdObserved = true;
+            _automationBuffApplyFrame = unchecked(frameIndex + _automationConfig.BuffApplyDelayFrames);
+            Log.Warning(
+                $"[Automation][BattleServer] Observed target players. scenario={_automationConfig.Scenario} applyFrame={_automationBuffApplyFrame} playerCount={_sessionsByPlayerId.Count}");
+        }
+
+        if (!_automationPlayerThresholdObserved ||
+            _automationBuffCommandsQueued ||
+            frameIndex < _automationBuffApplyFrame)
+        {
+            return;
+        }
+
+        _playerIdBuffer.Clear();
+        foreach (long playerId in _sessionsByPlayerId.Keys)
+        {
+            _playerIdBuffer.Add(playerId);
+        }
+
+        _playerIdBuffer.Sort();
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            _battleLogic.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = playerId,
+                TargetId = playerId,
+                BuffId = _automationConfig.ExpectedBuffId,
+                DurationFrames = _automationConfig.BuffDurationFrames,
+                StackCount = _automationConfig.BuffStackCount,
+                FrameIndex = frameIndex,
+                Flags = _automationConfig.BuffFlags
+            });
+        }
+
+        _automationBuffCommandsQueued = true;
+        Log.Warning(
+            $"[Automation][BattleServer] Queued buff lifecycle commands. scenario={_automationConfig.Scenario} buffId={_automationConfig.ExpectedBuffId} duration={_automationConfig.BuffDurationFrames} players={_playerIdBuffer.Count}");
     }
 
     private static (float x, float y) GetSpawnPosition(int playerCount)

@@ -16,7 +16,10 @@ namespace GameShared.FrameSync.Snapshot
             "physics-affects-hash",
             "snapshot-attribute-roundtrip",
             "attributes-affect-hash",
-            "attribute-dirty-merge"
+            "attribute-dirty-merge",
+            "buff-roundtrip",
+            "buffs-affect-hash",
+            "runtime-buff-id-roundtrip"
         };
 
         public static bool Run(out string failedCase)
@@ -49,6 +52,9 @@ namespace GameShared.FrameSync.Snapshot
                     "snapshot-attribute-roundtrip" or "attribute-roundtrip" => AttributeRoundTrip(),
                     "attributes-affect-hash" => AttributesAffectHash(),
                     "attribute-dirty-merge" => AttributeDirtyMerge(),
+                    "buff-roundtrip" => BuffRoundTrip(),
+                    "buffs-affect-hash" => BuffsAffectHash(),
+                    "runtime-buff-id-roundtrip" => RuntimeBuffIdRoundTrip(),
                     _ => throw new ArgumentException($"Unknown snapshot self test case: {caseName}", nameof(caseName))
                 };
 
@@ -274,6 +280,137 @@ namespace GameShared.FrameSync.Snapshot
                    merged.Mana == current.Mana &&
                    merged.MaxMana == current.MaxMana &&
                    merged.Attack == current.Attack;
+        }
+
+        private static bool BuffRoundTrip()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 2.0f, 3.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            long runtimeBuffId = BuffSystem.AddBuff(
+                player,
+                casterId: 7,
+                buffId: 101,
+                durationFrames: 6,
+                stackCount: 2,
+                appliedFrame: 12,
+                flags: BuffFlags.Duration | BuffFlags.Stackable);
+            player.Numeric.AddModifier(new NumericModifier(runtimeBuffId, ModifierValueType.Flat, AttributeKind.Attack, 5));
+            player.Numeric.Recalculate(player);
+
+            BattleWorldSnapshot snapshotA = worldState.TakeSnapshot().WithFrameIndex(300);
+            ulong hashA = StateHasher.Hash(snapshotA);
+
+            player.Attack = 1;
+            player.ActiveBuffs.Clear();
+            player.Numeric.RestoreSnapshot(NumericModifierSnapshot.FromAttributes(player.CaptureAttributeSnapshot()));
+
+            worldState.RestoreSnapshot(snapshotA);
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            BattleWorldSnapshot snapshotB = worldState.TakeSnapshot().WithFrameIndex(300);
+            ulong hashB = StateHasher.Hash(snapshotB);
+            return restoredPlayer.ActiveBuffs.Count == 1 &&
+                   restoredPlayer.ActiveBuffs[0].RuntimeBuffId == runtimeBuffId &&
+                   restoredPlayer.ActiveBuffs[0].StackCount == 2 &&
+                   restoredPlayer.Attack == 15 &&
+                   restoredPlayer.Numeric.Count == 1 &&
+                   hashA == hashB;
+        }
+
+        private static bool BuffsAffectHash()
+        {
+            PlayerAttributeSnapshot attributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
+            BattleWorldSnapshot left = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(
+                        1,
+                        0.0f,
+                        0.0f,
+                        attributes,
+                        new[]
+                        {
+                            new BuffState(1, 101, 7, 1, 1, 5, 10, BuffFlags.Duration)
+                        },
+                        2,
+                        new NumericModifierSnapshot(
+                            attributes,
+                            new[]
+                            {
+                                new NumericModifier(1, ModifierValueType.Flat, AttributeKind.Attack, 5)
+                            }))
+                });
+
+            BattleWorldSnapshot right = new BattleWorldSnapshot(
+                1,
+                new[]
+                {
+                    new PlayerStateSnapshot(
+                        1,
+                        0.0f,
+                        0.0f,
+                        attributes,
+                        new[]
+                        {
+                            new BuffState(2, 202, 7, 1, 1, 5, 10, BuffFlags.Duration)
+                        },
+                        3,
+                        new NumericModifierSnapshot(
+                            attributes,
+                            new[]
+                            {
+                                new NumericModifier(2, ModifierValueType.Flat, AttributeKind.Attack, 8)
+                            }))
+                });
+
+            return StateHasher.Hash(left) != StateHasher.Hash(right);
+        }
+
+        private static bool RuntimeBuffIdRoundTrip()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            long firstRuntimeBuffId = BuffSystem.AddBuff(
+                player,
+                casterId: 9,
+                buffId: 301,
+                durationFrames: 3,
+                stackCount: 1,
+                appliedFrame: 20,
+                flags: BuffFlags.Duration);
+            BattleWorldSnapshot snapshot = worldState.TakeSnapshot().WithFrameIndex(400);
+
+            worldState.RestoreSnapshot(snapshot);
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            long secondRuntimeBuffId = BuffSystem.AddBuff(
+                restoredPlayer,
+                casterId: 9,
+                buffId: 302,
+                durationFrames: 3,
+                stackCount: 1,
+                appliedFrame: 21,
+                flags: BuffFlags.Duration);
+            return firstRuntimeBuffId == 1 &&
+                   secondRuntimeBuffId == 2 &&
+                   restoredPlayer.NextRuntimeBuffId == 3;
         }
 
         private static BattleWorldSnapshot CreateSinglePlayerSnapshot(uint frameIndex, float x)

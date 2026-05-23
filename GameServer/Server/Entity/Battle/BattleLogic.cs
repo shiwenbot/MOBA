@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
 using GameShared.FrameSync.Battle;
+using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
 
 namespace Fantasy;
 
-public sealed class BattleLogic
+public sealed class BattleLogic : IBuffCommandSink
 {
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
     private readonly FrameSyncPhysicsWorld _physicsWorld = new();
@@ -15,6 +16,10 @@ public sealed class BattleLogic
     private readonly Dictionary<long, SubmittedInput> _lastSubmittedInputByPlayerId = new();
     private readonly Dictionary<long, uint> _latestAcceptedInputFrameByPlayerId = new();
     private readonly List<long> _playerIdBuffer = new();
+    private readonly List<ApplyBuffCommand> _pendingApplyBuffCommands = new();
+    private readonly List<RemoveBuffCommand> _pendingRemoveBuffCommands = new();
+    private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new();
+    private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new();
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
     private bool _hasProcessedFrame;
@@ -52,6 +57,7 @@ public sealed class BattleLogic
         _lastConsumedInputByPlayerId.Remove(playerId);
         _lastSubmittedInputByPlayerId.Remove(playerId);
         _latestAcceptedInputFrameByPlayerId.Remove(playerId);
+        RemovePendingBuffCommands(playerId);
         _physicsWorld.RemoveBody(checked((int)playerId));
         return _statesByPlayerId.Remove(playerId);
     }
@@ -140,6 +146,7 @@ public sealed class BattleLogic
         _hasProcessedFrame = true;
 
         BuildSortedPlayerBuffer();
+        ProcessBuffCommands(frameIndex);
 
         for (int i = 0; i < _playerIdBuffer.Count; i++)
         {
@@ -197,6 +204,8 @@ public sealed class BattleLogic
 
         _physicsWorld.Step(fixedDt);
         SyncPlayerStatesFromPhysics();
+        RecalculateNumericStates();
+        ApplyBuffTicks(frameIndex);
 
         if (OnBroadcast != null)
         {
@@ -233,10 +242,60 @@ public sealed class BattleLogic
                 state.PlayerId,
                 state.X,
                 state.Y,
-                state.CaptureAttributeSnapshot());
+                state.CaptureAttributeSnapshot(),
+                state.ActiveBuffs,
+                state.NextRuntimeBuffId,
+                state.Numeric.CaptureSnapshot());
         }
 
         return players;
+    }
+
+    public void EnqueueApplyBuff(ApplyBuffCommand command)
+    {
+        if (command == null)
+        {
+            throw new ArgumentNullException(nameof(command));
+        }
+
+        ApplyBuffCommand queuedCommand = _applyBuffCommandPool.Rent();
+        queuedCommand.CasterId = command.CasterId;
+        queuedCommand.TargetId = command.TargetId;
+        queuedCommand.BuffId = command.BuffId;
+        queuedCommand.DurationFrames = command.DurationFrames;
+        queuedCommand.StackCount = command.StackCount;
+        queuedCommand.FrameIndex = command.FrameIndex;
+        queuedCommand.Flags = command.Flags;
+        InsertApplyCommand(queuedCommand);
+    }
+
+    public void EnqueueRemoveBuff(RemoveBuffCommand command)
+    {
+        if (command == null)
+        {
+            throw new ArgumentNullException(nameof(command));
+        }
+
+        RemoveBuffCommand queuedCommand = _removeBuffCommandPool.Rent();
+        queuedCommand.TargetId = command.TargetId;
+        queuedCommand.RuntimeBuffId = command.RuntimeBuffId;
+        queuedCommand.BuffId = command.BuffId;
+        queuedCommand.RemoveReason = command.RemoveReason;
+        queuedCommand.FrameIndex = command.FrameIndex;
+        InsertRemoveCommand(queuedCommand);
+    }
+
+    public bool HasBuff(long targetId, int buffId)
+    {
+        return _statesByPlayerId.TryGetValue(targetId, out PlayerState? state) &&
+               BuffSystem.HasBuff(state, buffId);
+    }
+
+    public int GetBuffStackCount(long targetId, int buffId)
+    {
+        return _statesByPlayerId.TryGetValue(targetId, out PlayerState? state)
+            ? BuffSystem.GetBuffStackCount(state, buffId)
+            : 0;
     }
 
     private void BuildSortedPlayerBuffer()
@@ -269,6 +328,148 @@ public sealed class BattleLogic
             state.X = bodySnapshot.PositionX;
             state.Y = bodySnapshot.PositionY;
         }
+    }
+
+    private void ProcessBuffCommands(uint frameIndex)
+    {
+        while (_pendingApplyBuffCommands.Count > 0 && _pendingApplyBuffCommands[0].FrameIndex <= frameIndex)
+        {
+            ApplyBuffCommand command = _pendingApplyBuffCommands[0];
+            _pendingApplyBuffCommands.RemoveAt(0);
+            if (_statesByPlayerId.TryGetValue(command.TargetId, out PlayerState? targetState))
+            {
+                BuffSystem.AddBuff(targetState, command);
+            }
+
+            _applyBuffCommandPool.Return(command);
+        }
+
+        while (_pendingRemoveBuffCommands.Count > 0 && _pendingRemoveBuffCommands[0].FrameIndex <= frameIndex)
+        {
+            RemoveBuffCommand command = _pendingRemoveBuffCommands[0];
+            _pendingRemoveBuffCommands.RemoveAt(0);
+            if (_statesByPlayerId.TryGetValue(command.TargetId, out PlayerState? targetState))
+            {
+                BuffSystem.RemoveBuff(targetState, command);
+            }
+
+            _removeBuffCommandPool.Return(command);
+        }
+    }
+
+    private void RecalculateNumericStates()
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            if (_statesByPlayerId.TryGetValue(playerId, out PlayerState? playerState))
+            {
+                playerState.Numeric.Recalculate(playerState);
+            }
+        }
+    }
+
+    private void ApplyBuffTicks(uint frameIndex)
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            if (_statesByPlayerId.TryGetValue(playerId, out PlayerState? playerState))
+            {
+                BuffSystem.ApplyTick(playerState, frameIndex);
+            }
+        }
+    }
+
+    private void RemovePendingBuffCommands(long targetId)
+    {
+        for (int i = _pendingApplyBuffCommands.Count - 1; i >= 0; i--)
+        {
+            ApplyBuffCommand command = _pendingApplyBuffCommands[i];
+            if (command.TargetId != targetId && command.CasterId != targetId)
+            {
+                continue;
+            }
+
+            _pendingApplyBuffCommands.RemoveAt(i);
+            _applyBuffCommandPool.Return(command);
+        }
+
+        for (int i = _pendingRemoveBuffCommands.Count - 1; i >= 0; i--)
+        {
+            RemoveBuffCommand command = _pendingRemoveBuffCommands[i];
+            if (command.TargetId != targetId)
+            {
+                continue;
+            }
+
+            _pendingRemoveBuffCommands.RemoveAt(i);
+            _removeBuffCommandPool.Return(command);
+        }
+    }
+
+    private void InsertApplyCommand(ApplyBuffCommand command)
+    {
+        int insertIndex = _pendingApplyBuffCommands.Count;
+        for (int i = 0; i < _pendingApplyBuffCommands.Count; i++)
+        {
+            if (Compare(_pendingApplyBuffCommands[i], command) > 0)
+            {
+                insertIndex = i;
+                break;
+            }
+        }
+
+        _pendingApplyBuffCommands.Insert(insertIndex, command);
+    }
+
+    private void InsertRemoveCommand(RemoveBuffCommand command)
+    {
+        int insertIndex = _pendingRemoveBuffCommands.Count;
+        for (int i = 0; i < _pendingRemoveBuffCommands.Count; i++)
+        {
+            if (Compare(_pendingRemoveBuffCommands[i], command) > 0)
+            {
+                insertIndex = i;
+                break;
+            }
+        }
+
+        _pendingRemoveBuffCommands.Insert(insertIndex, command);
+    }
+
+    private static int Compare(ApplyBuffCommand left, ApplyBuffCommand right)
+    {
+        int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+        if (byFrame != 0)
+        {
+            return byFrame;
+        }
+
+        int byTarget = left.TargetId.CompareTo(right.TargetId);
+        if (byTarget != 0)
+        {
+            return byTarget;
+        }
+
+        return left.BuffId.CompareTo(right.BuffId);
+    }
+
+    private static int Compare(RemoveBuffCommand left, RemoveBuffCommand right)
+    {
+        int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+        if (byFrame != 0)
+        {
+            return byFrame;
+        }
+
+        int byTarget = left.TargetId.CompareTo(right.TargetId);
+        if (byTarget != 0)
+        {
+            return byTarget;
+        }
+
+        return left.RuntimeBuffId.CompareTo(right.RuntimeBuffId);
     }
 
     private static bool IsInputNewerOrEqual(uint incomingSeq, uint cachedSeq)

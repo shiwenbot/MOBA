@@ -22,6 +22,8 @@ namespace GameLogic
             "accepted-input-feedback-raises-lead",
             "authoritative-snapshot-restores-physics-world",
             "authoritative-snapshot-restores-player-attributes",
+            "authoritative-snapshot-restores-player-buffs",
+            "predicted-buff-consistency-hit",
             "rollback-replays-before-next-consistency-check",
             "manual-rollback-replays-authoritative-history"
         };
@@ -61,6 +63,8 @@ namespace GameLogic
                     "accepted-input-feedback-raises-lead" => AcceptedInputFeedbackRaisesLead(),
                     "authoritative-snapshot-restores-physics-world" => AuthoritativeSnapshotRestoresPhysicsWorld(),
                     "authoritative-snapshot-restores-player-attributes" => AuthoritativeSnapshotRestoresPlayerAttributes(),
+                    "authoritative-snapshot-restores-player-buffs" => AuthoritativeSnapshotRestoresPlayerBuffs(),
+                    "predicted-buff-consistency-hit" => PredictedBuffConsistencyHit(),
                     "rollback-replays-before-next-consistency-check" => RollbackReplaysBeforeNextConsistencyCheck(),
                     "manual-rollback-replays-authoritative-history" => ManualRollbackReplaysAuthoritativeHistory(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
@@ -399,6 +403,96 @@ namespace GameLogic
                    restoredPlayer.Mana == authoritativeAttributes.Mana &&
                    restoredPlayer.MaxMana == authoritativeAttributes.MaxMana &&
                    restoredPlayer.Attack == authoritativeAttributes.Attack;
+        }
+
+        private static bool AuthoritativeSnapshotRestoresPlayerBuffs()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            PlayerAttributeSnapshot baseAttributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
+            NumericModifierSnapshot numeric = new NumericModifierSnapshot(
+                baseAttributes,
+                new[]
+                {
+                    new NumericModifier(1, ModifierValueType.Flat, AttributeKind.Attack, 5)
+                });
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(
+                            1,
+                            0.0f,
+                            0.0f,
+                            new PlayerAttributeSnapshot(100, 100, 40, 100, 15),
+                            new[]
+                            {
+                                new BuffState(1, 5001, 7, 1, 1, 3, 11, BuffFlags.Duration)
+                            },
+                            2,
+                            numeric)
+                    }),
+                11);
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            return restoredPlayer.ActiveBuffs.Count == 1 &&
+                   restoredPlayer.ActiveBuffs[0].BuffId == 5001 &&
+                   restoredPlayer.Numeric.Count == 1 &&
+                   restoredPlayer.Attack == 15 &&
+                   restoredPlayer.NextRuntimeBuffId == 2;
+        }
+
+        private static bool PredictedBuffConsistencyHit()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = 7001,
+                DurationFrames = 5,
+                StackCount = 1,
+                FrameIndex = 11,
+                Flags = BuffFlags.Duration
+            });
+            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(
+                            1,
+                            selfPlayer.X,
+                            selfPlayer.Y,
+                            selfPlayer.CaptureAttributeSnapshot(),
+                            selfPlayer.ActiveBuffs,
+                            selfPlayer.NextRuntimeBuffId,
+                            selfPlayer.Numeric.CaptureSnapshot())
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            return !result.ConsistencyMismatch &&
+                   simulation.ConsistencyChecked == 1 &&
+                   simulation.ConsistencyHits == 1 &&
+                   simulation.ConsistencyMisses == 0;
         }
 
         private static bool RollbackReplaysBeforeNextConsistencyCheck()

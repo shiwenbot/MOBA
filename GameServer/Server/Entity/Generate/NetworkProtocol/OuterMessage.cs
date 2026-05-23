@@ -389,6 +389,171 @@ namespace Fantasy
     }
     [Serializable]
     [ProtoContract]
+    public partial class BuffSnapshot : AMessage, IDisposable
+    {
+        public static BuffSnapshot Create(bool autoReturn = true)
+        {
+            var buffSnapshot = MessageObjectPool<BuffSnapshot>.Rent();
+            buffSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                buffSnapshot.SetIsPool(false);
+            }
+            
+            return buffSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            RuntimeBuffId = default;
+            BuffId = default;
+            CasterId = default;
+            TargetId = default;
+            StackCount = default;
+            RemainingFrames = default;
+            AppliedFrame = default;
+            Flags = default;
+            MessageObjectPool<BuffSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long RuntimeBuffId { get; set; }
+        [ProtoMember(2)]
+        public int BuffId { get; set; }
+        [ProtoMember(3)]
+        public long CasterId { get; set; }
+        [ProtoMember(4)]
+        public long TargetId { get; set; }
+        [ProtoMember(5)]
+        public int StackCount { get; set; }
+        [ProtoMember(6)]
+        public int RemainingFrames { get; set; }
+        [ProtoMember(7)]
+        public uint AppliedFrame { get; set; }
+        [ProtoMember(8)]
+        public uint Flags { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class NumericModifierSnapshot : AMessage, IDisposable
+    {
+        public static NumericModifierSnapshot Create(bool autoReturn = true)
+        {
+            var numericModifierSnapshot = MessageObjectPool<NumericModifierSnapshot>.Rent();
+            numericModifierSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                numericModifierSnapshot.SetIsPool(false);
+            }
+            
+            return numericModifierSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            SourceBuffId = default;
+            ValueType = default;
+            AttributeKind = default;
+            Value = default;
+            MessageObjectPool<NumericModifierSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long SourceBuffId { get; set; }
+        [ProtoMember(2)]
+        public uint ValueType { get; set; }
+        [ProtoMember(3)]
+        public uint AttributeKind { get; set; }
+        [ProtoMember(4)]
+        public int Value { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class NumericSnapshot : AMessage, IDisposable
+    {
+        public static NumericSnapshot Create(bool autoReturn = true)
+        {
+            var numericSnapshot = MessageObjectPool<NumericSnapshot>.Rent();
+            numericSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                numericSnapshot.SetIsPool(false);
+            }
+            
+            return numericSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            BaseHealth = default;
+            BaseMaxHealth = default;
+            BaseMana = default;
+            BaseMaxMana = default;
+            BaseAttack = default;
+            Modifiers.Clear();
+            MessageObjectPool<NumericSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public int BaseHealth { get; set; }
+        [ProtoMember(2)]
+        public int BaseMaxHealth { get; set; }
+        [ProtoMember(3)]
+        public int BaseMana { get; set; }
+        [ProtoMember(4)]
+        public int BaseMaxMana { get; set; }
+        [ProtoMember(5)]
+        public int BaseAttack { get; set; }
+        [ProtoMember(6)]
+        public List<NumericModifierSnapshot> Modifiers { get; set; } = new List<NumericModifierSnapshot>();
+    }
+    [Serializable]
+    [ProtoContract]
     public partial class PlayerSnapshot : AMessage, IDisposable
     {
         public static PlayerSnapshot Create(bool autoReturn = true)
@@ -437,6 +602,13 @@ namespace Fantasy
             Mana = default;
             MaxMana = default;
             Attack = default;
+            ActiveBuffs.Clear();
+            NextRuntimeBuffId = default;
+            if (Numeric != null)
+            {
+                Numeric.Dispose();
+                Numeric = null;
+            }
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -471,6 +643,12 @@ namespace Fantasy
         public int MaxMana { get; set; }
         [ProtoMember(16)]
         public int Attack { get; set; }
+        [ProtoMember(17)]
+        public List<BuffSnapshot> ActiveBuffs { get; set; } = new List<BuffSnapshot>();
+        [ProtoMember(18)]
+        public long NextRuntimeBuffId { get; set; }
+        [ProtoMember(19)]
+        public NumericSnapshot Numeric { get; set; }
     }
     [Serializable]
     [ProtoContract]

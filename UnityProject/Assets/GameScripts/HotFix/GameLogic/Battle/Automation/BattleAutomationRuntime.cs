@@ -132,6 +132,9 @@ namespace GameLogic
             int movementFrames,
             int settleFrames,
             int disconnectFrame,
+            int expectedBuffId,
+            int buffApplyDelayFrames,
+            int buffDurationFrames,
             float movementDistanceThreshold,
             bool autoOpenBattleUi,
             bool autoCloseAfterFinish)
@@ -151,6 +154,9 @@ namespace GameLogic
             MovementFrames = movementFrames;
             SettleFrames = settleFrames;
             DisconnectFrame = disconnectFrame;
+            ExpectedBuffId = expectedBuffId;
+            BuffApplyDelayFrames = buffApplyDelayFrames;
+            BuffDurationFrames = buffDurationFrames;
             MovementDistanceThreshold = movementDistanceThreshold;
             AutoOpenBattleUi = autoOpenBattleUi;
             AutoCloseAfterFinish = autoCloseAfterFinish;
@@ -171,6 +177,9 @@ namespace GameLogic
         public int MovementFrames { get; }
         public int SettleFrames { get; }
         public int DisconnectFrame { get; }
+        public int ExpectedBuffId { get; }
+        public int BuffApplyDelayFrames { get; }
+        public int BuffDurationFrames { get; }
         public float MovementDistanceThreshold { get; }
         public bool AutoOpenBattleUi { get; }
         public bool AutoCloseAfterFinish { get; }
@@ -214,6 +223,9 @@ namespace GameLogic
                 GetInt(args, "movementFrames", 90),
                 GetInt(args, "settleFrames", 30),
                 GetInt(args, "disconnectFrame", 60),
+                GetInt(args, "expectedBuffId", 9001),
+                GetInt(args, "buffApplyDelayFrames", 30),
+                GetInt(args, "buffDurationFrames", 45),
                 GetFloat(args, "movementDistanceThreshold", 1.0f),
                 GetBool(args, "autoOpenBattleUi", true),
                 GetBool(args, "autoCloseAfterFinish", true));
@@ -466,6 +478,8 @@ namespace GameLogic
         private float _startY;
         private bool _observedTargetPlayerCount;
         private bool _observedPlayerDrop;
+        private bool _observedExpectedBuffAppearance;
+        private bool _observedExpectedBuffExpiry;
 
         public string BridgeName => "builtin";
 
@@ -595,6 +609,46 @@ namespace GameLogic
                     }
 
                     break;
+
+                case BattleAutomationScenarioKind.BuffLifecycle:
+                    int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+                    if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
+                    {
+                        _observedExpectedBuffAppearance = true;
+                    }
+
+                    if (_observedExpectedBuffAppearance &&
+                        playersWithExpectedBuff == 0 &&
+                        elapsedFrames >= _plan.buffApplyDelayFrames + _plan.buffDurationFrames)
+                    {
+                        _observedExpectedBuffExpiry = true;
+                    }
+
+                    if (elapsedFrames >= _plan.completionFrame)
+                    {
+                        if (_observedExpectedBuffAppearance && _observedExpectedBuffExpiry)
+                        {
+                            return new BattleAutomationEvaluation(
+                                true,
+                                true,
+                                $"buff-lifecycle-complete buffId={_plan.expectedBuffId}");
+                        }
+
+                        if (!_observedExpectedBuffAppearance)
+                        {
+                            return new BattleAutomationEvaluation(
+                                true,
+                                false,
+                                $"buff-never-appeared buffId={_plan.expectedBuffId}");
+                        }
+
+                        return new BattleAutomationEvaluation(
+                            true,
+                            false,
+                            $"buff-never-expired buffId={_plan.expectedBuffId}");
+                    }
+
+                    break;
             }
 
             return default;
@@ -602,6 +656,26 @@ namespace GameLogic
 
         public void Dispose()
         {
+        }
+
+        private static int CountPlayersWithExpectedBuff(BattleAutomationClientSnapshot snapshot, int expectedBuffId)
+        {
+            if (snapshot.players == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            for (int i = 0; i < snapshot.players.Length; i++)
+            {
+                BattleAutomationPlayerSnapshot player = snapshot.players[i];
+                if (player != null && player.HasBuff(expectedBuffId))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
     }
 
@@ -773,7 +847,15 @@ namespace GameLogic
                     scenario = config.Scenario,
                     battleServerAddress = config.BattleServerAddress,
                     battleServerPort = config.BattleServerPort,
-                    timeoutSeconds = config.TimeoutSeconds
+                    timeoutSeconds = config.TimeoutSeconds,
+                    minimumPlayerCount = config.MinimumPlayerCount,
+                    movementFrames = config.MovementFrames,
+                    settleFrames = config.SettleFrames,
+                    disconnectFrame = config.DisconnectFrame,
+                    movementDistanceThreshold = config.MovementDistanceThreshold,
+                    expectedBuffId = config.ExpectedBuffId,
+                    buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                    buffDurationFrames = config.BuffDurationFrames
                 }));
                 return _tryGetInput != null && _evaluate != null;
             }
@@ -861,7 +943,8 @@ namespace GameLogic
         Movement,
         DisconnectActor,
         DisconnectObserver,
-        Scripted
+        Scripted,
+        BuffLifecycle
     }
 
     internal sealed class BattleAutomationScenarioPlan
@@ -872,6 +955,9 @@ namespace GameLogic
         public int completionFrame;
         public int disconnectFrame;
         public float movementDistanceThreshold;
+        public int expectedBuffId;
+        public int buffApplyDelayFrames;
+        public int buffDurationFrames;
         public BattleAutomationInputSegment[] inputSegments;
 
         public static BattleAutomationScenarioPlan Create(BattleAutomationConfig config)
@@ -935,6 +1021,21 @@ namespace GameLogic
                             {
                                 new BattleAutomationInputSegment(0, (uint)Math.Min(30, Math.Max(0, config.DisconnectFrame - 1)), 1.0f, 0.0f)
                             }
+                    };
+
+                case "two-client-buff-lifecycle":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "two-client-buff-lifecycle",
+                        kind = BattleAutomationScenarioKind.BuffLifecycle,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.BuffApplyDelayFrames + config.BuffDurationFrames + config.SettleFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedBuffId = config.ExpectedBuffId,
+                        buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                        buffDurationFrames = config.BuffDurationFrames,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = Array.Empty<BattleAutomationInputSegment>()
                     };
 
                 default:
@@ -1080,6 +1181,7 @@ namespace GameLogic
         public int rollbackCount;
         public int lastRollbackReplayFrames;
         public float lastRollbackElapsedMs;
+        public int totalActiveBuffCount;
         public BattleAutomationPlayerSnapshot[] players;
 
         public bool TryGetSelfPlayer(out BattleAutomationPlayerSnapshot snapshot)
@@ -1113,6 +1215,42 @@ namespace GameLogic
         public int mana;
         public int maxMana;
         public int attack;
+        public int activeBuffCount;
+        public BattleAutomationBuffSnapshot[] activeBuffs;
+        public long nextRuntimeBuffId;
+        public int numericModifierCount;
+
+        public bool HasBuff(int expectedBuffId)
+        {
+            if (activeBuffs == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < activeBuffs.Length; i++)
+            {
+                BattleAutomationBuffSnapshot snapshot = activeBuffs[i];
+                if (snapshot != null && snapshot.buffId == expectedBuffId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    [Serializable]
+    public sealed class BattleAutomationBuffSnapshot
+    {
+        public long runtimeBuffId;
+        public int buffId;
+        public long casterId;
+        public long targetId;
+        public int stackCount;
+        public int remainingFrames;
+        public int appliedFrame;
+        public uint flags;
     }
 
     [Serializable]
@@ -1139,5 +1277,13 @@ namespace GameLogic
         public string battleServerAddress;
         public int battleServerPort;
         public int timeoutSeconds;
+        public int minimumPlayerCount;
+        public int movementFrames;
+        public int settleFrames;
+        public int disconnectFrame;
+        public float movementDistanceThreshold;
+        public int expectedBuffId;
+        public int buffApplyDelayFrames;
+        public int buffDurationFrames;
     }
 }

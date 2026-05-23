@@ -29,6 +29,40 @@ namespace GameShared.FrameSync.Snapshot
                 MixInt(ref hash, player.Mana);
                 MixInt(ref hash, player.MaxMana);
                 MixInt(ref hash, player.Attack);
+                MixInt(ref hash, player.ActiveBuffs.Count);
+                for (int buffIndex = 0; buffIndex < player.ActiveBuffs.Count; buffIndex++)
+                {
+                    BuffState buffState = player.ActiveBuffs[buffIndex];
+                    MixInt(ref hash, (int)(buffState.RuntimeBuffId >> 32));
+                    MixInt(ref hash, (int)buffState.RuntimeBuffId);
+                    MixInt(ref hash, buffState.BuffId);
+                    MixInt(ref hash, (int)(buffState.CasterId >> 32));
+                    MixInt(ref hash, (int)buffState.CasterId);
+                    MixInt(ref hash, (int)(buffState.TargetId >> 32));
+                    MixInt(ref hash, (int)buffState.TargetId);
+                    MixInt(ref hash, buffState.StackCount);
+                    MixInt(ref hash, buffState.RemainingFrames);
+                    MixInt(ref hash, unchecked((int)buffState.AppliedFrame));
+                    MixInt(ref hash, unchecked((int)buffState.Flags));
+                }
+
+                MixInt(ref hash, (int)(player.NextRuntimeBuffId >> 32));
+                MixInt(ref hash, (int)player.NextRuntimeBuffId);
+                MixInt(ref hash, player.Numeric.BaseAttributes.Health);
+                MixInt(ref hash, player.Numeric.BaseAttributes.MaxHealth);
+                MixInt(ref hash, player.Numeric.BaseAttributes.Mana);
+                MixInt(ref hash, player.Numeric.BaseAttributes.MaxMana);
+                MixInt(ref hash, player.Numeric.BaseAttributes.Attack);
+                MixInt(ref hash, player.Numeric.Count);
+                for (int modifierIndex = 0; modifierIndex < player.Numeric.Modifiers.Count; modifierIndex++)
+                {
+                    NumericModifier modifier = player.Numeric.Modifiers[modifierIndex];
+                    MixInt(ref hash, (int)(modifier.SourceBuffId >> 32));
+                    MixInt(ref hash, (int)modifier.SourceBuffId);
+                    MixInt(ref hash, (int)modifier.ValueType);
+                    MixInt(ref hash, (int)modifier.AttributeKind);
+                    MixInt(ref hash, modifier.Value);
+                }
             }
 
             if (snapshot.PhysicsSnapshot != null)

@@ -20,6 +20,14 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runRoot = Join-Path $repoRoot "_codex_tmp\battle-automation\$timestamp"
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 
+$defaultMinimumPlayerCount = '2'
+$defaultMovementDistanceThreshold = '1.0'
+$defaultMovementFrames = '90'
+$defaultSettleFrames = '30'
+$defaultExpectedBuffId = '9001'
+$defaultBuffApplyDelayFrames = '30'
+$defaultBuffDurationFrames = '45'
+
 function Resolve-UnityExePath {
     param([string]$PreferredPath)
 
@@ -67,6 +75,87 @@ function Test-PortListening {
     param([int]$Port)
 
     return [bool](netstat -ano | Select-String -Pattern (':{0}\s' -f $Port))
+}
+
+function Get-ListeningProcessIds {
+    param([int]$Port)
+
+    $pattern = ':{0}\s+.*LISTENING\s+(\d+)$' -f $Port
+    $matches = netstat -ano | Select-String -Pattern $pattern
+    $processIds = New-Object System.Collections.Generic.HashSet[int]
+    foreach ($match in $matches) {
+        if ($match.Matches.Count -eq 0) {
+            continue
+        }
+
+        $processId = [int]$match.Matches[0].Groups[1].Value
+        if ($processId -gt 0) {
+            [void]$processIds.Add($processId)
+        }
+    }
+
+    return @($processIds)
+}
+
+function Stop-ExistingBattleServer {
+    param([string]$ScenarioName)
+
+    $processIds = Get-ListeningProcessIds -Port 20101
+    if ($processIds.Count -eq 0) {
+        return
+    }
+
+    Write-Warning "Scenario '$ScenarioName' is cleaning up existing battle server processes on port 20101: $($processIds -join ', ')"
+    foreach ($processId in $processIds) {
+        try {
+            Stop-Process -Id $processId -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning ("Failed to stop existing battle server process {0}: {1}" -f $processId, $_.Exception.Message)
+        }
+    }
+
+    Start-Sleep -Seconds 2
+}
+
+function Stop-StaleAutomationClients {
+    $automationProcesses = Get-CimInstance Win32_Process -Filter "name = 'Unity.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -and (
+                $_.CommandLine.IndexOf($editorExecuteMethod, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $_.CommandLine.IndexOf('battleAutomation=1', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            )
+        }
+
+    foreach ($process in $automationProcesses) {
+        Write-Warning "Stopping stale automation Unity process: PID=$($process.ProcessId)"
+        try {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to stop Unity automation process $($process.ProcessId): $($_.Exception.Message)"
+        }
+    }
+
+    if ($automationProcesses) {
+        Start-Sleep -Seconds 2
+    }
+}
+
+function Get-ScenarioCustomArgs {
+    param([string]$ScenarioName)
+
+    $args = @{
+        minimumPlayerCount = $defaultMinimumPlayerCount
+        movementDistanceThreshold = $defaultMovementDistanceThreshold
+        movementFrames = $defaultMovementFrames
+        settleFrames = $defaultSettleFrames
+        expectedBuffId = $defaultExpectedBuffId
+        buffApplyDelayFrames = $defaultBuffApplyDelayFrames
+        buffDurationFrames = $defaultBuffDurationFrames
+    }
+
+    return $args
 }
 
 function Resolve-ControllerScriptPath {
@@ -156,15 +245,8 @@ function Start-ServerProcess {
     $serverDir = Split-Path $serverLogPath -Parent
     New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
 
-    if (Test-PortListening -Port 20101) {
-        'Reusing existing battle server on 20101.' | Set-Content -LiteralPath $serverLogPath -Encoding UTF8
-        return @{
-            Process = $null
-            LogPath = $serverLogPath
-            ErrorPath = $serverErrPath
-            ReusedExisting = $true
-        }
-    }
+    $scenarioArgs = Get-ScenarioCustomArgs -ScenarioName $ScenarioName
+    Stop-ExistingBattleServer -ScenarioName $ScenarioName
 
     $args = @(
         'run',
@@ -180,12 +262,18 @@ function Start-ServerProcess {
     $args += '-m'
     $args += 'Develop'
 
+    # 通过环境变量传递 automation 配置，避免与 Fantasy 框架的 CommandLine.Parser 冲突
     $serverCommand = @(
+        '$env:BATTLE_AUTOMATION_SCENARIO = ''' + $ScenarioName + ''';',
+        '$env:BATTLE_AUTOMATION_MINIMUM_PLAYER_COUNT = ''' + $scenarioArgs.minimumPlayerCount + ''';',
+        '$env:BATTLE_AUTOMATION_BUFF_ID = ''' + $scenarioArgs.expectedBuffId + ''';',
+        '$env:BATTLE_AUTOMATION_BUFF_APPLY_DELAY_FRAMES = ''' + $scenarioArgs.buffApplyDelayFrames + ''';',
+        '$env:BATTLE_AUTOMATION_BUFF_DURATION_FRAMES = ''' + $scenarioArgs.buffDurationFrames + ''';',
         'dotnet run',
         '--project "' + $serverProjectPath + '"',
         '--framework net8.0',
         $(if ($NoBuild) { '--no-build' } else { '' }),
-        '-- -m Release --pid 2001',
+        '-- -m Develop',
         '1>> "' + $serverLogPath + '"',
         '2>> "' + $serverErrPath + '"'
     ) -join ' '
@@ -246,6 +334,8 @@ function Start-AutomationClient {
         $lingerSeconds = '0'
     }
 
+    $scenarioArgs = Get-ScenarioCustomArgs -ScenarioName $ScenarioName
+
     $customArgs = @{
         battleAutomation = '1'
         battleServerAddress = '127.0.0.1'
@@ -257,12 +347,15 @@ function Start-AutomationClient {
         controllerScriptPath = $resolvedControllerScript
         eventLogPath = $eventLogPath
         lingerSeconds = $lingerSeconds
-        minimumPlayerCount = '2'
-        movementDistanceThreshold = '1.0'
-        movementFrames = '90'
+        minimumPlayerCount = $scenarioArgs.minimumPlayerCount
+        movementDistanceThreshold = $scenarioArgs.movementDistanceThreshold
+        movementFrames = $scenarioArgs.movementFrames
         reportPath = $reportPath
         scenario = $ScenarioName
-        settleFrames = '30'
+        settleFrames = $scenarioArgs.settleFrames
+        expectedBuffId = $scenarioArgs.expectedBuffId
+        buffApplyDelayFrames = $scenarioArgs.buffApplyDelayFrames
+        buffDurationFrames = $scenarioArgs.buffDurationFrames
         timeoutSeconds = $ClientTimeoutSeconds.ToString()
     }
 
@@ -411,6 +504,7 @@ $scenarioResults = New-Object System.Collections.Generic.List[object]
 foreach ($scenarioName in $Scenario) {
     $serverState = $null
     try {
+        Stop-StaleAutomationClients
         $serverState = Start-ServerProcess -ScenarioName $scenarioName
         $clientA = Start-AutomationClient -ProjectPath $unityProjectPath -ScenarioName $scenarioName -ClientId 'client-a'
         $clientB = Start-AutomationClient -ProjectPath $cloneProjectPath -ScenarioName $scenarioName -ClientId 'client-b'
