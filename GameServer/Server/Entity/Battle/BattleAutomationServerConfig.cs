@@ -35,8 +35,17 @@ internal sealed class BattleAutomationServerConfig
     public int BuffStackCount { get; }
     public BuffFlags BuffFlags => BuffFlags.Duration | BuffFlags.Dispellable;
     public bool Enabled => !string.IsNullOrWhiteSpace(Scenario);
-    public bool IsBuffLifecycleScenario => Scenario.Equals("two-client-buff-lifecycle", StringComparison.OrdinalIgnoreCase);
-    public bool IsSkillBuffScenario => Scenario.Equals("two-client-skill-buff", StringComparison.OrdinalIgnoreCase);
+    public bool IsBuffLifecycleScenario => IsScenario("two-client-buff-lifecycle");
+    public bool IsSkillBuffScenario => IsScenario("two-client-skill-buff");
+    public bool IsBuffStackScenario => IsScenario("buff-stack", "buffstack", "two-client-buff-stack");
+    public bool IsBuffRefreshScenario => IsScenario("buff-refresh", "buffrefresh", "two-client-buff-refresh");
+    public bool IsBuffMutexScenario => IsScenario("buff-mutex", "buffmutex", "two-client-buff-mutex");
+    public bool IsTimedBuffScenario =>
+        IsBuffLifecycleScenario ||
+        IsSkillBuffScenario ||
+        IsBuffStackScenario ||
+        IsBuffRefreshScenario ||
+        IsBuffMutexScenario;
 
     private static BattleAutomationServerConfig CreateCurrent()
     {
@@ -69,5 +78,18 @@ internal sealed class BattleAutomationServerConfig
     {
         var value = Environment.GetEnvironmentVariable(name);
         return uint.TryParse(value, out uint result) ? result : defaultValue;
+    }
+
+    private bool IsScenario(params string[] names)
+    {
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (Scenario.Equals(names[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

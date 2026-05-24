@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using GameShared.FrameSync.Battle;
 using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
@@ -486,6 +487,8 @@ namespace GameLogic
         private bool _observedPlayerDrop;
         private bool _observedExpectedBuffAppearance;
         private bool _observedExpectedBuffExpiry;
+        private bool _observedExpectedBuffRefreshExtension;
+        private bool _observedInitialBuffAppearance;
         private bool _emittedSkillRequest;
 
         public string BridgeName => "builtin";
@@ -637,52 +640,18 @@ namespace GameLogic
 
                     break;
 
-                  case BattleAutomationScenarioKind.BuffLifecycle:
-                  case BattleAutomationScenarioKind.SkillBuffLifecycle:
-                      int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
-                      if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
-                      {
-                        _observedExpectedBuffAppearance = true;
-                    }
+                case BattleAutomationScenarioKind.BuffLifecycle:
+                case BattleAutomationScenarioKind.SkillBuffLifecycle:
+                    return EvaluateBuffLifecycle(snapshot, elapsedFrames);
 
-                    if (_observedExpectedBuffAppearance &&
-                        playersWithExpectedBuff == 0 &&
-                        elapsedFrames >= _plan.buffApplyDelayFrames + _plan.buffDurationFrames)
-                    {
-                        _observedExpectedBuffExpiry = true;
-                    }
+                case BattleAutomationScenarioKind.BuffStack:
+                    return EvaluateBuffStack(snapshot, elapsedFrames);
 
-                    if (elapsedFrames >= _plan.completionFrame)
-                    {
-                        if (_observedExpectedBuffAppearance && _observedExpectedBuffExpiry)
-                        {
-                              return new BattleAutomationEvaluation(
-                                  true,
-                                  true,
-                                  _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
-                                      ? $"skill-buff-lifecycle-complete buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
-                                      : $"buff-lifecycle-complete buffId={_plan.expectedBuffId}");
-                          }
+                case BattleAutomationScenarioKind.BuffRefresh:
+                    return EvaluateBuffRefresh(snapshot, elapsedFrames);
 
-                          if (!_observedExpectedBuffAppearance)
-                          {
-                              return new BattleAutomationEvaluation(
-                                  true,
-                                  false,
-                                  _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
-                                      ? $"skill-buff-never-appeared buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
-                                      : $"buff-never-appeared buffId={_plan.expectedBuffId}");
-                          }
-
-                          return new BattleAutomationEvaluation(
-                              true,
-                              false,
-                              _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
-                                  ? $"skill-buff-never-expired buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
-                                  : $"buff-never-expired buffId={_plan.expectedBuffId}");
-                      }
-
-                      break;
+                case BattleAutomationScenarioKind.BuffMutex:
+                    return EvaluateBuffMutex(snapshot, elapsedFrames);
             }
 
             return default;
@@ -710,6 +679,245 @@ namespace GameLogic
             }
 
             return count;
+        }
+
+        private static int CountPlayersWithBuffStackAtLeast(
+            BattleAutomationClientSnapshot snapshot,
+            int expectedBuffId,
+            int minimumStackCount)
+        {
+            if (snapshot.players == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            for (int i = 0; i < snapshot.players.Length; i++)
+            {
+                BattleAutomationPlayerSnapshot player = snapshot.players[i];
+                if (player != null &&
+                    player.TryGetBuff(expectedBuffId, out BattleAutomationBuffSnapshot buffSnapshot) &&
+                    buffSnapshot.stackCount >= minimumStackCount)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private BattleAutomationEvaluation EvaluateBuffLifecycle(BattleAutomationClientSnapshot snapshot, int elapsedFrames)
+        {
+            int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+            if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
+            {
+                _observedExpectedBuffAppearance = true;
+            }
+
+            if (_observedExpectedBuffAppearance &&
+                playersWithExpectedBuff == 0 &&
+                elapsedFrames >= _plan.buffApplyDelayFrames + _plan.buffDurationFrames)
+            {
+                _observedExpectedBuffExpiry = true;
+            }
+
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            if (_observedExpectedBuffAppearance && _observedExpectedBuffExpiry)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                        ? $"skill-buff-lifecycle-complete buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                        : $"buff-lifecycle-complete buffId={_plan.expectedBuffId}");
+            }
+
+            if (!_observedExpectedBuffAppearance)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                        ? $"skill-buff-never-appeared buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                        : $"buff-never-appeared buffId={_plan.expectedBuffId}");
+            }
+
+            return new BattleAutomationEvaluation(
+                true,
+                false,
+                _plan.kind == BattleAutomationScenarioKind.SkillBuffLifecycle
+                    ? $"skill-buff-never-expired buffId={_plan.expectedBuffId} skillId={_plan.expectedSkillId}"
+                    : $"buff-never-expired buffId={_plan.expectedBuffId}");
+        }
+
+        private BattleAutomationEvaluation EvaluateBuffStack(BattleAutomationClientSnapshot snapshot, int elapsedFrames)
+        {
+            int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+            int playersAtExpectedStack = CountPlayersWithBuffStackAtLeast(
+                snapshot,
+                _plan.expectedBuffId,
+                _plan.expectedFinalStackCount);
+            if (_observedTargetPlayerCount && playersAtExpectedStack >= _plan.minimumPlayerCount)
+            {
+                _observedExpectedBuffAppearance = true;
+            }
+
+            if (_observedExpectedBuffAppearance &&
+                playersWithExpectedBuff == 0 &&
+                elapsedFrames >= _plan.buffApplyDelayFrames + 2 + _plan.buffDurationFrames)
+            {
+                _observedExpectedBuffExpiry = true;
+            }
+
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            if (_observedExpectedBuffAppearance && _observedExpectedBuffExpiry)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    $"buff-stack-complete buffId={_plan.expectedBuffId} stack={_plan.expectedFinalStackCount}");
+            }
+
+            if (!_observedExpectedBuffAppearance)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"buff-stack-never-reached stack={_plan.expectedFinalStackCount} buffId={_plan.expectedBuffId}");
+            }
+
+            return new BattleAutomationEvaluation(
+                true,
+                false,
+                $"buff-stack-never-expired buffId={_plan.expectedBuffId}");
+        }
+
+        private BattleAutomationEvaluation EvaluateBuffRefresh(BattleAutomationClientSnapshot snapshot, int elapsedFrames)
+        {
+            int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+            if (_observedTargetPlayerCount && playersWithExpectedBuff >= _plan.minimumPlayerCount)
+            {
+                _observedExpectedBuffAppearance = true;
+            }
+
+            if (_observedExpectedBuffAppearance &&
+                !_observedExpectedBuffRefreshExtension &&
+                elapsedFrames > _plan.buffApplyDelayFrames + _plan.buffDurationFrames &&
+                playersWithExpectedBuff >= _plan.minimumPlayerCount)
+            {
+                _observedExpectedBuffRefreshExtension = true;
+            }
+
+            if (_observedExpectedBuffRefreshExtension &&
+                playersWithExpectedBuff == 0 &&
+                elapsedFrames >= _plan.buffApplyDelayFrames + _plan.refreshReapplyDelayFrames + _plan.buffDurationFrames)
+            {
+                _observedExpectedBuffExpiry = true;
+            }
+
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            if (_observedExpectedBuffAppearance &&
+                _observedExpectedBuffRefreshExtension &&
+                _observedExpectedBuffExpiry)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    $"buff-refresh-complete buffId={_plan.expectedBuffId}");
+            }
+
+            if (!_observedExpectedBuffAppearance)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"buff-refresh-never-appeared buffId={_plan.expectedBuffId}");
+            }
+
+            if (!_observedExpectedBuffRefreshExtension)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"buff-refresh-never-extended buffId={_plan.expectedBuffId}");
+            }
+
+            return new BattleAutomationEvaluation(
+                true,
+                false,
+                $"buff-refresh-never-expired buffId={_plan.expectedBuffId}");
+        }
+
+        private BattleAutomationEvaluation EvaluateBuffMutex(BattleAutomationClientSnapshot snapshot, int elapsedFrames)
+        {
+            int playersWithInitialBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedInitialBuffId);
+            int playersWithExpectedBuff = CountPlayersWithExpectedBuff(snapshot, _plan.expectedBuffId);
+            if (_observedTargetPlayerCount && playersWithInitialBuff >= _plan.minimumPlayerCount)
+            {
+                _observedInitialBuffAppearance = true;
+            }
+
+            if (_observedInitialBuffAppearance &&
+                playersWithExpectedBuff >= _plan.minimumPlayerCount &&
+                playersWithInitialBuff == 0)
+            {
+                _observedExpectedBuffAppearance = true;
+            }
+
+            if (_observedExpectedBuffAppearance &&
+                playersWithExpectedBuff == 0 &&
+                elapsedFrames >= _plan.buffApplyDelayFrames + 1 + _plan.buffDurationFrames)
+            {
+                _observedExpectedBuffExpiry = true;
+            }
+
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            if (_observedInitialBuffAppearance &&
+                _observedExpectedBuffAppearance &&
+                _observedExpectedBuffExpiry)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    $"buff-mutex-complete lowBuffId={_plan.expectedInitialBuffId} highBuffId={_plan.expectedBuffId}");
+            }
+
+            if (!_observedInitialBuffAppearance)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"buff-mutex-low-never-appeared buffId={_plan.expectedInitialBuffId}");
+            }
+
+            if (!_observedExpectedBuffAppearance)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"buff-mutex-replace-never-happened lowBuffId={_plan.expectedInitialBuffId} highBuffId={_plan.expectedBuffId}");
+            }
+
+            return new BattleAutomationEvaluation(
+                true,
+                false,
+                $"buff-mutex-high-never-expired buffId={_plan.expectedBuffId}");
         }
     }
 
@@ -1023,7 +1231,10 @@ namespace GameLogic
         DisconnectObserver,
         Scripted,
         BuffLifecycle,
-        SkillBuffLifecycle
+        SkillBuffLifecycle,
+        BuffStack,
+        BuffRefresh,
+        BuffMutex
     }
 
     internal sealed class BattleAutomationScenarioPlan
@@ -1038,7 +1249,10 @@ namespace GameLogic
         public int skillTriggerFrame;
         public bool emitSkillRequest;
         public int expectedBuffId;
+        public int expectedInitialBuffId;
+        public int expectedFinalStackCount;
         public int buffApplyDelayFrames;
+        public int refreshReapplyDelayFrames;
         public int buffDurationFrames;
         public BattleAutomationInputSegment[] inputSegments;
 
@@ -1114,6 +1328,63 @@ namespace GameLogic
                         completionFrame = config.BuffApplyDelayFrames + config.BuffDurationFrames + config.SettleFrames,
                         disconnectFrame = config.DisconnectFrame,
                         expectedBuffId = config.ExpectedBuffId,
+                        buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                        buffDurationFrames = config.BuffDurationFrames,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = Array.Empty<BattleAutomationInputSegment>()
+                    };
+
+                case "buff-stack":
+                case "buffstack":
+                case "two-client-buff-stack":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "buff-stack",
+                        kind = BattleAutomationScenarioKind.BuffStack,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.BuffApplyDelayFrames + 2 + config.BuffDurationFrames + config.SettleFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedBuffId = DefaultBuffConfigProvider.StackTestBuffId,
+                        expectedFinalStackCount = DefaultBuffConfigProvider.StackMaxCount,
+                        buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                        buffDurationFrames = config.BuffDurationFrames,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = Array.Empty<BattleAutomationInputSegment>()
+                    };
+
+                case "buff-refresh":
+                case "buffrefresh":
+                case "two-client-buff-refresh":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "buff-refresh",
+                        kind = BattleAutomationScenarioKind.BuffRefresh,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.BuffApplyDelayFrames +
+                                          DefaultBuffConfigProvider.RefreshReapplyDelayFrames +
+                                          config.BuffDurationFrames +
+                                          config.SettleFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedBuffId = DefaultBuffConfigProvider.RefreshTestBuffId,
+                        buffApplyDelayFrames = config.BuffApplyDelayFrames,
+                        refreshReapplyDelayFrames = DefaultBuffConfigProvider.RefreshReapplyDelayFrames,
+                        buffDurationFrames = config.BuffDurationFrames,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = Array.Empty<BattleAutomationInputSegment>()
+                    };
+
+                case "buff-mutex":
+                case "buffmutex":
+                case "two-client-buff-mutex":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "buff-mutex",
+                        kind = BattleAutomationScenarioKind.BuffMutex,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.BuffApplyDelayFrames + 1 + config.BuffDurationFrames + config.SettleFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedInitialBuffId = DefaultBuffConfigProvider.MutexLowBuffId,
+                        expectedBuffId = DefaultBuffConfigProvider.MutexHighBuffId,
                         buffApplyDelayFrames = config.BuffApplyDelayFrames,
                         buffDurationFrames = config.BuffDurationFrames,
                         movementDistanceThreshold = config.MovementDistanceThreshold,
@@ -1350,6 +1621,25 @@ namespace GameLogic
                 }
             }
 
+            return false;
+        }
+
+        public bool TryGetBuff(int expectedBuffId, out BattleAutomationBuffSnapshot snapshot)
+        {
+            if (activeBuffs != null)
+            {
+                for (int i = 0; i < activeBuffs.Length; i++)
+                {
+                    BattleAutomationBuffSnapshot candidate = activeBuffs[i];
+                    if (candidate != null && candidate.buffId == expectedBuffId)
+                    {
+                        snapshot = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            snapshot = null;
             return false;
         }
     }

@@ -21,6 +21,7 @@ public sealed class BattleLogic : IBuffCommandSink
     private readonly List<RemoveBuffCommand> _pendingRemoveBuffCommands = new();
     private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new();
     private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new();
+    private readonly IBuffConfigProvider _buffConfigProvider;
     private readonly BattleSkillGraphRuntime _skillGraphRuntime;
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
@@ -33,6 +34,7 @@ public sealed class BattleLogic : IBuffCommandSink
     {
         _logDebug = logDebug;
         _logWarning = logWarning;
+        _buffConfigProvider = new DefaultBuffConfigProvider();
         _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
     }
 
@@ -363,7 +365,7 @@ public sealed class BattleLogic : IBuffCommandSink
             _pendingApplyBuffCommands.RemoveAt(0);
             if (_statesByPlayerId.TryGetValue(command.TargetId, out PlayerState? targetState))
             {
-                BuffSystem.AddBuff(targetState, command);
+                BuffSystem.AddBuff(targetState, command, _buffConfigProvider);
             }
 
             _applyBuffCommandPool.Return(command);

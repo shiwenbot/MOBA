@@ -40,6 +40,7 @@ namespace GameLogic
         private readonly List<RemoveBuffCommand> _pendingRemoveBuffCommands = new List<RemoveBuffCommand>();
         private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new CommandPool<ApplyBuffCommand>();
         private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new CommandPool<RemoveBuffCommand>();
+        private readonly IBuffConfigProvider _buffConfigProvider;
 
         private bool _isJoined;
         private bool _hasRttSample;
@@ -93,6 +94,7 @@ namespace GameLogic
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
             _onSendPing = onSendPing ?? throw new ArgumentNullException(nameof(onSendPing));
             _logger = logger;
+            _buffConfigProvider = new DefaultBuffConfigProvider();
             _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
         }
 
@@ -876,7 +878,7 @@ namespace GameLogic
                 _pendingApplyBuffCommands.RemoveAt(0);
                 if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
                 {
-                    BuffSystem.AddBuff(targetState, command);
+                    BuffSystem.AddBuff(targetState, command, _buffConfigProvider);
                 }
 
                 _applyBuffCommandPool.Return(command);

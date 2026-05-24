@@ -81,6 +81,13 @@ public static class TestRunner
             case TestScenario.BuffsAffectHash:
             case TestScenario.RuntimeBuffIdRoundTrip:
             case TestScenario.SkillBuffRoundTrip:
+            case TestScenario.StackOverlayRoundTrip:
+            case TestScenario.RefreshOverlayRoundTrip:
+            case TestScenario.MutexReplaceRoundTrip:
+            case TestScenario.MutexRejectRoundTrip:
+            case TestScenario.MutexSamePriority:
+            case TestScenario.MutexSameFrameTwoCommands:
+            case TestScenario.StackableBridgeUpgrade:
                 checks.Add(RunSnapshotSelfCase(options.Scenario));
                 break;
 
@@ -1258,6 +1265,13 @@ public static class TestRunner
                 "buffs-affect-hash" => TestScenario.BuffsAffectHash,
                 "runtime-buff-id-roundtrip" => TestScenario.RuntimeBuffIdRoundTrip,
                 "skill-buff-roundtrip" => TestScenario.SkillBuffRoundTrip,
+                "stack-overlay-roundtrip" => TestScenario.StackOverlayRoundTrip,
+                "refresh-overlay-roundtrip" => TestScenario.RefreshOverlayRoundTrip,
+                "mutex-replace-roundtrip" => TestScenario.MutexReplaceRoundTrip,
+                "mutex-reject-roundtrip" => TestScenario.MutexRejectRoundTrip,
+                "mutex-same-priority" => TestScenario.MutexSamePriority,
+                "mutex-same-frame-two-commands" => TestScenario.MutexSameFrameTwoCommands,
+                "stackable-bridge-upgrade" => TestScenario.StackableBridgeUpgrade,
                 "frame-schedule" => TestScenario.FrameSchedule,
                 "future-frame-input-applies-on-target-frame" => TestScenario.FutureFrameInputAppliesOnTargetFrame,
                 "server-input" => TestScenario.ServerInput,
@@ -1320,6 +1334,13 @@ public static class TestRunner
         public const string BuffsAffectHash = "buffs-affect-hash";
         public const string RuntimeBuffIdRoundTrip = "runtime-buff-id-roundtrip";
         public const string SkillBuffRoundTrip = "skill-buff-roundtrip";
+        public const string StackOverlayRoundTrip = "stack-overlay-roundtrip";
+        public const string RefreshOverlayRoundTrip = "refresh-overlay-roundtrip";
+        public const string MutexReplaceRoundTrip = "mutex-replace-roundtrip";
+        public const string MutexRejectRoundTrip = "mutex-reject-roundtrip";
+        public const string MutexSamePriority = "mutex-same-priority";
+        public const string MutexSameFrameTwoCommands = "mutex-same-frame-two-commands";
+        public const string StackableBridgeUpgrade = "stackable-bridge-upgrade";
         public const string FrameSchedule = "frame-schedule";
         public const string FutureFrameInputAppliesOnTargetFrame = "future-frame-input-applies-on-target-frame";
         public const string ServerInput = "server-input";

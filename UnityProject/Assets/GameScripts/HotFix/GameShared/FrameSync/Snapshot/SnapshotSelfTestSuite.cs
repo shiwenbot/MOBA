@@ -21,7 +21,14 @@ namespace GameShared.FrameSync.Snapshot
             "buff-roundtrip",
             "buffs-affect-hash",
             "runtime-buff-id-roundtrip",
-            "skill-buff-roundtrip"
+            "skill-buff-roundtrip",
+            "stack-overlay-roundtrip",
+            "refresh-overlay-roundtrip",
+            "mutex-replace-roundtrip",
+            "mutex-reject-roundtrip",
+            "mutex-same-priority",
+            "mutex-same-frame-two-commands",
+            "stackable-bridge-upgrade"
         };
 
         public static bool Run(out string failedCase)
@@ -58,6 +65,13 @@ namespace GameShared.FrameSync.Snapshot
                     "buffs-affect-hash" => BuffsAffectHash(),
                     "runtime-buff-id-roundtrip" => RuntimeBuffIdRoundTrip(),
                     "skill-buff-roundtrip" => SkillBuffRoundTrip(),
+                    "stack-overlay-roundtrip" => StackOverlayRoundTrip(),
+                    "refresh-overlay-roundtrip" => RefreshOverlayRoundTrip(),
+                    "mutex-replace-roundtrip" => MutexReplaceRoundTrip(),
+                    "mutex-reject-roundtrip" => MutexRejectRoundTrip(),
+                    "mutex-same-priority" => MutexSamePriority(),
+                    "mutex-same-frame-two-commands" => MutexSameFrameTwoCommands(),
+                    "stackable-bridge-upgrade" => StackableBridgeUpgrade(),
                     _ => throw new ArgumentException($"Unknown snapshot self test case: {caseName}", nameof(caseName))
                 };
 
@@ -456,6 +470,346 @@ namespace GameShared.FrameSync.Snapshot
                    hashA == hashB;
         }
 
+        private static bool StackOverlayRoundTrip()
+        {
+            DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            ApplyBuffCommand command = new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.StackTestBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 10,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            };
+
+            long runtimeBuffId = BuffSystem.AddBuff(player, command, provider);
+            command.FrameIndex = 11;
+            BuffSystem.AddBuff(player, command, provider);
+            command.FrameIndex = 12;
+            BuffSystem.AddBuff(player, command, provider);
+            if (player.ActiveBuffs.Count != 1 ||
+                player.ActiveBuffs[0].RuntimeBuffId != runtimeBuffId ||
+                player.ActiveBuffs[0].StackCount != 3 ||
+                player.Attack != 25)
+            {
+                return false;
+            }
+
+            for (uint frame = 13; frame < 23; frame++)
+            {
+                BuffSystem.ApplyTick(player, frame);
+            }
+
+            uint appliedFrame = player.ActiveBuffs[0].AppliedFrame;
+            command.FrameIndex = 23;
+            BuffSystem.AddBuff(player, command, provider);
+
+            return player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == runtimeBuffId &&
+                   player.ActiveBuffs[0].StackCount == DefaultBuffConfigProvider.StackMaxCount &&
+                   player.ActiveBuffs[0].RemainingFrames == 45 &&
+                   player.ActiveBuffs[0].AppliedFrame == appliedFrame &&
+                   player.Attack == 25 &&
+                   SnapshotRoundTrip(worldState, 610, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == runtimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].StackCount == DefaultBuffConfigProvider.StackMaxCount &&
+                       restoredPlayer.ActiveBuffs[0].RemainingFrames == 45 &&
+                       restoredPlayer.ActiveBuffs[0].AppliedFrame == appliedFrame &&
+                       restoredPlayer.Attack == 25);
+        }
+
+        private static bool RefreshOverlayRoundTrip()
+        {
+            DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            ApplyBuffCommand command = new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.RefreshTestBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 20,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            };
+
+            long runtimeBuffId = BuffSystem.AddBuff(player, command, provider);
+            for (uint frame = 21; frame < 31; frame++)
+            {
+                BuffSystem.ApplyTick(player, frame);
+            }
+
+            if (player.ActiveBuffs.Count != 1 || player.ActiveBuffs[0].RemainingFrames != 35)
+            {
+                return false;
+            }
+
+            uint appliedFrame = player.ActiveBuffs[0].AppliedFrame;
+            command.FrameIndex = 31;
+            long refreshedRuntimeBuffId = BuffSystem.AddBuff(player, command, provider);
+
+            return refreshedRuntimeBuffId == runtimeBuffId &&
+                   player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == runtimeBuffId &&
+                   player.ActiveBuffs[0].StackCount == 1 &&
+                   player.ActiveBuffs[0].RemainingFrames == 45 &&
+                   player.ActiveBuffs[0].AppliedFrame == appliedFrame &&
+                   player.Attack == 17 &&
+                   SnapshotRoundTrip(worldState, 620, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == runtimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].RemainingFrames == 45 &&
+                       restoredPlayer.ActiveBuffs[0].AppliedFrame == appliedFrame &&
+                       restoredPlayer.Attack == 17);
+        }
+
+        private static bool MutexReplaceRoundTrip()
+        {
+            DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            long lowRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexLowBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 40,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+            long highRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexHighBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 41,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+
+            return lowRuntimeBuffId > 0 &&
+                   highRuntimeBuffId > 0 &&
+                   player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == highRuntimeBuffId &&
+                   player.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexHighBuffId &&
+                   player.Numeric.Count == 1 &&
+                   player.Attack == 16 &&
+                   SnapshotRoundTrip(worldState, 630, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == highRuntimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexHighBuffId &&
+                       restoredPlayer.Attack == 16);
+        }
+
+        private static bool MutexRejectRoundTrip()
+        {
+            DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            long highRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexHighBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 50,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+            long rejectedRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexLowBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 51,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+
+            return highRuntimeBuffId > 0 &&
+                   rejectedRuntimeBuffId == 0 &&
+                   player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == highRuntimeBuffId &&
+                   player.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexHighBuffId &&
+                   player.Attack == 16 &&
+                   SnapshotRoundTrip(worldState, 640, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == highRuntimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexHighBuffId &&
+                       restoredPlayer.Attack == 16);
+        }
+
+        private static bool MutexSamePriority()
+        {
+            DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            long firstRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexHighBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 60,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+            long secondRuntimeBuffId = BuffSystem.AddBuff(player, new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexSamePriorityBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 61,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            }, provider);
+
+            return firstRuntimeBuffId > 0 &&
+                   secondRuntimeBuffId > 0 &&
+                   firstRuntimeBuffId != secondRuntimeBuffId &&
+                   player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == secondRuntimeBuffId &&
+                   player.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexSamePriorityBuffId &&
+                   player.Attack == 18 &&
+                   SnapshotRoundTrip(worldState, 650, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == secondRuntimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexSamePriorityBuffId &&
+                       restoredPlayer.Attack == 18);
+        }
+
+        private static bool MutexSameFrameTwoCommands()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            TestWorldBuffCommandSink commandSink = new TestWorldBuffCommandSink(worldState);
+            commandSink.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexSamePriorityBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 70,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            });
+            commandSink.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = DefaultBuffConfigProvider.MutexHighBuffId,
+                DurationFrames = 0,
+                StackCount = 1,
+                FrameIndex = 70,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            });
+            commandSink.Process(70);
+
+            return player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexSamePriorityBuffId &&
+                   player.Attack == 18 &&
+                   SnapshotRoundTrip(worldState, 660, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].BuffId == DefaultBuffConfigProvider.MutexSamePriorityBuffId &&
+                       restoredPlayer.Attack == 18);
+        }
+
+        private static bool StackableBridgeUpgrade()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return false;
+            }
+
+            ApplyBuffCommand command = new ApplyBuffCommand
+            {
+                CasterId = 1,
+                TargetId = 1,
+                BuffId = 7001,
+                DurationFrames = 30,
+                StackCount = 1,
+                FrameIndex = 80,
+                Flags = BuffFlags.Duration | BuffFlags.Stackable
+            };
+
+            long firstRuntimeBuffId = BuffSystem.AddBuff(player, command);
+            command.FrameIndex = 81;
+            long secondRuntimeBuffId = BuffSystem.AddBuff(player, command);
+
+            return firstRuntimeBuffId == secondRuntimeBuffId &&
+                   player.ActiveBuffs.Count == 1 &&
+                   player.ActiveBuffs[0].RuntimeBuffId == firstRuntimeBuffId &&
+                   player.ActiveBuffs[0].StackCount == 2 &&
+                   player.ActiveBuffs[0].RemainingFrames == 30 &&
+                   SnapshotRoundTrip(worldState, 670, restoredPlayer =>
+                       restoredPlayer.ActiveBuffs.Count == 1 &&
+                       restoredPlayer.ActiveBuffs[0].RuntimeBuffId == firstRuntimeBuffId &&
+                       restoredPlayer.ActiveBuffs[0].StackCount == 2 &&
+                       restoredPlayer.ActiveBuffs[0].RemainingFrames == 30);
+        }
+
+        private static bool SnapshotRoundTrip(
+            BattleWorldState worldState,
+            uint frameIndex,
+            Func<PlayerState, bool> validate)
+        {
+            BattleWorldSnapshot snapshotA = worldState.TakeSnapshot().WithFrameIndex(frameIndex);
+            ulong hashA = StateHasher.Hash(snapshotA);
+
+            BattleWorldState restoredWorldState = new BattleWorldState();
+            restoredWorldState.RestoreSnapshot(snapshotA);
+            if (!restoredWorldState.TryGetPlayer(1, out PlayerState restoredPlayer))
+            {
+                return false;
+            }
+
+            BattleWorldSnapshot snapshotB = restoredWorldState.TakeSnapshot().WithFrameIndex(frameIndex);
+            ulong hashB = StateHasher.Hash(snapshotB);
+            return hashA == hashB && validate(restoredPlayer);
+        }
+
         private static BattleWorldSnapshot CreateSinglePlayerSnapshot(uint frameIndex, float x)
         {
             return new BattleWorldSnapshot(
@@ -519,6 +873,7 @@ namespace GameShared.FrameSync.Snapshot
         private sealed class TestWorldBuffCommandSink : IBuffCommandSink
         {
             private readonly BattleWorldState _worldState;
+            private readonly IBuffConfigProvider _configProvider = new DefaultBuffConfigProvider();
             private readonly System.Collections.Generic.List<ApplyBuffCommand> _pendingApplyCommands =
                 new System.Collections.Generic.List<ApplyBuffCommand>();
             private readonly System.Collections.Generic.List<RemoveBuffCommand> _pendingRemoveCommands =
@@ -541,6 +896,7 @@ namespace GameShared.FrameSync.Snapshot
                     FrameIndex = command.FrameIndex,
                     Flags = command.Flags
                 });
+                _pendingApplyCommands.Sort(CompareApplyCommands);
             }
 
             public void EnqueueRemoveBuff(RemoveBuffCommand command)
@@ -553,6 +909,7 @@ namespace GameShared.FrameSync.Snapshot
                     RemoveReason = command.RemoveReason,
                     FrameIndex = command.FrameIndex
                 });
+                _pendingRemoveCommands.Sort(CompareRemoveCommands);
             }
 
             public bool HasBuff(long targetId, int buffId)
@@ -580,7 +937,7 @@ namespace GameShared.FrameSync.Snapshot
 
                     if (_worldState.TryGetPlayer(command.TargetId, out PlayerState targetState))
                     {
-                        BuffSystem.AddBuff(targetState, command);
+                        BuffSystem.AddBuff(targetState, command, _configProvider);
                     }
                 }
 
@@ -600,6 +957,40 @@ namespace GameShared.FrameSync.Snapshot
 
                 _pendingApplyCommands.Clear();
                 _pendingRemoveCommands.Clear();
+            }
+
+            private static int CompareApplyCommands(ApplyBuffCommand left, ApplyBuffCommand right)
+            {
+                int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+                if (byFrame != 0)
+                {
+                    return byFrame;
+                }
+
+                int byTarget = left.TargetId.CompareTo(right.TargetId);
+                if (byTarget != 0)
+                {
+                    return byTarget;
+                }
+
+                return left.BuffId.CompareTo(right.BuffId);
+            }
+
+            private static int CompareRemoveCommands(RemoveBuffCommand left, RemoveBuffCommand right)
+            {
+                int byFrame = left.FrameIndex.CompareTo(right.FrameIndex);
+                if (byFrame != 0)
+                {
+                    return byFrame;
+                }
+
+                int byTarget = left.TargetId.CompareTo(right.TargetId);
+                if (byTarget != 0)
+                {
+                    return byTarget;
+                }
+
+                return left.RuntimeBuffId.CompareTo(right.RuntimeBuffId);
             }
         }
     }

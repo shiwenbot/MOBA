@@ -255,8 +255,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private void RunAutomationScenario(uint frameIndex)
     {
-        if (!_automationConfig.IsBuffLifecycleScenario &&
-            !_automationConfig.IsSkillBuffScenario)
+        if (!_automationConfig.IsTimedBuffScenario)
         {
             return;
         }
@@ -304,6 +303,50 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
+        if (_automationConfig.IsBuffStackScenario)
+        {
+            QueueBuffForAllPlayers(frameIndex, DefaultBuffConfigProvider.StackTestBuffId, _automationConfig.BuffDurationFrames, 1);
+            QueueBuffForAllPlayers(unchecked(frameIndex + 1u), DefaultBuffConfigProvider.StackTestBuffId, _automationConfig.BuffDurationFrames, 1);
+            QueueBuffForAllPlayers(unchecked(frameIndex + 2u), DefaultBuffConfigProvider.StackTestBuffId, _automationConfig.BuffDurationFrames, 1);
+            _automationBuffCommandsQueued = true;
+            Log.Warning(
+                $"[Automation][BattleServer] Queued buff stack commands. scenario={_automationConfig.Scenario} buffId={DefaultBuffConfigProvider.StackTestBuffId} players={_playerIdBuffer.Count}");
+            return;
+        }
+
+        if (_automationConfig.IsBuffRefreshScenario)
+        {
+            QueueBuffForAllPlayers(frameIndex, DefaultBuffConfigProvider.RefreshTestBuffId, _automationConfig.BuffDurationFrames, 1);
+            QueueBuffForAllPlayers(
+                unchecked(frameIndex + (uint)DefaultBuffConfigProvider.RefreshReapplyDelayFrames),
+                DefaultBuffConfigProvider.RefreshTestBuffId,
+                _automationConfig.BuffDurationFrames,
+                1);
+            _automationBuffCommandsQueued = true;
+            Log.Warning(
+                $"[Automation][BattleServer] Queued buff refresh commands. scenario={_automationConfig.Scenario} buffId={DefaultBuffConfigProvider.RefreshTestBuffId} players={_playerIdBuffer.Count}");
+            return;
+        }
+
+        if (_automationConfig.IsBuffMutexScenario)
+        {
+            QueueBuffForAllPlayers(frameIndex, DefaultBuffConfigProvider.MutexLowBuffId, _automationConfig.BuffDurationFrames, 1);
+            QueueBuffForAllPlayers(unchecked(frameIndex + 1u), DefaultBuffConfigProvider.MutexHighBuffId, _automationConfig.BuffDurationFrames, 1);
+            _automationBuffCommandsQueued = true;
+            Log.Warning(
+                $"[Automation][BattleServer] Queued buff mutex commands. scenario={_automationConfig.Scenario} lowBuffId={DefaultBuffConfigProvider.MutexLowBuffId} highBuffId={DefaultBuffConfigProvider.MutexHighBuffId} players={_playerIdBuffer.Count}");
+            return;
+        }
+
+        QueueBuffForAllPlayers(frameIndex, _automationConfig.ExpectedBuffId, _automationConfig.BuffDurationFrames, _automationConfig.BuffStackCount);
+
+        _automationBuffCommandsQueued = true;
+        Log.Warning(
+            $"[Automation][BattleServer] Queued buff lifecycle commands. scenario={_automationConfig.Scenario} buffId={_automationConfig.ExpectedBuffId} duration={_automationConfig.BuffDurationFrames} players={_playerIdBuffer.Count}");
+    }
+
+    private void QueueBuffForAllPlayers(uint frameIndex, int buffId, int durationFrames, int stackCount)
+    {
         for (int i = 0; i < _playerIdBuffer.Count; i++)
         {
             long playerId = _playerIdBuffer[i];
@@ -311,17 +354,13 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             {
                 CasterId = playerId,
                 TargetId = playerId,
-                BuffId = _automationConfig.ExpectedBuffId,
-                DurationFrames = _automationConfig.BuffDurationFrames,
-                StackCount = _automationConfig.BuffStackCount,
+                BuffId = buffId,
+                DurationFrames = durationFrames,
+                StackCount = stackCount,
                 FrameIndex = frameIndex,
                 Flags = _automationConfig.BuffFlags
             });
         }
-
-        _automationBuffCommandsQueued = true;
-        Log.Warning(
-            $"[Automation][BattleServer] Queued buff lifecycle commands. scenario={_automationConfig.Scenario} buffId={_automationConfig.ExpectedBuffId} duration={_automationConfig.BuffDurationFrames} players={_playerIdBuffer.Count}");
     }
 
     private static (float x, float y) GetSpawnPosition(int playerCount)
