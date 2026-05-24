@@ -4,6 +4,7 @@ using Fantasy;
 using Fantasy.Async;
 using Fantasy.Network.Interface;
 using GameLogic.FrameSync;
+using GameShared.InputBuffering;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using GameShared.SkillGraph;
@@ -17,6 +18,7 @@ namespace GameLogic
     {
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
+        private const int SkillInputBufferFrames = 2;
 #if BATTLE_PREDICTION_SELF_TEST
         private static bool s_predictionSelfTestExecuted;
 #endif
@@ -28,6 +30,7 @@ namespace GameLogic
         private readonly HashSet<long> _authoritativePlayersInSnapshot = new HashSet<long>();
         private readonly HashSet<long> _playersAwaitingBuffFullSync = new HashSet<long>();
         private readonly List<long> _staleAuthoritativePlayers = new List<long>();
+        private readonly InputBuffer<BufferedInputKind, int> _inputBuffer = new InputBuffer<BufferedInputKind, int>();
 
         private ClientTickDriver _tickDriver;
         private BattleSimulation _simulation;
@@ -42,10 +45,14 @@ namespace GameLogic
         private int _pongMessageCount;
         private float _cachedDx;
         private float _cachedDy;
-        private int _queuedSkillId;
         private IBattleAutomationInputSource _automationInputSource;
 
         public int Priority => 0;
+
+        private enum BufferedInputKind
+        {
+            Skill = 1
+        }
 
         public void Initialize()
         {
@@ -91,7 +98,7 @@ namespace GameLogic
             _pongMessageCount = 0;
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
-            _queuedSkillId = 0;
+            _inputBuffer.Clear();
             _automationInputSource = null;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
@@ -121,7 +128,11 @@ namespace GameLogic
             ReadKeyboardDirection(out _cachedDx, out _cachedDy);
             if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.J))
             {
-                _queuedSkillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
+                int skillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
+                if (skillId > 0)
+                {
+                    _inputBuffer.Record(BufferedInputKind.Skill, skillId, SkillInputBufferFrames);
+                }
             }
         }
 
@@ -141,15 +152,19 @@ namespace GameLogic
                 dy = automationDy;
             }
 
-            int skillId = _queuedSkillId;
-            _queuedSkillId = 0;
+            int skillId = 0;
             if (_automationInputSource != null &&
                 _automationInputSource.TryGetSkillRequest(frameIndex, out int automationSkillId))
             {
                 skillId = automationSkillId;
             }
+            else
+            {
+                _inputBuffer.TryConsume(BufferedInputKind.Skill, out skillId);
+            }
 
             TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, dx, dy, skillId);
+            _inputBuffer.TickDecay();
             SyncRendering();
 
             if (tickResult.TargetFrameExclusive > 0 && _tickDriver != null)
