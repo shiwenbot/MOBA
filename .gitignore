@@ -31,3 +31,12 @@ UnityProject_clone_*/
 
 #analyze-report skill 生成的临时报告
 analysis-report-*.html
+
+#Playwright MCP 日志和快照
+.playwright-mcp/
+
+#Codex 审查临时文件
+_codex_tmp/
+
+#根目录截图残留（claude code 会话产生）
+/*.png

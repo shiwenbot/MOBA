@@ -294,3 +294,11 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 | 4 | 编辑器节点序列化兼容 | 低 | 旧图不包含新节点 | 新节点是可选的，旧图打开不受影响 |
 | 5 | Exporter 未注册新节点类型 | 高 | 编辑器能拖拽但导出报错 `Unsupported runtime node type` | Step 1 必须同步补：节点类型映射、属性校验、端口白名单（`IsValidInputPort` / `IsValidOutputPort`）、lockstep 风险分析标记 |
 | 6 | ~~Debug 节点在服务端空引用~~ | — | — | **已升级为契约 4**，不再作为风险跟踪 |
+
+
+## 实现完成记录
+
+- 运行时节点、双端 Tick、编辑器节点、自动化场景已全部落地
+- Layer 1：buff-roundtrip、buffs-affect-hash、runtime-buff-id-roundtrip、skill-trigger-buff、skill-buff-roundtrip 已通过
+- Layer 2：two-client-buff-lifecycle、two-client-skill-buff 已通过
+- MVP-c 本次实现已完成，可进入下一阶段
