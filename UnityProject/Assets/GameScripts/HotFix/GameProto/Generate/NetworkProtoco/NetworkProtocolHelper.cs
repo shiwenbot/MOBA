@@ -64,11 +64,6 @@ namespace Fantasy
 			session.Send(C2B_PlayerInput_message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void C2B_PlayerInput(this Session session, uint frameIndex, uint inputSeq, float dx, float dy)
-		{
-			C2B_PlayerInput(session, frameIndex, inputSeq, dx, dy, 0);
-		}
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static void C2B_PlayerInput(this Session session, uint frameIndex, uint inputSeq, float dx, float dy, int skillId)
 		{
 			using var C2B_PlayerInput_message = Fantasy.C2B_PlayerInput.Create();

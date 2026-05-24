@@ -77,6 +77,7 @@ message BuffSnapshot
 	int32 RemainingFrames = 6;
 	uint32 AppliedFrame = 7;
 	uint32 Flags = 8;
+	uint32 DirtyFlags = 9;
 }
 
 message NumericModifierSnapshot
@@ -118,6 +119,9 @@ message PlayerSnapshot
 	repeated BuffSnapshot ActiveBuffs = 17;
 	int64 NextRuntimeBuffId = 18;
 	NumericSnapshot Numeric = 19;
+	uint32 BuffDirtyMask = 20;
+	uint32 BuffSnapshotFrameIndex = 21;
+	bool IsBuffFullSync = 22;
 }
 
 message FrameContactSnapshot

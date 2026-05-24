@@ -371,25 +371,25 @@ namespace Fantasy
         public void Dispose()
         {
             if (!IsPool()) return; 
-              FrameIndex = default;
-              InputSeq = default;
-              Dx = default;
-              Dy = default;
-              SkillId = default;
-              MessageObjectPool<C2B_PlayerInput>.Return(this);
-          }
+            FrameIndex = default;
+            InputSeq = default;
+            Dx = default;
+            Dy = default;
+            SkillId = default;
+            MessageObjectPool<C2B_PlayerInput>.Return(this);
+        }
         public uint OpCode() { return OuterOpcode.C2B_PlayerInput; } 
         [ProtoMember(1)]
         public uint FrameIndex { get; set; }
         [ProtoMember(2)]
         public uint InputSeq { get; set; }
-          [ProtoMember(3)]
-          public float Dx { get; set; }
-          [ProtoMember(4)]
-          public float Dy { get; set; }
-          [ProtoMember(5)]
-          public int SkillId { get; set; }
-      }
+        [ProtoMember(3)]
+        public float Dx { get; set; }
+        [ProtoMember(4)]
+        public float Dy { get; set; }
+        [ProtoMember(5)]
+        public int SkillId { get; set; }
+    }
     [Serializable]
     [ProtoContract]
     public partial class BuffSnapshot : AMessage, IDisposable
@@ -432,6 +432,7 @@ namespace Fantasy
             RemainingFrames = default;
             AppliedFrame = default;
             Flags = default;
+            DirtyFlags = default;
             MessageObjectPool<BuffSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -450,6 +451,8 @@ namespace Fantasy
         public uint AppliedFrame { get; set; }
         [ProtoMember(8)]
         public uint Flags { get; set; }
+        [ProtoMember(9)]
+        public uint DirtyFlags { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -612,6 +615,9 @@ namespace Fantasy
                 Numeric.Dispose();
                 Numeric = null;
             }
+            BuffDirtyMask = default;
+            BuffSnapshotFrameIndex = default;
+            IsBuffFullSync = default;
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -652,6 +658,12 @@ namespace Fantasy
         public long NextRuntimeBuffId { get; set; }
         [ProtoMember(19)]
         public NumericSnapshot Numeric { get; set; }
+        [ProtoMember(20)]
+        public uint BuffDirtyMask { get; set; }
+        [ProtoMember(21)]
+        public uint BuffSnapshotFrameIndex { get; set; }
+        [ProtoMember(22)]
+        public bool IsBuffFullSync { get; set; }
     }
     [Serializable]
     [ProtoContract]

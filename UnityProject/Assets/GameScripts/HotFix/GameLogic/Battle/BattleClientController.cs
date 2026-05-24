@@ -23,8 +23,10 @@ namespace GameLogic
 
         private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
         private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
+        private readonly Dictionary<long, AuthoritativeBuffBaseline> _authoritativeBuffsByPlayerId = new Dictionary<long, AuthoritativeBuffBaseline>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
         private readonly HashSet<long> _authoritativePlayersInSnapshot = new HashSet<long>();
+        private readonly HashSet<long> _playersAwaitingBuffFullSync = new HashSet<long>();
         private readonly List<long> _staleAuthoritativePlayers = new List<long>();
 
         private ClientTickDriver _tickDriver;
@@ -103,7 +105,9 @@ namespace GameLogic
             _playerCapsules.Clear();
             _activePlayers.Clear();
             _authoritativeAttributesByPlayerId.Clear();
+            _authoritativeBuffsByPlayerId.Clear();
             _authoritativePlayersInSnapshot.Clear();
+            _playersAwaitingBuffFullSync.Clear();
             _staleAuthoritativePlayers.Clear();
         }
 
@@ -414,14 +418,15 @@ namespace GameLogic
                     player.Mana,
                     player.MaxMana,
                     player.Attack);
+                ResolveAuthoritativeBuffSnapshot(snapshot.FrameIndex, player, out BuffState[] authoritativeBuffs, out long nextRuntimeBuffId);
                 _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
                 players[i] = new PlayerStateSnapshot(
                     player.PlayerId,
                     player.X,
                     player.Y,
                     mergedAttributes,
-                    BuildBuffStates(player.ActiveBuffs),
-                    player.NextRuntimeBuffId,
+                    authoritativeBuffs,
+                    nextRuntimeBuffId,
                     BuildNumericSnapshot(player.Numeric, mergedAttributes));
                 bodies[i] = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
@@ -439,7 +444,7 @@ namespace GameLogic
                 }
             }
 
-            CleanupStaleAuthoritativeAttributes();
+            CleanupStaleAuthoritativeState();
 
             Array.Sort(players, PlayerSnapshotComparer.Instance);
             Array.Sort(bodies, PhysicsBodySnapshotComparer.Instance);
@@ -480,6 +485,39 @@ namespace GameLogic
             return states;
         }
 
+        private static BuffSync.BuffChange[] BuildBuffChanges(IReadOnlyList<BuffSnapshot> buffs)
+        {
+            if (buffs == null || buffs.Count == 0)
+            {
+                return Array.Empty<BuffSync.BuffChange>();
+            }
+
+            BuffSync.BuffChange[] changes = new BuffSync.BuffChange[buffs.Count];
+            for (int i = 0; i < buffs.Count; i++)
+            {
+                BuffSnapshot buff = buffs[i];
+                BuffDirtyFlags dirtyFlags = (BuffDirtyFlags)buff.DirtyFlags;
+                if (dirtyFlags == BuffDirtyFlags.None)
+                {
+                    dirtyFlags = BuffDirtyFlags.Updated;
+                }
+
+                changes[i] = new BuffSync.BuffChange(
+                    new BuffState(
+                        buff.RuntimeBuffId,
+                        buff.BuffId,
+                        buff.CasterId,
+                        buff.TargetId,
+                        buff.StackCount,
+                        buff.RemainingFrames,
+                        buff.AppliedFrame,
+                        (BuffFlags)buff.Flags),
+                    dirtyFlags);
+            }
+
+            return changes;
+        }
+
         private static GameShared.FrameSync.Battle.NumericModifierSnapshot BuildNumericSnapshot(Fantasy.NumericSnapshot numeric, PlayerAttributeSnapshot fallbackAttributes)
         {
             if (numeric == null)
@@ -508,7 +546,64 @@ namespace GameLogic
                 modifiers);
         }
 
-        private void CleanupStaleAuthoritativeAttributes()
+        private void ResolveAuthoritativeBuffSnapshot(
+            uint frameIndex,
+            PlayerSnapshot player,
+            out BuffState[] authoritativeBuffs,
+            out long nextRuntimeBuffId)
+        {
+            if (player.IsBuffFullSync)
+            {
+                authoritativeBuffs = BuildBuffStates(player.ActiveBuffs);
+                nextRuntimeBuffId = NormalizeNextRuntimeBuffId(player.NextRuntimeBuffId, 1L);
+                _authoritativeBuffsByPlayerId[player.PlayerId] = new AuthoritativeBuffBaseline(
+                    authoritativeBuffs,
+                    nextRuntimeBuffId,
+                    frameIndex);
+                _playersAwaitingBuffFullSync.Remove(player.PlayerId);
+                return;
+            }
+
+            bool hasBaseline = _authoritativeBuffsByPlayerId.TryGetValue(player.PlayerId, out AuthoritativeBuffBaseline baseline);
+            if (player.BuffDirtyMask == 0)
+            {
+                authoritativeBuffs = hasBaseline
+                    ? BuffSync.CopyBuffs(baseline.ActiveBuffs)
+                    : Array.Empty<BuffState>();
+                nextRuntimeBuffId = hasBaseline
+                    ? baseline.NextRuntimeBuffId
+                    : 1L;
+                return;
+            }
+
+            if (!hasBaseline ||
+                _playersAwaitingBuffFullSync.Contains(player.PlayerId) ||
+                baseline.FrameIndex != player.BuffSnapshotFrameIndex)
+            {
+                uint localBaselineFrame = hasBaseline ? baseline.FrameIndex : 0u;
+                Log.Warning(
+                    $"[Battle] Buff delta dropped. player={player.PlayerId} frame={frameIndex} localBase={localBaselineFrame} packetBase={player.BuffSnapshotFrameIndex} hasBaseline={hasBaseline}");
+                authoritativeBuffs = hasBaseline
+                    ? BuffSync.CopyBuffs(baseline.ActiveBuffs)
+                    : Array.Empty<BuffState>();
+                nextRuntimeBuffId = hasBaseline
+                    ? baseline.NextRuntimeBuffId
+                    : 1L;
+                _playersAwaitingBuffFullSync.Add(player.PlayerId);
+                return;
+            }
+
+            BuffSync.BuffChange[] changes = BuildBuffChanges(player.ActiveBuffs);
+            authoritativeBuffs = BuffSync.Merge(baseline.ActiveBuffs, changes);
+            nextRuntimeBuffId = NormalizeNextRuntimeBuffId(player.NextRuntimeBuffId, baseline.NextRuntimeBuffId);
+            _authoritativeBuffsByPlayerId[player.PlayerId] = new AuthoritativeBuffBaseline(
+                authoritativeBuffs,
+                nextRuntimeBuffId,
+                frameIndex);
+            _playersAwaitingBuffFullSync.Remove(player.PlayerId);
+        }
+
+        private void CleanupStaleAuthoritativeState()
         {
             _staleAuthoritativePlayers.Clear();
             foreach (long playerId in _authoritativeAttributesByPlayerId.Keys)
@@ -523,10 +618,23 @@ namespace GameLogic
 
             for (int i = 0; i < _staleAuthoritativePlayers.Count; i++)
             {
-                _authoritativeAttributesByPlayerId.Remove(_staleAuthoritativePlayers[i]);
+                long playerId = _staleAuthoritativePlayers[i];
+                _authoritativeAttributesByPlayerId.Remove(playerId);
+                _authoritativeBuffsByPlayerId.Remove(playerId);
+                _playersAwaitingBuffFullSync.Remove(playerId);
             }
 
             _authoritativePlayersInSnapshot.Clear();
+        }
+
+        private static long NormalizeNextRuntimeBuffId(long nextRuntimeBuffId, long fallbackValue)
+        {
+            if (nextRuntimeBuffId > 0)
+            {
+                return nextRuntimeBuffId;
+            }
+
+            return fallbackValue > 0 ? fallbackValue : 1L;
         }
 
         private static void ReadKeyboardDirection(out float dx, out float dy)
@@ -646,6 +754,20 @@ namespace GameLogic
             {
                 return x.BodyId.CompareTo(y.BodyId);
             }
+        }
+
+        private readonly struct AuthoritativeBuffBaseline
+        {
+            public AuthoritativeBuffBaseline(IReadOnlyList<BuffState> activeBuffs, long nextRuntimeBuffId, uint frameIndex)
+            {
+                ActiveBuffs = BuffSync.CopyBuffs(activeBuffs);
+                NextRuntimeBuffId = nextRuntimeBuffId > 0 ? nextRuntimeBuffId : 1L;
+                FrameIndex = frameIndex;
+            }
+
+            public IReadOnlyList<BuffState> ActiveBuffs { get; }
+            public long NextRuntimeBuffId { get; }
+            public uint FrameIndex { get; }
         }
     }
 }

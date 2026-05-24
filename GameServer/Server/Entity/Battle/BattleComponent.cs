@@ -13,7 +13,9 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     private readonly Dictionary<long, PlayerSession> _sessionsByPlayerId = new();
     private readonly Dictionary<long, long> _playerIdBySessionId = new();
     private readonly Dictionary<long, PlayerAttributeSnapshot> _lastBroadcastAttributesByPlayerId = new();
+    private readonly Dictionary<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> _buffBaselinesByObserverTarget = new();
     private readonly List<long> _playerIdBuffer = new();
+    private readonly List<(long ObserverSessionId, long TargetPlayerId)> _staleBuffBaselineKeys = new();
 
     private long _nextPlayerId = 1;
     private bool _automationPlayerThresholdObserved;
@@ -103,11 +105,13 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 if (sessionId != 0)
                 {
                     _playerIdBySessionId.Remove(sessionId);
+                    RemoveBuffBroadcastBaselines(sessionId, 0);
                 }
             }
 
             _sessionsByPlayerId.Remove(playerId);
             _lastBroadcastAttributesByPlayerId.Remove(playerId);
+            RemoveBuffBroadcastBaselines(0, playerId);
             _battleLogic.RemovePlayer(playerId);
         }
     }
@@ -119,62 +123,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        S2C_FrameSnapshot frameSnapshot = new S2C_FrameSnapshot
-        {
-            FrameIndex = snapshot.FrameIndex
-        };
         Dictionary<int, PhysicsBodySnapshot> physicsByBodyId = BuildPhysicsBodyLookup(snapshot.PhysicsSnapshot);
-
-        for (int i = 0; i < snapshot.Players.Length; i++)
-        {
-            PlayerStateSnapshot player = snapshot.Players[i];
-            int bodyId = checked((int)player.PlayerId);
-            bool hasPhysics = physicsByBodyId.TryGetValue(bodyId, out PhysicsBodySnapshot bodySnapshot);
-            bool hasPreviousAttributes = _lastBroadcastAttributesByPlayerId.TryGetValue(player.PlayerId, out PlayerAttributeSnapshot previousAttributes);
-            PlayerAttributeSnapshot currentAttributes = player.Attributes;
-            PlayerAttributeDirtyFlags dirtyMask = PlayerAttributeSync.ComputeDirtyMask(
-                hasPreviousAttributes,
-                previousAttributes,
-                currentAttributes);
-            frameSnapshot.Players.Add(new PlayerSnapshot
-            {
-                PlayerId = player.PlayerId,
-                X = player.X,
-                Y = player.Y,
-                LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
-                Angle = hasPhysics ? bodySnapshot.RotationRadians : 0.0f,
-                LinearVelocityX = hasPhysics ? bodySnapshot.LinearVelocityX : 0.0f,
-                LinearVelocityY = hasPhysics ? bodySnapshot.LinearVelocityY : 0.0f,
-                AngularVelocity = hasPhysics ? bodySnapshot.AngularVelocity : 0.0f,
-                IsAwake = hasPhysics && bodySnapshot.IsAwake,
-                IsEnabled = !hasPhysics || bodySnapshot.IsEnabled,
-                AttributeDirtyMask = (uint)dirtyMask,
-                Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, currentAttributes.Health),
-                MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
-                Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, currentAttributes.Mana),
-                MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, currentAttributes.MaxMana),
-                Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack),
-                ActiveBuffs = BuildBuffSnapshots(player.ActiveBuffs),
-                NextRuntimeBuffId = player.NextRuntimeBuffId,
-                Numeric = BuildNumericSnapshot(player.Numeric)
-            });
-
-            _lastBroadcastAttributesByPlayerId[player.PlayerId] = currentAttributes;
-        }
-
-        if (snapshot.PhysicsSnapshot != null)
-        {
-            for (int i = 0; i < snapshot.PhysicsSnapshot.Contacts.Count; i++)
-            {
-                PhysicsContactSnapshot contact = snapshot.PhysicsSnapshot.Contacts[i];
-                frameSnapshot.Contacts.Add(new FrameContactSnapshot
-                {
-                    BodyAId = contact.BodyAId,
-                    BodyBId = contact.BodyBId,
-                    IsTouching = contact.IsTouching
-                });
-            }
-        }
 
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
         {
@@ -184,7 +133,71 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 continue;
             }
 
+            S2C_FrameSnapshot frameSnapshot = new S2C_FrameSnapshot
+            {
+                FrameIndex = snapshot.FrameIndex
+            };
+
+            for (int i = 0; i < snapshot.Players.Length; i++)
+            {
+                PlayerStateSnapshot player = snapshot.Players[i];
+                int bodyId = checked((int)player.PlayerId);
+                bool hasPhysics = physicsByBodyId.TryGetValue(bodyId, out PhysicsBodySnapshot bodySnapshot);
+                bool hasPreviousAttributes = _lastBroadcastAttributesByPlayerId.TryGetValue(player.PlayerId, out PlayerAttributeSnapshot previousAttributes);
+                PlayerAttributeSnapshot currentAttributes = player.Attributes;
+                BuffSyncPayload buffPayload = BuildBuffSyncPayload(session.Id, player, snapshot.FrameIndex);
+                PlayerAttributeDirtyFlags dirtyMask = buffPayload.IsFullSync || !hasPreviousAttributes
+                    ? PlayerAttributeDirtyFlags.All
+                    : PlayerAttributeSync.ComputeDirtyMask(true, previousAttributes, currentAttributes);
+
+                frameSnapshot.Players.Add(new PlayerSnapshot
+                {
+                    PlayerId = player.PlayerId,
+                    X = player.X,
+                    Y = player.Y,
+                    LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
+                    Angle = hasPhysics ? bodySnapshot.RotationRadians : 0.0f,
+                    LinearVelocityX = hasPhysics ? bodySnapshot.LinearVelocityX : 0.0f,
+                    LinearVelocityY = hasPhysics ? bodySnapshot.LinearVelocityY : 0.0f,
+                    AngularVelocity = hasPhysics ? bodySnapshot.AngularVelocity : 0.0f,
+                    IsAwake = hasPhysics && bodySnapshot.IsAwake,
+                    IsEnabled = !hasPhysics || bodySnapshot.IsEnabled,
+                    AttributeDirtyMask = (uint)dirtyMask,
+                    Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, currentAttributes.Health),
+                    MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
+                    Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, currentAttributes.Mana),
+                    MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, currentAttributes.MaxMana),
+                    Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack),
+                    ActiveBuffs = buffPayload.Buffs,
+                    NextRuntimeBuffId = buffPayload.NextRuntimeBuffId,
+                    Numeric = BuildNumericSnapshot(player.Numeric),
+                    BuffDirtyMask = buffPayload.DirtyMask,
+                    BuffSnapshotFrameIndex = buffPayload.BaselineFrameIndex,
+                    IsBuffFullSync = buffPayload.IsFullSync
+                });
+            }
+
+            if (snapshot.PhysicsSnapshot != null)
+            {
+                for (int i = 0; i < snapshot.PhysicsSnapshot.Contacts.Count; i++)
+                {
+                    PhysicsContactSnapshot contact = snapshot.PhysicsSnapshot.Contacts[i];
+                    frameSnapshot.Contacts.Add(new FrameContactSnapshot
+                    {
+                        BodyAId = contact.BodyAId,
+                        BodyBId = contact.BodyBId,
+                        IsTouching = contact.IsTouching
+                    });
+                }
+            }
+
             session.Send(frameSnapshot);
+        }
+
+        for (int i = 0; i < snapshot.Players.Length; i++)
+        {
+            PlayerStateSnapshot player = snapshot.Players[i];
+            _lastBroadcastAttributesByPlayerId[player.PlayerId] = player.Attributes;
         }
     }
 
@@ -220,7 +233,32 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 StackCount = buff.StackCount,
                 RemainingFrames = buff.RemainingFrames,
                 AppliedFrame = buff.AppliedFrame,
-                Flags = (uint)buff.Flags
+                Flags = (uint)buff.Flags,
+                DirtyFlags = 0
+            });
+        }
+
+        return snapshots;
+    }
+
+    private static List<BuffSnapshot> BuildBuffSnapshots(IReadOnlyList<BuffSync.BuffChange> changes)
+    {
+        List<BuffSnapshot> snapshots = new List<BuffSnapshot>(changes.Count);
+        for (int i = 0; i < changes.Count; i++)
+        {
+            BuffSync.BuffChange change = changes[i];
+            BuffState buff = change.State;
+            snapshots.Add(new BuffSnapshot
+            {
+                RuntimeBuffId = buff.RuntimeBuffId,
+                BuffId = buff.BuffId,
+                CasterId = buff.CasterId,
+                TargetId = buff.TargetId,
+                StackCount = buff.StackCount,
+                RemainingFrames = buff.RemainingFrames,
+                AppliedFrame = buff.AppliedFrame,
+                Flags = (uint)buff.Flags,
+                DirtyFlags = (uint)change.DirtyFlags
             });
         }
 
@@ -251,6 +289,68 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         return snapshot;
+    }
+
+    private BuffSyncPayload BuildBuffSyncPayload(long observerSessionId, PlayerStateSnapshot player, uint frameIndex)
+    {
+        (long ObserverSessionId, long TargetPlayerId) key = (observerSessionId, player.PlayerId);
+        if (!_buffBaselinesByObserverTarget.TryGetValue(key, out BuffBroadcastBaseline? baseline))
+        {
+            BuffBroadcastBaseline fullSyncBaseline = new BuffBroadcastBaseline(player.ActiveBuffs, player.NextRuntimeBuffId, frameIndex);
+            _buffBaselinesByObserverTarget[key] = fullSyncBaseline;
+            return new BuffSyncPayload(
+                BuildBuffSnapshots(player.ActiveBuffs),
+                player.NextRuntimeBuffId,
+                0u,
+                0u,
+                true);
+        }
+
+        BuffSync.BuffChange[] changes = BuffSync.ComputeChanges(baseline.ActiveBuffs, player.ActiveBuffs);
+        if (changes.Length == 0)
+        {
+            return new BuffSyncPayload(
+                new List<BuffSnapshot>(),
+                0L,
+                baseline.FrameIndex,
+                0u,
+                false);
+        }
+
+        uint baselineFrameIndex = baseline.FrameIndex;
+        baseline.Update(player.ActiveBuffs, player.NextRuntimeBuffId, frameIndex);
+        return new BuffSyncPayload(
+            BuildBuffSnapshots(changes),
+            player.NextRuntimeBuffId,
+            baselineFrameIndex,
+            BuffSync.HasAnyChangeMask,
+            false);
+    }
+
+    private void RemoveBuffBroadcastBaselines(long observerSessionId, long targetPlayerId)
+    {
+        if (_buffBaselinesByObserverTarget.Count == 0)
+        {
+            return;
+        }
+
+        _staleBuffBaselineKeys.Clear();
+        foreach (KeyValuePair<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> pair in _buffBaselinesByObserverTarget)
+        {
+            bool matchesObserver = observerSessionId == 0 || pair.Key.ObserverSessionId == observerSessionId;
+            bool matchesTarget = targetPlayerId == 0 || pair.Key.TargetPlayerId == targetPlayerId;
+            if (matchesObserver && matchesTarget)
+            {
+                _staleBuffBaselineKeys.Add(pair.Key);
+            }
+        }
+
+        for (int i = 0; i < _staleBuffBaselineKeys.Count; i++)
+        {
+            _buffBaselinesByObserverTarget.Remove(_staleBuffBaselineKeys[i]);
+        }
+
+        _staleBuffBaselineKeys.Clear();
     }
 
     private void RunAutomationScenario(uint frameIndex)
@@ -370,5 +470,28 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         float x = (playerCount & 1) == 0 ? -spacing : spacing;
         float y = row * spacing;
         return (x, y);
+    }
+
+    private readonly struct BuffSyncPayload
+    {
+        public BuffSyncPayload(
+            List<BuffSnapshot> buffs,
+            long nextRuntimeBuffId,
+            uint baselineFrameIndex,
+            uint dirtyMask,
+            bool isFullSync)
+        {
+            Buffs = buffs;
+            NextRuntimeBuffId = nextRuntimeBuffId;
+            BaselineFrameIndex = baselineFrameIndex;
+            DirtyMask = dirtyMask;
+            IsFullSync = isFullSync;
+        }
+
+        public List<BuffSnapshot> Buffs { get; }
+        public long NextRuntimeBuffId { get; }
+        public uint BaselineFrameIndex { get; }
+        public uint DirtyMask { get; }
+        public bool IsFullSync { get; }
     }
 }
