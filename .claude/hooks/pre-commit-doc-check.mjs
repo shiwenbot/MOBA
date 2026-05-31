@@ -1,16 +1,51 @@
 #!/usr/bin/env node
 
 /**
- * Pre-commit 文档进度同步检查
+ * Pre-commit 钩子
  *
- * 在 git commit 前触发，检测本次提交是否涉及阶段性完成，
- * 如果 Plan/ 阶段总目录未同步更新，则阻止提交并提示修复。
+ * 1. 清理项目根目录的临时垃圾文件
+ * 2. 检测阶段性完成但文档未同步的提交
  */
 
 import { execSync } from 'child_process';
 import { join } from 'path';
+import { readdirSync, unlinkSync, existsSync } from 'fs';
 
 const root = execSync('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+
+// ── 第一步：清理临时文件 ──
+const junkPatterns = [
+  /^analysis-report-.*\.html$/,
+  /^unity-test-log.*\.txt$/,
+  /^test-results-.*\.xml$/,
+  /^restore-.*\.log$/,
+];
+try {
+  // 清理根目录散落的垃圾文件（兜底）
+  const files = readdirSync(root);
+  const junk = files.filter(f => junkPatterns.some(p => p.test(f)));
+  if (junk.length) {
+    for (const f of junk) {
+      const fp = join(root, f);
+      if (existsSync(fp)) unlinkSync(fp);
+    }
+    console.log(`[pre-commit] 清理 ${junk.length} 个散落的临时文件: ${junk.join(', ')}`);
+  }
+  // 清理 .tmp/ 目录下的所有内容
+  const tmpDir = join(root, '.tmp');
+  if (existsSync(tmpDir)) {
+    const tmpFiles = readdirSync(tmpDir);
+    if (tmpFiles.length) {
+      for (const f of tmpFiles) {
+        const fp = join(tmpDir, f);
+        if (existsSync(fp)) unlinkSync(fp);
+      }
+      console.log(`[pre-commit] 清理 .tmp/ 目录: ${tmpFiles.length} 个文件`);
+    }
+  }
+} catch {
+  // 清理失败不阻止提交
+}
 
 let data = '';
 process.stdin.on('data', c => (data += c));

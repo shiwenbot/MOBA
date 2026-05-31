@@ -29,8 +29,14 @@ openspec/
 #ParrelSync clones
 UnityProject_clone_*/
 
-#analyze-report skill 生成的临时报告
+#analyze-report skill 生成的临时报告（已迁移到 .tmp/）
 analysis-report-*.html
+
+#统一临时输出目录
+.tmp/
+
+#dotnet restore 日志
+restore-*.log
 
 #Playwright MCP 日志和快照
 .playwright-mcp/
