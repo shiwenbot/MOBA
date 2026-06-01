@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.Badminton;
 using UnityEngine;
 
@@ -35,7 +36,7 @@ namespace GameLogic
             DrawGroundLine(CourtConstants.NearRightCorner, CourtConstants.FarRightCorner);
             DrawGroundLine(CourtConstants.FarRightCorner, CourtConstants.FarLeftCorner);
             DrawGroundLine(CourtConstants.FarLeftCorner, CourtConstants.NearLeftCorner);
-            DrawGroundLine(new Vector2(-CourtConstants.HalfSinglesWidth, 0.0f), new Vector2(CourtConstants.HalfSinglesWidth, 0.0f));
+            DrawGroundLine(new Vector2d(-CourtConstants.HalfSinglesWidth, Fixed64.Zero), new Vector2d(CourtConstants.HalfSinglesWidth, Fixed64.Zero));
         }
 
         private void DrawTrajectory()
@@ -62,11 +63,11 @@ namespace GameLogic
             Gizmos.DrawSphere(lastPoint, 0.06f);
         }
 
-        private static void DrawGroundLine(Vector2 from, Vector2 to)
+        private static void DrawGroundLine(Vector2d from, Vector2d to)
         {
             Gizmos.DrawLine(
-                new Vector3(from.x, 0.0f, from.y),
-                new Vector3(to.x, 0.0f, to.y));
+                new Vector3((float)from.x, 0.0f, (float)from.y),
+                new Vector3((float)to.x, 0.0f, (float)to.y));
         }
     }
 }

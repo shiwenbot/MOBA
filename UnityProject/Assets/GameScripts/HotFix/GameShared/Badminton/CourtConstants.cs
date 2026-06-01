@@ -1,32 +1,27 @@
-using System;
-using GameShared.FrameSync.Determinism;
-using UnityEngine;
+using FixedMathSharp;
 
 namespace GameShared.Badminton
 {
     public static class CourtConstants
     {
-        public const float FullLength = 13.4f;
-        public const float HalfLength = FullLength * 0.5f;
-        public const float SinglesWidth = 5.18f;
-        public const float HalfSinglesWidth = SinglesWidth * 0.5f;
-        public const float NetHeightAtPost = 1.55f;
-        public const float NetHeightAtCenter = 1.524f;
-        public const float ServiceLineDistanceFromNet = 1.98f;
-        public const float BoundaryEpsilon = 0.0001f;
+        public static readonly Fixed64 FullLength = new Fixed64(13.4);
+        public static readonly Fixed64 HalfLength = FullLength * Fixed64.Half;
+        public static readonly Fixed64 SinglesWidth = new Fixed64(5.18);
+        public static readonly Fixed64 HalfSinglesWidth = SinglesWidth * Fixed64.Half;
+        public static readonly Fixed64 NetHeightAtPost = new Fixed64(1.55);
+        public static readonly Fixed64 NetHeightAtCenter = new Fixed64(1.524);
+        public static readonly Fixed64 ServiceLineDistanceFromNet = new Fixed64(1.98);
+        public static readonly Fixed64 BoundaryEpsilon = new Fixed64(0.0001);
 
-        public static readonly Vector2 NearLeftCorner = new Vector2(-HalfSinglesWidth, -HalfLength);
-        public static readonly Vector2 NearRightCorner = new Vector2(HalfSinglesWidth, -HalfLength);
-        public static readonly Vector2 FarLeftCorner = new Vector2(-HalfSinglesWidth, HalfLength);
-        public static readonly Vector2 FarRightCorner = new Vector2(HalfSinglesWidth, HalfLength);
+        public static readonly Vector2d NearLeftCorner = new Vector2d(-HalfSinglesWidth, -HalfLength);
+        public static readonly Vector2d NearRightCorner = new Vector2d(HalfSinglesWidth, -HalfLength);
+        public static readonly Vector2d FarLeftCorner = new Vector2d(-HalfSinglesWidth, HalfLength);
+        public static readonly Vector2d FarRightCorner = new Vector2d(HalfSinglesWidth, HalfLength);
 
-        public static bool IsInBounds(Vector2 xz)
+        public static bool IsInBounds(Vector2d xz)
         {
-            DeterminismRules.AssertFinite(xz.x, nameof(xz.x));
-            DeterminismRules.AssertFinite(xz.y, nameof(xz.y));
-
-            return Math.Abs(xz.x) <= HalfSinglesWidth + BoundaryEpsilon &&
-                   Math.Abs(xz.y) <= HalfLength + BoundaryEpsilon;
+            return FixedMath.Abs(xz.x) <= HalfSinglesWidth + BoundaryEpsilon &&
+                   FixedMath.Abs(xz.y) <= HalfLength + BoundaryEpsilon;
         }
     }
 }

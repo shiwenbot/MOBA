@@ -1,5 +1,5 @@
+using FixedMathSharp;
 using GameShared.Badminton.Config;
-using UnityEngine;
 
 namespace GameShared.Badminton
 {
@@ -7,16 +7,16 @@ namespace GameShared.Badminton
     {
         public ShuttlecockSnapshot(
             uint frameIndex,
-            Vector2 xz,
-            float y,
-            Vector2 vxz,
-            float vy,
+            Vector2d xz,
+            Fixed64 y,
+            Vector2d vxz,
+            Fixed64 vy,
             ShuttlecockFlightPhase phase,
             int lastValidFlyingFrame,
-            Vector2 landingXz,
+            Vector2d landingXz,
             bool isInBounds,
             ShuttlecockShotType activeShotType,
-            float horizontalDrag)
+            Fixed64 horizontalDrag)
         {
             FrameIndex = frameIndex;
             XZ = xz;
@@ -32,16 +32,16 @@ namespace GameShared.Badminton
         }
 
         public uint FrameIndex { get; }
-        public Vector2 XZ { get; }
-        public float Y { get; }
-        public Vector2 Vxz { get; }
-        public float Vy { get; }
+        public Vector2d XZ { get; }
+        public Fixed64 Y { get; }
+        public Vector2d Vxz { get; }
+        public Fixed64 Vy { get; }
         public ShuttlecockFlightPhase Phase { get; }
         public int LastValidFlyingFrame { get; }
-        public Vector2 LandingXZ { get; }
+        public Vector2d LandingXZ { get; }
         public bool IsInBounds { get; }
         public ShuttlecockShotType ActiveShotType { get; }
-        public float HorizontalDrag { get; }
+        public Fixed64 HorizontalDrag { get; }
 
         public ShuttlecockSnapshot WithFrameIndex(uint frameIndex)
         {

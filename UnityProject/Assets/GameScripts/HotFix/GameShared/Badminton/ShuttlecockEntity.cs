@@ -1,19 +1,19 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.Badminton.Config;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
-using UnityEngine;
 
 namespace GameShared.Badminton
 {
     public sealed class ShuttlecockEntity : ITickable, ISnapshotable<ShuttlecockSnapshot>
     {
         private const int DefaultSnapshotCapacity = 128;
-        private const float DegreesToRadians = Mathf.Deg2Rad;
-        private const float PositiveAngleVerticalSpeedScale = 0.4f;
+        private static readonly Fixed64 PositiveAngleVerticalSpeedScale = new Fixed64(0.4);
+        private static readonly Fixed64 DirectionMagnitudeEpsilon = new Fixed64(0.000001);
 
         private readonly IShuttlecockShotConfigProvider _configProvider;
         private readonly SnapshotBuffer<ShuttlecockSnapshot> _snapshotBuffer;
@@ -57,17 +57,18 @@ namespace GameShared.Badminton
             queuedCommand.ShotType = command.ShotType;
             queuedCommand.OriginXZ = command.OriginXZ;
             queuedCommand.OriginY = command.OriginY;
-            queuedCommand.DirectionXZ = command.DirectionXZ.normalized;
+            queuedCommand.DirectionXZ = command.DirectionXZ.Normal;
             InsertPendingCommand(queuedCommand);
         }
 
         public void Tick(uint frameIndex, float fixedDt)
         {
             DeterminismRules.AssertFixedDt(fixedDt);
+            Fixed64 dt = DeterminismRules.FixedDeltaTimeFixed64;
             ConsumePendingCommands(frameIndex);
             if (State.Phase == ShuttlecockFlightPhase.Flying)
             {
-                ShuttlecockPhysics.Step(State, fixedDt, frameIndex);
+                ShuttlecockPhysics.Step(State, dt, frameIndex);
             }
 
             SaveSnapshot(frameIndex);
@@ -230,9 +231,9 @@ namespace GameShared.Badminton
             }
         }
 
-        private static void EnsureEqualBits(float left, float right, int frameIndex, string fieldName)
+        private static void EnsureEqualBits(Fixed64 left, Fixed64 right, int frameIndex, string fieldName)
         {
-            if (BitConverter.SingleToInt32Bits(left) != BitConverter.SingleToInt32Bits(right))
+            if (left.m_rawValue != right.m_rawValue)
             {
                 throw new InvalidOperationException(
                     $"Shuttlecock deterministic mismatch at frame={frameIndex}, field={fieldName}, left={left}, right={right}.");
@@ -266,18 +267,18 @@ namespace GameShared.Badminton
                 throw new InvalidOperationException($"Missing shuttlecock config for shot type: {command.ShotType}.");
             }
 
-            float angleRadians = definition.LaunchAngleDegrees * DegreesToRadians;
-            float horizontalSpeed = definition.HorizontalSpeed;
-            float verticalScale = angleRadians > 0.0f ? PositiveAngleVerticalSpeedScale : 1.0f;
-            float verticalSpeed = horizontalSpeed * MathF.Sin(angleRadians) * verticalScale;
+            Fixed64 angleRadians = FixedMath.DegToRad(definition.LaunchAngleDegrees);
+            Fixed64 horizontalSpeed = definition.HorizontalSpeed;
+            Fixed64 verticalScale = angleRadians > Fixed64.Zero ? PositiveAngleVerticalSpeedScale : Fixed64.One;
+            Fixed64 verticalSpeed = horizontalSpeed * FixedMath.Sin(angleRadians) * verticalScale;
 
             State.XZ = command.OriginXZ;
-            State.Y = MathF.Max(0.0f, command.OriginY);
-            State.Vxz = command.DirectionXZ.normalized * horizontalSpeed;
+            State.Y = FixedMath.Max(Fixed64.Zero, command.OriginY);
+            State.Vxz = command.DirectionXZ.Normal * horizontalSpeed;
             State.Vy = verticalSpeed;
             State.Phase = ShuttlecockFlightPhase.Flying;
             State.LastValidFlyingFrame = unchecked((int)command.TargetFrame);
-            State.LandingXZ = Vector2.zero;
+            State.LandingXZ = Vector2d.Zero;
             State.IsInBounds = false;
             State.ActiveShotType = definition.ShotType;
             State.HorizontalDrag = definition.HorizontalDrag;
@@ -341,11 +342,9 @@ namespace GameShared.Badminton
             }
         }
 
-        private static void ValidateDirection(Vector2 direction)
+        private static void ValidateDirection(Vector2d direction)
         {
-            DeterminismRules.AssertFinite(direction.x, nameof(direction));
-            DeterminismRules.AssertFinite(direction.y, nameof(direction));
-            if (direction.sqrMagnitude <= 0.000001f)
+            if (direction.SqrMagnitude <= DirectionMagnitudeEpsilon)
             {
                 throw new ArgumentOutOfRangeException(nameof(direction), "Launch direction must be non-zero.");
             }

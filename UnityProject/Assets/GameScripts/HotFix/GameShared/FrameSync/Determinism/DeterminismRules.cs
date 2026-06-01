@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using FixedMathSharp;
 using GameShared.FrameSync.Core;
 
 namespace GameShared.FrameSync.Determinism
@@ -8,6 +9,7 @@ namespace GameShared.FrameSync.Determinism
     {
         public const float FixedDeltaTime = TickAccumulator.DefaultFixedDeltaTime;
         public const float MoveSpeed = 5.0f;
+        public static readonly Fixed64 FixedDeltaTimeFixed64 = TickAccumulator.DefaultFixedDeltaTimeFixed64;
         private static readonly int FixedDeltaBits = BitConverter.SingleToInt32Bits(FixedDeltaTime);
 
         public static int FloatToBits(float value)
@@ -22,6 +24,16 @@ namespace GameShared.FrameSync.Determinism
             {
                 throw new InvalidOperationException(
                     $"FrameSync fixedDt mismatch. expected={FixedDeltaTime}, actual={dt}.");
+            }
+        }
+
+        [Conditional("DEBUG")]
+        public static void AssertFixedDt(Fixed64 dt)
+        {
+            if (dt.m_rawValue != FixedDeltaTimeFixed64.m_rawValue)
+            {
+                throw new InvalidOperationException(
+                    $"FrameSync fixedDt mismatch. expectedRaw={FixedDeltaTimeFixed64.m_rawValue}, actualRaw={dt.m_rawValue}.");
             }
         }
 

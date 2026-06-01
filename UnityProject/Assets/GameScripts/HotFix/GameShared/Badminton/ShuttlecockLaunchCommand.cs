@@ -1,6 +1,6 @@
+using FixedMathSharp;
 using GameShared.Badminton.Config;
 using GameShared.FrameSync.Command;
-using UnityEngine;
 
 namespace GameShared.Badminton
 {
@@ -8,17 +8,17 @@ namespace GameShared.Badminton
     {
         public uint TargetFrame { get; set; }
         public ShuttlecockShotType ShotType { get; set; }
-        public Vector2 OriginXZ { get; set; }
-        public float OriginY { get; set; }
-        public Vector2 DirectionXZ { get; set; }
+        public Vector2d OriginXZ { get; set; }
+        public Fixed64 OriginY { get; set; }
+        public Vector2d DirectionXZ { get; set; }
 
         public void Reset()
         {
             TargetFrame = 0;
             ShotType = ShuttlecockShotType.Clear;
-            OriginXZ = Vector2.zero;
-            OriginY = 0.0f;
-            DirectionXZ = Vector2.zero;
+            OriginXZ = Vector2d.Zero;
+            OriginY = Fixed64.Zero;
+            DirectionXZ = Vector2d.Zero;
         }
     }
 }

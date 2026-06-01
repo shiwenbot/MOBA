@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.Badminton;
 using GameShared.Badminton.Config;
 using GameShared.FrameSync.Determinism;
@@ -121,9 +122,9 @@ namespace GameLogic
             {
                 TargetFrame = CurrentFrame + 1,
                 ShotType = targetShotType,
-                OriginXZ = originXZ,
-                OriginY = originY,
-                DirectionXZ = directionXZ
+                OriginXZ = ToFixed(originXZ),
+                OriginY = new Fixed64(originY),
+                DirectionXZ = ToFixed(directionXZ)
             };
 
             _entity.EnqueueLaunch(command);
@@ -177,9 +178,9 @@ namespace GameLogic
             {
                 TargetFrame = 1,
                 ShotType = targetShotType,
-                OriginXZ = originXZ,
-                OriginY = originY,
-                DirectionXZ = directionXZ
+                OriginXZ = ToFixed(originXZ),
+                OriginY = new Fixed64(originY),
+                DirectionXZ = ToFixed(directionXZ)
             });
 
             List<Vector3> points = new List<Vector3>(Mathf.Max(2, maxFrames + 1))
@@ -218,12 +219,12 @@ namespace GameLogic
                 ToLocalGround(CourtConstants.FarRightCorner),
                 ToLocalGround(CourtConstants.FarLeftCorner),
                 ToLocalGround(CourtConstants.NearLeftCorner),
-                ToLocalGround(new Vector2(-CourtConstants.HalfSinglesWidth, 0.0f)),
-                ToLocalGround(new Vector2(CourtConstants.HalfSinglesWidth, 0.0f)),
-                ToLocalGround(new Vector2(0.0f, 0.0f)),
-                ToLocalGround(new Vector2(0.0f, CourtConstants.HalfLength)),
-                ToLocalGround(new Vector2(0.0f, 0.0f)),
-                ToLocalGround(new Vector2(0.0f, -CourtConstants.HalfLength))
+                ToLocalGround(new Vector2d(-CourtConstants.HalfSinglesWidth, Fixed64.Zero)),
+                ToLocalGround(new Vector2d(CourtConstants.HalfSinglesWidth, Fixed64.Zero)),
+                ToLocalGround(Vector2d.Zero),
+                ToLocalGround(new Vector2d(Fixed64.Zero, CourtConstants.HalfLength)),
+                ToLocalGround(Vector2d.Zero),
+                ToLocalGround(new Vector2d(Fixed64.Zero, -CourtConstants.HalfLength))
             });
         }
 
@@ -236,8 +237,8 @@ namespace GameLogic
 
             ShuttlecockState state = _entity.State;
             return
-                $"Frame={CurrentFrame}, Phase={state.Phase}, Pos=({state.XZ.x:F2}, {state.Y:F2}, {state.XZ.y:F2}), " +
-                $"Vel=({state.Vxz.x:F2}, {state.Vy:F2}, {state.Vxz.y:F2}), Flight={CurrentFlightTimeSeconds:F2}s";
+                $"Frame={CurrentFrame}, Phase={state.Phase}, Pos=({(float)state.XZ.x:F2}, {(float)state.Y:F2}, {(float)state.XZ.y:F2}), " +
+                $"Vel=({(float)state.Vxz.x:F2}, {(float)state.Vy:F2}, {(float)state.Vxz.y:F2}), Flight={CurrentFlightTimeSeconds:F2}s";
         }
 
         private void InitializeEntity()
@@ -323,9 +324,19 @@ namespace GameLogic
             return new Vector3(xz.x, y, xz.y);
         }
 
-        private static Vector3 ToLocalGround(Vector2 xz)
+        private static Vector3 ToWorldPosition(Vector2d xz, Fixed64 y)
         {
-            return new Vector3(xz.x, 0.0f, xz.y);
+            return new Vector3((float)xz.x, (float)y, (float)xz.y);
+        }
+
+        private static Vector3 ToLocalGround(Vector2d xz)
+        {
+            return new Vector3((float)xz.x, 0.0f, (float)xz.y);
+        }
+
+        private static Vector2d ToFixed(Vector2 value)
+        {
+            return new Vector2d(value.x, value.y);
         }
     }
 }

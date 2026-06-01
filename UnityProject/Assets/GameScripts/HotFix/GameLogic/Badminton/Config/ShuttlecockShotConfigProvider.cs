@@ -1,4 +1,5 @@
 using System;
+using FixedMathSharp;
 using GameConfig.badminton;
 
 namespace GameShared.Badminton.Config
@@ -34,16 +35,16 @@ namespace GameShared.Badminton.Config
 
             definition = new ShuttlecockShotDefinition(
                 shotType,
-                config.HorizontalSpeed,
+                new Fixed64(config.HorizontalSpeed),
                 GetSignedLaunchAngle(shotType, config.LaunchAngle),
-                config.Drag);
+                new Fixed64(config.Drag));
             return true;
         }
 
-        private static float GetSignedLaunchAngle(ShuttlecockShotType shotType, float angleDegrees)
+        private static Fixed64 GetSignedLaunchAngle(ShuttlecockShotType shotType, float angleDegrees)
         {
             float normalizedAngle = Math.Abs(angleDegrees);
-            return shotType == ShuttlecockShotType.Smash ? -normalizedAngle : normalizedAngle;
+            return new Fixed64(shotType == ShuttlecockShotType.Smash ? -normalizedAngle : normalizedAngle);
         }
     }
 }

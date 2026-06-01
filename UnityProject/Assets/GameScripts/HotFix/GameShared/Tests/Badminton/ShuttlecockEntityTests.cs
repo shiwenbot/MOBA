@@ -1,10 +1,10 @@
 #if FANTASY_UNITY && UNITY_INCLUDE_TESTS
 using System;
+using FixedMathSharp;
 using GameShared.Badminton;
 using GameShared.Badminton.Config;
 using GameShared.FrameSync.Determinism;
 using NUnit.Framework;
-using UnityEngine;
 
 namespace GameShared.Badminton.Tests
 {
@@ -19,9 +19,9 @@ namespace GameShared.Badminton.Tests
             {
                 TargetFrame = 2,
                 ShotType = ShuttlecockShotType.Clear,
-                OriginXZ = new Vector2(0.0f, -1.5f),
-                OriginY = 1.2f,
-                DirectionXZ = Vector2.up,
+                OriginXZ = new Vector2d(0.0, -1.5),
+                OriginY = new Fixed64(1.2),
+                DirectionXZ = Vector2d.Forward,
             });
 
             entity.Tick(1, DeterminismRules.FixedDeltaTime);
@@ -32,18 +32,18 @@ namespace GameShared.Badminton.Tests
             Assert.That(entity.PendingCommandCount, Is.EqualTo(0));
             Assert.That(entity.State.Phase, Is.EqualTo(ShuttlecockFlightPhase.Flying));
             Assert.That(entity.State.ActiveShotType, Is.EqualTo(ShuttlecockShotType.Clear));
-            Assert.That(entity.State.XZ.y, Is.GreaterThan(-1.5f));
+            Assert.That(entity.State.XZ.y, Is.GreaterThan(new Fixed64(-1.5)));
         }
 
         [Test]
         public void Physics_TouchdownInBounds_BecomesLanded()
         {
             ShuttlecockEntity entity = CreateEntity();
-            entity.State.XZ = new Vector2(0.0f, 0.0f);
-            entity.State.Y = 0.1f;
-            entity.State.Vxz = Vector2.zero;
-            entity.State.Vy = -1.0f;
-            entity.State.HorizontalDrag = 0.92f;
+            entity.State.XZ = Vector2d.Zero;
+            entity.State.Y = new Fixed64(0.1);
+            entity.State.Vxz = Vector2d.Zero;
+            entity.State.Vy = new Fixed64(-1.0);
+            entity.State.HorizontalDrag = new Fixed64(0.92);
             entity.State.ActiveShotType = ShuttlecockShotType.NetShot;
             entity.State.Phase = ShuttlecockFlightPhase.Flying;
 
@@ -51,19 +51,19 @@ namespace GameShared.Badminton.Tests
 
             Assert.That(entity.State.Phase, Is.EqualTo(ShuttlecockFlightPhase.Landed));
             Assert.That(entity.State.IsInBounds, Is.True);
-            Assert.That(entity.State.Y, Is.EqualTo(0.0f));
-            Assert.That(entity.State.LandingXZ, Is.EqualTo(Vector2.zero));
+            Assert.That(entity.State.Y, Is.EqualTo(Fixed64.Zero));
+            Assert.That(entity.State.LandingXZ, Is.EqualTo(Vector2d.Zero));
         }
 
         [Test]
         public void Physics_TouchdownOutsideBounds_BecomesOutOfBounds()
         {
             ShuttlecockEntity entity = CreateEntity();
-            entity.State.XZ = new Vector2(CourtConstants.HalfSinglesWidth + 0.5f, 0.0f);
-            entity.State.Y = 0.1f;
-            entity.State.Vxz = Vector2.zero;
-            entity.State.Vy = -1.0f;
-            entity.State.HorizontalDrag = 0.92f;
+            entity.State.XZ = new Vector2d(CourtConstants.HalfSinglesWidth + new Fixed64(0.5), Fixed64.Zero);
+            entity.State.Y = new Fixed64(0.1);
+            entity.State.Vxz = Vector2d.Zero;
+            entity.State.Vy = new Fixed64(-1.0);
+            entity.State.HorizontalDrag = new Fixed64(0.92);
             entity.State.ActiveShotType = ShuttlecockShotType.NetShot;
             entity.State.Phase = ShuttlecockFlightPhase.Flying;
 
@@ -81,17 +81,17 @@ namespace GameShared.Badminton.Tests
             {
                 TargetFrame = 2,
                 ShotType = ShuttlecockShotType.Drive,
-                OriginXZ = Vector2.zero,
-                OriginY = 1.0f,
-                DirectionXZ = Vector2.up,
+                OriginXZ = Vector2d.Zero,
+                OriginY = Fixed64.One,
+                DirectionXZ = Vector2d.Forward,
             });
             entity.EnqueueLaunch(new ShuttlecockLaunchCommand
             {
                 TargetFrame = 20,
                 ShotType = ShuttlecockShotType.Clear,
-                OriginXZ = new Vector2(1.0f, 1.0f),
-                OriginY = 2.0f,
-                DirectionXZ = Vector2.right,
+                OriginXZ = new Vector2d(1, 1),
+                OriginY = Fixed64.Two,
+                DirectionXZ = Vector2d.Right,
             });
 
             for (uint frame = 1; frame <= 10; frame++)
@@ -123,9 +123,9 @@ namespace GameShared.Badminton.Tests
             {
                 TargetFrame = 1,
                 ShotType = ShuttlecockShotType.Drop,
-                OriginXZ = new Vector2(0.0f, -2.0f),
-                OriginY = 1.3f,
-                DirectionXZ = Vector2.up,
+                OriginXZ = new Vector2d(0.0, -2.0),
+                OriginY = new Fixed64(1.3),
+                DirectionXZ = Vector2d.Forward,
             };
 
             Assert.DoesNotThrow(() => ShuttlecockEntity.DeterminismSelfTest(command, ShuttlecockShotConfigFallback.Instance));
@@ -136,11 +136,19 @@ namespace GameShared.Badminton.Tests
         public void AcceptanceGuideScenarios_ClearAndSmashStayWithinFlightWindows()
         {
             float clearFlightTime = MeasureFlightTime(
-                new ShuttlecockShotDefinition(ShuttlecockShotType.Clear, 14.0f, 55.0f, 0.92f),
-                originY: 2.0f);
+                new ShuttlecockShotDefinition(
+                    ShuttlecockShotType.Clear,
+                    new Fixed64(14.0),
+                    new Fixed64(55.0),
+                    new Fixed64(0.92)),
+                originY: new Fixed64(2.0));
             float smashFlightTime = MeasureFlightTime(
-                new ShuttlecockShotDefinition(ShuttlecockShotType.Smash, 22.0f, -15.0f, 0.92f),
-                originY: 2.5f);
+                new ShuttlecockShotDefinition(
+                    ShuttlecockShotType.Smash,
+                    new Fixed64(22.0),
+                    new Fixed64(-15.0),
+                    new Fixed64(0.92)),
+                originY: new Fixed64(2.5));
 
             Assert.That(clearFlightTime, Is.InRange(1.2f, 1.5f));
             Assert.That(smashFlightTime, Is.InRange(0.3f, 0.4f));
@@ -165,7 +173,7 @@ namespace GameShared.Badminton.Tests
             Assert.Fail($"Entity did not reach terminal state within {maxFrames} frames.");
         }
 
-        private static float MeasureFlightTime(ShuttlecockShotDefinition definition, float originY)
+        private static float MeasureFlightTime(ShuttlecockShotDefinition definition, Fixed64 originY)
         {
             SingleShotProvider provider = new SingleShotProvider(definition);
             ShuttlecockEntity entity = new ShuttlecockEntity(provider);
@@ -173,9 +181,9 @@ namespace GameShared.Badminton.Tests
             {
                 TargetFrame = 1,
                 ShotType = definition.ShotType,
-                OriginXZ = new Vector2(0.0f, -3.0f),
+                OriginXZ = new Vector2d(0.0, -3.0),
                 OriginY = originY,
-                DirectionXZ = Vector2.up
+                DirectionXZ = Vector2d.Forward
             });
 
             uint finalFrame = 0;
@@ -195,16 +203,24 @@ namespace GameShared.Badminton.Tests
 
         private static void AssertSnapshotsEqual(ShuttlecockSnapshot expected, ShuttlecockSnapshot actual)
         {
-            Assert.That(BitConverter.SingleToInt32Bits(actual.XZ.x), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.XZ.x)));
-            Assert.That(BitConverter.SingleToInt32Bits(actual.XZ.y), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.XZ.y)));
-            Assert.That(BitConverter.SingleToInt32Bits(actual.Y), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.Y)));
-            Assert.That(BitConverter.SingleToInt32Bits(actual.Vxz.x), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.Vxz.x)));
-            Assert.That(BitConverter.SingleToInt32Bits(actual.Vxz.y), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.Vxz.y)));
-            Assert.That(BitConverter.SingleToInt32Bits(actual.Vy), Is.EqualTo(BitConverter.SingleToInt32Bits(expected.Vy)));
+            AssertFixedRawEqual(expected.XZ.x, actual.XZ.x);
+            AssertFixedRawEqual(expected.XZ.y, actual.XZ.y);
+            AssertFixedRawEqual(expected.Y, actual.Y);
+            AssertFixedRawEqual(expected.Vxz.x, actual.Vxz.x);
+            AssertFixedRawEqual(expected.Vxz.y, actual.Vxz.y);
+            AssertFixedRawEqual(expected.Vy, actual.Vy);
+            AssertFixedRawEqual(expected.LandingXZ.x, actual.LandingXZ.x);
+            AssertFixedRawEqual(expected.LandingXZ.y, actual.LandingXZ.y);
+            AssertFixedRawEqual(expected.HorizontalDrag, actual.HorizontalDrag);
             Assert.That(actual.Phase, Is.EqualTo(expected.Phase));
             Assert.That(actual.LastValidFlyingFrame, Is.EqualTo(expected.LastValidFlyingFrame));
             Assert.That(actual.IsInBounds, Is.EqualTo(expected.IsInBounds));
             Assert.That(actual.ActiveShotType, Is.EqualTo(expected.ActiveShotType));
+        }
+
+        private static void AssertFixedRawEqual(Fixed64 expected, Fixed64 actual)
+        {
+            Assert.That(actual.m_rawValue, Is.EqualTo(expected.m_rawValue));
         }
 
         private sealed class SingleShotProvider : IShuttlecockShotConfigProvider

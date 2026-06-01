@@ -184,6 +184,109 @@ Phase 5: 汇总报告
 
 **完成标准格式**：完成标准必须使用 `- [ ]` 复选框格式，每条标准可直接验证。分为三个子类别：功能验证（能做什么）、确定性验证（输入一致则输出一致）、工程验证（代码质量、程序集边界、接口实现）。至少 10 条标准。
 
+### 2.5 验证方式怎么写
+
+每个计划必须包含 **验证方式** 章节（放在完成标准之前），定义实现 agent 可以直接执行的测试命令和通过标准。这是 agent 能"自动化验证"的关键。
+
+#### 三层测试体系
+
+| 层次 | 定位 | 适用场景 | 命令模式 |
+|------|------|---------|---------|
+| **L1 编译验证** | 双端编译通过 | 所有计划 | `dotnet build` + Unity Editor |
+| **L2 无头逻辑测试** | 纯 C# 逻辑快速回归 | 涉及帧同步逻辑的计划 | `dotnet run --mode=test --scenario=xxx` |
+| **L3 真实链路验收** | 真服务器 + 真客户端 | 涉及网络同步/双端交互的计划 | `Run-BattleAcceptance.ps1 -Scenario xxx` |
+
+不是所有计划都需要全部三层。根据阶段特点选择：
+
+- **纯数学/数据结构变更**（如定点数迁移）：L1 + L2
+- **帧同步逻辑变更**（如 Buff 系统）：L1 + L2 + L3
+- **纯客户端表现**（如相机/反馈）：L1 + Unity PlayMode
+
+#### 编译验证（所有计划必须有）
+
+```bash
+# 服务端编译
+dotnet build 'GameServer/Server/Server.sln' -c Debug -v minimal
+# 预期：0 error
+
+# 客户端编译（如果改了 GameLogic）
+dotnet build 'UnityProject/GameLogic.csproj' -c Debug -v minimal -m:1
+# 预期：0 error
+
+# Unity Editor 打开无编译错误
+```
+
+#### 无头逻辑测试（帧同步相关计划必须有）
+
+```bash
+# 全部自测
+dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=all
+
+# 单场景自测
+dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=prediction-self
+```
+
+**自测模式参考**：
+
+| 自测类型 | 用途 | 实现模式 |
+|---------|------|---------|
+| `DeterminismSelfTest` | 同输入两次仿真，逐帧比较二进制表示 | 相同参数运行两次，任一帧不一致则抛异常 |
+| `RollbackSelfTest` | 快照保存 → 推进 N 帧 → 恢复 → 继续，与无中断连续运行逐帧比较 | 验证快照/回滚一致性 |
+| `PredictSelfTest` | 客户端预测 → 权威快照校正 → 回滚重播 | 验证预测链路 |
+| `SnapshotSelfTest` | 快照 round-trip / hash / dirty merge | 验证快照完整性 |
+
+#### 真实链路验收（双端交互计划必须有）
+
+```bash
+# 通过验收脚本
+powershell -ExecutionPolicy Bypass -File 'Tools/AutomationAcceptance/Run-BattleAcceptance.ps1' -Scenario 'two-client-buff-lifecycle' -InteractiveEditor
+```
+
+**测试场景命名规范**：`{客户端数}-client-{功能}-{场景}`，例如：
+- `two-client-basic-move`：双客户端基础移动
+- `two-client-buff-lifecycle`：双客户端 Buff 生命周期
+- `single-client-prediction`：单客户端预测
+
+**判定标准**：
+- 退出码 `0` = PASS
+- 服务端/客户端正常启动，无崩溃
+- 关键流程日志出现预期关键字（如 `JoinBattle success`、`Buff added`）
+- 指定帧的状态/属性/哈希满足预期
+
+#### 验证方式章节格式
+
+计划中的 **验证方式** 章节按以下格式写：
+
+```markdown
+## 验证方式
+
+### 编译验证
+- `dotnet build 'GameServer/Server/Server.sln' -c Debug -v minimal`
+- Unity Editor 打开无编译错误
+
+### 自动验证
+- `dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=all`
+- Unity EditMode 测试：N 项全部通过
+
+### 一致性验证（如涉及确定性）
+- `XxxEntity.DeterminismSelfTest`：同输入两次仿真，所有帧 m_rawValue 完全相等
+- `XxxEntity.RollbackSelfTest`：快照恢复 + 重播后状态位级一致
+
+### 自动化验收（如涉及双端交互）
+- 场景：`two-client-xxx`
+- 预期通过标准：...
+```
+
+#### 验收指南文件
+
+涉及双端交互的计划，还需产出验收指南文件到 `Tools/AutomationAcceptance/`，命名格式 `模块名-验收测试指南-日期.md`，包含：
+
+1. **前置条件**：Unity 版本、端口、进程依赖
+2. **执行命令**：可直接复制的完整 CLI 命令
+3. **预期通过标准**：退出码、report.json 关键字段、日志关键字
+4. **失败排查顺序**：按优先级列出排查文件和关注点
+5. **相关实现文件**：方便验收 agent 快速定位代码
+
 ---
 
 ## Phase 3: 校验 Pipeline

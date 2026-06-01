@@ -43,6 +43,28 @@ namespace GameShared.FrameSync.Tests
 
             Assert.That(tickCount, Is.EqualTo(15));
         }
+
+        [Test]
+        public void Accumulate_ConvertsDefaultMaxDeltaToFifteenTicks()
+        {
+            TickAccumulator accumulator = new TickAccumulator();
+            int tickCount = accumulator.Accumulate(TickAccumulator.DefaultMaxDeltaTime);
+
+            Assert.That(tickCount, Is.EqualTo(15));
+        }
+
+        [Test]
+        public void Accumulate_KeepsDeterministicRemainderAfterPartialFrame()
+        {
+            TickAccumulator first = new TickAccumulator();
+            TickAccumulator second = new TickAccumulator();
+
+            first.Accumulate(1.0f / 60.0f);
+            second.Accumulate(1.0f / 120.0f);
+            second.Accumulate(1.0f / 120.0f);
+
+            Assert.That(second.Remainder, Is.EqualTo(first.Remainder));
+        }
     }
 }
 #endif

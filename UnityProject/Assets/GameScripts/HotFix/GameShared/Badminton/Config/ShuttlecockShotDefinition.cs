@@ -1,5 +1,5 @@
 using System;
-using GameShared.FrameSync.Determinism;
+using FixedMathSharp;
 
 namespace GameShared.Badminton.Config
 {
@@ -7,19 +7,16 @@ namespace GameShared.Badminton.Config
     {
         public ShuttlecockShotDefinition(
             ShuttlecockShotType shotType,
-            float horizontalSpeed,
-            float launchAngleDegrees,
-            float horizontalDrag)
+            Fixed64 horizontalSpeed,
+            Fixed64 launchAngleDegrees,
+            Fixed64 horizontalDrag)
         {
-            DeterminismRules.AssertFinite(horizontalSpeed, nameof(horizontalSpeed));
-            DeterminismRules.AssertFinite(launchAngleDegrees, nameof(launchAngleDegrees));
-            DeterminismRules.AssertFinite(horizontalDrag, nameof(horizontalDrag));
-            if (horizontalSpeed < 0.0f)
+            if (horizontalSpeed < Fixed64.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(horizontalSpeed), horizontalSpeed, "Horizontal speed must be non-negative.");
             }
 
-            if (horizontalDrag < 0.0f)
+            if (horizontalDrag < Fixed64.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(horizontalDrag), horizontalDrag, "Horizontal drag must be non-negative.");
             }
@@ -31,8 +28,8 @@ namespace GameShared.Badminton.Config
         }
 
         public ShuttlecockShotType ShotType { get; }
-        public float HorizontalSpeed { get; }
-        public float LaunchAngleDegrees { get; }
-        public float HorizontalDrag { get; }
+        public Fixed64 HorizontalSpeed { get; }
+        public Fixed64 LaunchAngleDegrees { get; }
+        public Fixed64 HorizontalDrag { get; }
     }
 }

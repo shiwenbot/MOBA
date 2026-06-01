@@ -1,35 +1,35 @@
+using FixedMathSharp;
 using GameShared.Badminton.Config;
-using UnityEngine;
 
 namespace GameShared.Badminton
 {
     public sealed class ShuttlecockState
     {
-        public Vector2 XZ { get; set; }
-        public float Y { get; set; }
-        public Vector2 Vxz { get; set; }
-        public float Vy { get; set; }
+        public Vector2d XZ { get; set; }
+        public Fixed64 Y { get; set; }
+        public Vector2d Vxz { get; set; }
+        public Fixed64 Vy { get; set; }
         public ShuttlecockFlightPhase Phase { get; set; }
         public int LastValidFlyingFrame { get; set; }
-        public Vector2 LandingXZ { get; set; }
+        public Vector2d LandingXZ { get; set; }
         public bool IsInBounds { get; set; }
         public ShuttlecockShotType ActiveShotType { get; set; }
-        public float HorizontalDrag { get; set; }
+        public Fixed64 HorizontalDrag { get; set; }
 
         public bool IsTerminal => Phase == ShuttlecockFlightPhase.Landed || Phase == ShuttlecockFlightPhase.OutOfBounds;
 
         public void Reset()
         {
-            XZ = Vector2.zero;
-            Y = 0.0f;
-            Vxz = Vector2.zero;
-            Vy = 0.0f;
+            XZ = Vector2d.Zero;
+            Y = Fixed64.Zero;
+            Vxz = Vector2d.Zero;
+            Vy = Fixed64.Zero;
             Phase = ShuttlecockFlightPhase.Idle;
             LastValidFlyingFrame = -1;
-            LandingXZ = Vector2.zero;
+            LandingXZ = Vector2d.Zero;
             IsInBounds = false;
             ActiveShotType = ShuttlecockShotType.Clear;
-            HorizontalDrag = 0.0f;
+            HorizontalDrag = Fixed64.Zero;
         }
     }
 }

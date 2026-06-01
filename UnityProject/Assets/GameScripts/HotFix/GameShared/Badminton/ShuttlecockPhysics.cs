@@ -1,15 +1,15 @@
 using System;
+using FixedMathSharp;
 using GameShared.FrameSync.Determinism;
-using UnityEngine;
 
 namespace GameShared.Badminton
 {
     public static class ShuttlecockPhysics
     {
-        public const float Gravity = 9.8f;
-        public const float VerticalDrag = 0.5f;
+        public static readonly Fixed64 Gravity = new Fixed64(9.8);
+        public static readonly Fixed64 VerticalDrag = new Fixed64(0.5);
 
-        public static void Step(ShuttlecockState state, float dt, uint frameIndex)
+        public static void Step(ShuttlecockState state, Fixed64 dt, uint frameIndex)
         {
             if (state == null)
             {
@@ -17,49 +17,35 @@ namespace GameShared.Badminton
             }
 
             DeterminismRules.AssertFixedDt(dt);
-            EnsureFinite(state);
 
             if (state.Phase != ShuttlecockFlightPhase.Flying)
             {
                 return;
             }
 
-            float horizontalDecay = (float)Math.Exp(-state.HorizontalDrag * dt);
-            Vector2 nextVxz = state.Vxz * horizontalDecay;
-            Vector2 averageVxz = (state.Vxz + nextVxz) * 0.5f;
+            Fixed64 horizontalDecay = FixedMath.Exp(-state.HorizontalDrag * dt);
+            Vector2d nextVxz = state.Vxz * horizontalDecay;
+            Vector2d averageVxz = (state.Vxz + nextVxz) * Fixed64.Half;
             state.XZ += averageVxz * dt;
             state.Vxz = nextVxz;
 
-            float nextVy = (state.Vy * (float)Math.Exp(-VerticalDrag * dt)) - (Gravity * dt);
-            float averageVy = (state.Vy + nextVy) * 0.5f;
+            Fixed64 nextVy = (state.Vy * FixedMath.Exp(-VerticalDrag * dt)) - (Gravity * dt);
+            Fixed64 averageVy = (state.Vy + nextVy) * Fixed64.Half;
             state.Y += averageVy * dt;
             state.Vy = nextVy;
             state.LastValidFlyingFrame = unchecked((int)frameIndex);
 
-            if (state.Y > 0.0f)
+            if (state.Y > Fixed64.Zero)
             {
-                EnsureFinite(state);
                 return;
             }
 
-            state.Y = 0.0f;
+            state.Y = Fixed64.Zero;
             state.LandingXZ = state.XZ;
             state.IsInBounds = CourtConstants.IsInBounds(state.LandingXZ);
             state.Phase = state.IsInBounds ? ShuttlecockFlightPhase.Landed : ShuttlecockFlightPhase.OutOfBounds;
-            state.Vxz = Vector2.zero;
-            state.Vy = 0.0f;
-            EnsureFinite(state);
-        }
-
-        private static void EnsureFinite(ShuttlecockState state)
-        {
-            DeterminismRules.AssertFinite(state.XZ.x, nameof(state.XZ));
-            DeterminismRules.AssertFinite(state.XZ.y, nameof(state.XZ));
-            DeterminismRules.AssertFinite(state.Y, nameof(state.Y));
-            DeterminismRules.AssertFinite(state.Vxz.x, nameof(state.Vxz));
-            DeterminismRules.AssertFinite(state.Vxz.y, nameof(state.Vxz));
-            DeterminismRules.AssertFinite(state.Vy, nameof(state.Vy));
-            DeterminismRules.AssertFinite(state.HorizontalDrag, nameof(state.HorizontalDrag));
+            state.Vxz = Vector2d.Zero;
+            state.Vy = Fixed64.Zero;
         }
     }
 }
