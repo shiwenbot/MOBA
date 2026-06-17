@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Snapshot;
 
 namespace GameShared.FrameSync.Battle
@@ -19,6 +20,11 @@ namespace GameShared.FrameSync.Battle
         public IPhysicsMovementWorld PhysicsWorld => _physicsWorld;
 
         public void AddOrUpdatePlayer(long playerId, float x, float y)
+        {
+            AddOrUpdatePlayer(playerId, (Fixed64)x, (Fixed64)y);
+        }
+
+        public void AddOrUpdatePlayer(long playerId, Fixed64 x, Fixed64 y)
         {
             if (_players.TryGetValue(playerId, out PlayerState playerState))
             {

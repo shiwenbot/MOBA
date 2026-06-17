@@ -1,3 +1,5 @@
+using FixedMathSharp;
+
 namespace GameShared.FrameSync.Battle
 {
     public readonly struct PhysicsBodySnapshot
@@ -10,6 +12,29 @@ namespace GameShared.FrameSync.Battle
             float linearVelocityX,
             float linearVelocityY,
             float angularVelocity,
+            bool isAwake,
+            bool isEnabled)
+            : this(
+                bodyId,
+                (Fixed64)positionX,
+                (Fixed64)positionY,
+                (Fixed64)rotationRadians,
+                (Fixed64)linearVelocityX,
+                (Fixed64)linearVelocityY,
+                (Fixed64)angularVelocity,
+                isAwake,
+                isEnabled)
+        {
+        }
+
+        public PhysicsBodySnapshot(
+            int bodyId,
+            Fixed64 positionX,
+            Fixed64 positionY,
+            Fixed64 rotationRadians,
+            Fixed64 linearVelocityX,
+            Fixed64 linearVelocityY,
+            Fixed64 angularVelocity,
             bool isAwake,
             bool isEnabled)
         {
@@ -25,12 +50,12 @@ namespace GameShared.FrameSync.Battle
         }
 
         public int BodyId { get; }
-        public float PositionX { get; }
-        public float PositionY { get; }
-        public float RotationRadians { get; }
-        public float LinearVelocityX { get; }
-        public float LinearVelocityY { get; }
-        public float AngularVelocity { get; }
+        public Fixed64 PositionX { get; }
+        public Fixed64 PositionY { get; }
+        public Fixed64 RotationRadians { get; }
+        public Fixed64 LinearVelocityX { get; }
+        public Fixed64 LinearVelocityY { get; }
+        public Fixed64 AngularVelocity { get; }
         public bool IsAwake { get; }
         public bool IsEnabled { get; }
     }

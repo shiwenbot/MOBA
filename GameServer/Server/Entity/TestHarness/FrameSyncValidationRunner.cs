@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using FixedMathSharp;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
@@ -315,7 +316,7 @@ public static class FrameSyncValidator
 
         for (uint frame = 0; frame < 10; frame++)
         {
-            timerService.Tick(frame, TickAccumulator.DefaultFixedDeltaTime);
+            timerService.Tick(frame, TickAccumulator.DefaultFixedDeltaTimeFixed64);
         }
 
         string[] expected = { "R:2", "S:3", "R:4", "R:6", "R:8" };
@@ -329,7 +330,7 @@ public static class FrameSyncValidator
         uint secondId = 0;
         removeDuringCallback.AddTimer(1, _ => removeDuringCallback.RemoveTimer(secondId));
         secondId = removeDuringCallback.AddTimer(1, _ => secondTriggered = true);
-        removeDuringCallback.Tick(1, TickAccumulator.DefaultFixedDeltaTime);
+        removeDuringCallback.Tick(1, TickAccumulator.DefaultFixedDeltaTimeFixed64);
         if (secondTriggered)
         {
             failures.Add("FrameTimer remove-in-callback rule violated: removed timer still triggered in same frame.");
@@ -338,8 +339,8 @@ public static class FrameSyncValidator
         FrameTimerService addDuringCallback = new();
         uint childTriggeredFrame = uint.MaxValue;
         addDuringCallback.AddTimer(1, _ => addDuringCallback.AddTimer(0, frame => childTriggeredFrame = frame));
-        addDuringCallback.Tick(1, TickAccumulator.DefaultFixedDeltaTime);
-        addDuringCallback.Tick(2, TickAccumulator.DefaultFixedDeltaTime);
+        addDuringCallback.Tick(1, TickAccumulator.DefaultFixedDeltaTimeFixed64);
+        addDuringCallback.Tick(2, TickAccumulator.DefaultFixedDeltaTimeFixed64);
         if (childTriggeredFrame != 2)
         {
             failures.Add($"FrameTimer add-in-callback rule violated: expected child trigger at frame 2, actual={childTriggeredFrame}.");
@@ -765,10 +766,9 @@ public sealed class FrameSyncTickMetricsCollector : ITickable
     public int Priority => 0;
     public bool FrameSequenceContinuous { get; private set; } = true;
 
-    public void Tick(uint frameIndex, float fixedDt)
+    public void Tick(uint frameIndex, Fixed64 fixedDt)
     {
         DeterminismRules.AssertFixedDt(fixedDt);
-        DeterminismRules.AssertFinite(fixedDt, nameof(fixedDt));
 
         if (_hasLastFrame && frameIndex != _lastFrame + 1u)
         {

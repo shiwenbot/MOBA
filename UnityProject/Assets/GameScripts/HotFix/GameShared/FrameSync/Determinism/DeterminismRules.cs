@@ -8,7 +8,7 @@ namespace GameShared.FrameSync.Determinism
     public static class DeterminismRules
     {
         public const float FixedDeltaTime = TickAccumulator.DefaultFixedDeltaTime;
-        public const float MoveSpeed = 5.0f;
+        public static readonly Fixed64 MoveSpeed = (Fixed64)5;
         public static readonly Fixed64 FixedDeltaTimeFixed64 = TickAccumulator.DefaultFixedDeltaTimeFixed64;
         private static readonly int FixedDeltaBits = BitConverter.SingleToInt32Bits(FixedDeltaTime);
 

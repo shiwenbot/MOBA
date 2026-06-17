@@ -1,4 +1,5 @@
 using System;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.SkillGraph;
 
@@ -88,14 +89,14 @@ namespace GameShared.FrameSync.Snapshot
         private static bool BasicRoundTrip()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 3.5f, 8.0f);
+            worldState.AddOrUpdatePlayer(1, F(3.5f), F(8.0f));
             worldState.AddOrUpdatePlayer(2, -2.25f, 6.75f);
 
             BattleWorldSnapshot snapshotA = worldState.TakeSnapshot().WithFrameIndex(100);
             ulong hashA = StateHasher.Hash(snapshotA);
 
-            worldState.AddOrUpdatePlayer(1, 99.0f, 99.0f);
-            worldState.AddOrUpdatePlayer(2, -99.0f, -99.0f);
+            worldState.AddOrUpdatePlayer(1, F(99.0f), F(99.0f));
+            worldState.AddOrUpdatePlayer(2, F(-99.0f), F(-99.0f));
             worldState.RestoreSnapshot(snapshotA);
 
             BattleWorldSnapshot snapshotB = worldState.TakeSnapshot().WithFrameIndex(100);
@@ -135,7 +136,7 @@ namespace GameShared.FrameSync.Snapshot
                 return false;
             }
 
-            return latest.Players.Count == 1 && Math.Abs(latest.Players[0].X - 2.0f) < 0.0001f;
+            return latest.Players.Count == 1 && latest.Players[0].X.m_rawValue == F(2.0f).m_rawValue;
         }
 
         private static bool HashNormalization()
@@ -144,14 +145,14 @@ namespace GameShared.FrameSync.Snapshot
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, -0.0f, float.NaN)
+                    new PlayerStateSnapshot(1, F(0.0f), F(1.0f))
                 });
 
             BattleWorldSnapshot right = new BattleWorldSnapshot(
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, +0.0f, 0.0f)
+                    new PlayerStateSnapshot(1, F(0.0f), F(1.0f))
                 });
 
             return StateHasher.Hash(left) == StateHasher.Hash(right);
@@ -163,14 +164,14 @@ namespace GameShared.FrameSync.Snapshot
                 new PhysicsWorldSnapshot(
                     new[]
                     {
-                        new PhysicsBodySnapshot(7, 1.0f, 2.0f, 0.5f, 3.0f, 4.0f, 5.0f, true, true)
+                        new PhysicsBodySnapshot(7, F(1.0f), F(2.0f), F(0.5f), F(3.0f), F(4.0f), F(5.0f), true, true)
                     },
                     new[]
                     {
                         new PhysicsContactSnapshot(7, 8, true)
                     }));
             BattleWorldState worldState = new BattleWorldState(physicsProvider);
-            worldState.AddOrUpdatePlayer(1, 3.5f, 8.0f);
+            worldState.AddOrUpdatePlayer(1, F(3.5f), F(8.0f));
 
             BattleWorldSnapshot snapshot = worldState.TakeSnapshot().WithFrameIndex(100);
             PhysicsWorldSnapshot originalPhysics = snapshot.PhysicsSnapshot;
@@ -182,7 +183,7 @@ namespace GameShared.FrameSync.Snapshot
             physicsProvider.CurrentSnapshot = new PhysicsWorldSnapshot(
                 new[]
                 {
-                    new PhysicsBodySnapshot(99, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false, false)
+                    new PhysicsBodySnapshot(99, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, false, false)
                 });
             worldState.RestoreSnapshot(snapshot);
 
@@ -195,24 +196,24 @@ namespace GameShared.FrameSync.Snapshot
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero)
                 },
                 new PhysicsWorldSnapshot(
                     new[]
                     {
-                        new PhysicsBodySnapshot(1, 1.0f, 2.0f, 0.25f, 3.0f, 4.0f, 5.0f, true, true)
+                        new PhysicsBodySnapshot(1, F(1.0f), F(2.0f), F(0.25f), F(3.0f), F(4.0f), F(5.0f), true, true)
                     }));
 
             BattleWorldSnapshot right = new BattleWorldSnapshot(
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero)
                 },
                 new PhysicsWorldSnapshot(
                     new[]
                     {
-                        new PhysicsBodySnapshot(1, 10.0f, 2.0f, 0.25f, 3.0f, 4.0f, 5.0f, true, true)
+                        new PhysicsBodySnapshot(1, F(10.0f), F(2.0f), F(0.25f), F(3.0f), F(4.0f), F(5.0f), true, true)
                     }));
 
             return StateHasher.Hash(left) != StateHasher.Hash(right);
@@ -221,7 +222,7 @@ namespace GameShared.FrameSync.Snapshot
         private static bool AttributeRoundTrip()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 2.0f, 3.0f);
+            worldState.AddOrUpdatePlayer(1, F(2.0f), F(3.0f));
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -264,14 +265,14 @@ namespace GameShared.FrameSync.Snapshot
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, 0.0f, 0.0f, new PlayerAttributeSnapshot(100, 100, 40, 100, 10))
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(100, 100, 40, 100, 10))
                 });
 
             BattleWorldSnapshot right = new BattleWorldSnapshot(
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, 0.0f, 0.0f, new PlayerAttributeSnapshot(90, 100, 40, 100, 10))
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(90, 100, 40, 100, 10))
                 });
 
             return StateHasher.Hash(left) != StateHasher.Hash(right);
@@ -302,7 +303,7 @@ namespace GameShared.FrameSync.Snapshot
         private static bool BuffRoundTrip()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 2.0f, 3.0f);
+            worldState.AddOrUpdatePlayer(1, F(2.0f), F(3.0f));
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -351,8 +352,8 @@ namespace GameShared.FrameSync.Snapshot
                 {
                     new PlayerStateSnapshot(
                         1,
-                        0.0f,
-                        0.0f,
+                        Fixed64.Zero,
+                        Fixed64.Zero,
                         attributes,
                         new[]
                         {
@@ -373,8 +374,8 @@ namespace GameShared.FrameSync.Snapshot
                 {
                     new PlayerStateSnapshot(
                         1,
-                        0.0f,
-                        0.0f,
+                        Fixed64.Zero,
+                        Fixed64.Zero,
                         attributes,
                         new[]
                         {
@@ -395,7 +396,7 @@ namespace GameShared.FrameSync.Snapshot
         private static bool RuntimeBuffIdRoundTrip()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -436,7 +437,7 @@ namespace GameShared.FrameSync.Snapshot
             int expectedBuffId = BattleSkillGraphLibrary.ResolveConfiguredBuffId();
 
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -474,7 +475,7 @@ namespace GameShared.FrameSync.Snapshot
         {
             DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -532,7 +533,7 @@ namespace GameShared.FrameSync.Snapshot
         {
             DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -583,7 +584,7 @@ namespace GameShared.FrameSync.Snapshot
         {
             DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -628,7 +629,7 @@ namespace GameShared.FrameSync.Snapshot
         {
             DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -672,7 +673,7 @@ namespace GameShared.FrameSync.Snapshot
         {
             DefaultBuffConfigProvider provider = new DefaultBuffConfigProvider();
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -716,7 +717,7 @@ namespace GameShared.FrameSync.Snapshot
         private static bool MutexSameFrameTwoCommands()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -757,7 +758,7 @@ namespace GameShared.FrameSync.Snapshot
         private static bool StackableBridgeUpgrade()
         {
             BattleWorldState worldState = new BattleWorldState();
-            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState player))
             {
                 return false;
@@ -816,8 +817,13 @@ namespace GameShared.FrameSync.Snapshot
                 frameIndex,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, x, 0.0f)
+                    new PlayerStateSnapshot(1, F(x), Fixed64.Zero)
                 });
+        }
+
+        private static Fixed64 F(float value)
+        {
+            return (Fixed64)value;
         }
 
         private sealed class TestPhysicsSnapshotProvider : IPhysicsMovementWorld
@@ -843,7 +849,7 @@ namespace GameShared.FrameSync.Snapshot
             {
             }
 
-            public void EnsureBody(int bodyId, float x, float y)
+            public void EnsureBody(int bodyId, Fixed64 x, Fixed64 y)
             {
             }
 
@@ -851,15 +857,15 @@ namespace GameShared.FrameSync.Snapshot
             {
             }
 
-            public void SetBodyTransform(int bodyId, float x, float y, bool resetVelocity)
+            public void SetBodyTransform(int bodyId, Fixed64 x, Fixed64 y, bool resetVelocity)
             {
             }
 
-            public void SetBodyMovementInput(int bodyId, float dx, float dy)
+            public void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy)
             {
             }
 
-            public void Step(float dt)
+            public void Step(Fixed64 dt)
             {
             }
 

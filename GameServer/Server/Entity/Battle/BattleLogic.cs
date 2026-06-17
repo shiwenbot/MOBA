@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
@@ -47,6 +48,11 @@ public sealed class BattleLogic : IBuffCommandSink
     public int ZeroInputFallbackCount { get; private set; }
 
     public PlayerState JoinPlayer(long playerId, float x, float y)
+    {
+        return JoinPlayer(playerId, (Fixed64)x, (Fixed64)y);
+    }
+
+    public PlayerState JoinPlayer(long playerId, Fixed64 x, Fixed64 y)
     {
         if (_statesByPlayerId.TryGetValue(playerId, out PlayerState? existingState))
         {
@@ -97,7 +103,9 @@ public sealed class BattleLogic : IBuffCommandSink
             return;
         }
 
-        bool isInputEdge = IsSubmittedInputEdge(playerId, dx, dy);
+        Fixed64 fixedDx = (Fixed64)dx;
+        Fixed64 fixedDy = (Fixed64)dy;
+        bool isInputEdge = IsSubmittedInputEdge(playerId, fixedDx, fixedDy);
         // Allow frame 0 input before the first authoritative tick starts.
         if (_hasProcessedFrame && frameIndex <= LastFrameIndex)
         {
@@ -138,8 +146,8 @@ public sealed class BattleLogic : IBuffCommandSink
             return;
         }
 
-        playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, dx, dy, skillId);
-        _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, dx, dy);
+        playerInputs[frameIndex] = new PendingInput(frameIndex, inputSeq, fixedDx, fixedDy, skillId);
+        _lastSubmittedInputByPlayerId[playerId] = new SubmittedInput(frameIndex, inputSeq, fixedDx, fixedDy);
         if (!_latestAcceptedInputFrameByPlayerId.TryGetValue(playerId, out uint latestAcceptedFrame) ||
             frameIndex >= latestAcceptedFrame)
         {
@@ -148,7 +156,7 @@ public sealed class BattleLogic : IBuffCommandSink
         AcceptedInputCount++;
     }
 
-    public void Tick(uint frameIndex, float fixedDt)
+    public void Tick(uint frameIndex, Fixed64 fixedDt)
     {
         DeterminismRules.AssertFixedDt(fixedDt);
         LastFrameIndex = frameIndex;
@@ -167,8 +175,8 @@ public sealed class BattleLogic : IBuffCommandSink
                 continue;
             }
 
-            float dx = 0.0f;
-            float dy = 0.0f;
+            Fixed64 dx = Fixed64.Zero;
+            Fixed64 dy = Fixed64.Zero;
             bool consumedCurrentFrameInput = false;
             bool hadLastConsumedInput = _lastConsumedInputByPlayerId.TryGetValue(playerId, out ConsumedInput lastConsumedInput);
             if (_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) &&
@@ -180,10 +188,10 @@ public sealed class BattleLogic : IBuffCommandSink
                 if (!hadLastConsumedInput || !AreInputsEqual(dx, dy, lastConsumedInput.Dx, lastConsumedInput.Dy))
                 {
                     string previousInput = hadLastConsumedInput
-                        ? $"({lastConsumedInput.Dx:F3},{lastConsumedInput.Dy:F3})"
+                        ? FormatInput(lastConsumedInput.Dx, lastConsumedInput.Dy)
                         : "(none)";
                     _logDebug?.Invoke(
-                        $"[Battle][ConsumeInputEdge] frame={frameIndex} player={playerId} input={previousInput}->({dx:F3},{dy:F3})");
+                        $"[Battle][ConsumeInputEdge] frame={frameIndex} player={playerId} input={previousInput}->{FormatInput(dx, dy)}");
                 }
 
                 _lastConsumedInputByPlayerId[playerId] = new ConsumedInput(dx, dy);
@@ -209,7 +217,7 @@ public sealed class BattleLogic : IBuffCommandSink
             _physicsWorld.SetBodyMovementInput(checked((int)state.PlayerId), dx, dy);
             if (!consumedCurrentFrameInput && _logDebug != null)
             {
-                _logDebug($"[Battle][ReuseInput] Frame={frameIndex}, Player={playerId}, Dx={dx:F3}, Dy={dy:F3}");
+                _logDebug($"[Battle][ReuseInput] Frame={frameIndex}, Player={playerId}, Input={FormatInput(dx, dy)}");
             }
         }
 
@@ -509,7 +517,7 @@ public sealed class BattleLogic : IBuffCommandSink
         return unchecked(inputFrameIndex - maxAcceptedFrame) < 0x80000000 && inputFrameIndex > maxAcceptedFrame;
     }
 
-    private bool IsSubmittedInputEdge(long playerId, float dx, float dy)
+    private bool IsSubmittedInputEdge(long playerId, Fixed64 dx, Fixed64 dy)
     {
         if (!_lastSubmittedInputByPlayerId.TryGetValue(playerId, out SubmittedInput lastSubmittedInput))
         {
@@ -519,14 +527,19 @@ public sealed class BattleLogic : IBuffCommandSink
         return !AreInputsEqual(dx, dy, lastSubmittedInput.Dx, lastSubmittedInput.Dy);
     }
 
-    private static bool AreInputsEqual(float leftDx, float leftDy, float rightDx, float rightDy)
+    private static bool AreInputsEqual(Fixed64 leftDx, Fixed64 leftDy, Fixed64 rightDx, Fixed64 rightDy)
     {
-        return leftDx == rightDx && leftDy == rightDy;
+        return leftDx.m_rawValue == rightDx.m_rawValue && leftDy.m_rawValue == rightDy.m_rawValue;
+    }
+
+    private static string FormatInput(Fixed64 dx, Fixed64 dy)
+    {
+        return $"({(float)dx:F3},{(float)dy:F3})";
     }
 
     private readonly struct PendingInput
     {
-        public PendingInput(uint frameIndex, uint inputSeq, float dx, float dy, int skillId)
+        public PendingInput(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
         {
             FrameIndex = frameIndex;
             InputSeq = inputSeq;
@@ -537,14 +550,14 @@ public sealed class BattleLogic : IBuffCommandSink
 
         public uint FrameIndex { get; }
         public uint InputSeq { get; }
-        public float Dx { get; }
-        public float Dy { get; }
+        public Fixed64 Dx { get; }
+        public Fixed64 Dy { get; }
         public int SkillId { get; }
     }
 
     private readonly struct SubmittedInput
     {
-        public SubmittedInput(uint frameIndex, uint inputSeq, float dx, float dy)
+        public SubmittedInput(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy)
         {
             FrameIndex = frameIndex;
             InputSeq = inputSeq;
@@ -554,19 +567,19 @@ public sealed class BattleLogic : IBuffCommandSink
 
         public uint FrameIndex { get; }
         public uint InputSeq { get; }
-        public float Dx { get; }
-        public float Dy { get; }
+        public Fixed64 Dx { get; }
+        public Fixed64 Dy { get; }
     }
 
     private readonly struct ConsumedInput
     {
-        public ConsumedInput(float dx, float dy)
+        public ConsumedInput(Fixed64 dx, Fixed64 dy)
         {
             Dx = dx;
             Dy = dy;
         }
 
-        public float Dx { get; }
-        public float Dy { get; }
+        public Fixed64 Dx { get; }
+        public Fixed64 Dy { get; }
     }
 }

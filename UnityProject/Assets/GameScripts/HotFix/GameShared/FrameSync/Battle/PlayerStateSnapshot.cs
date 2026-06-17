@@ -1,16 +1,39 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 
 namespace GameShared.FrameSync.Battle
 {
     public readonly struct PlayerStateSnapshot
     {
         public PlayerStateSnapshot(long playerId, float x, float y)
-            : this(playerId, x, y, PlayerAttributeSnapshot.Default)
+            : this(playerId, (Fixed64)x, (Fixed64)y)
         {
         }
 
         public PlayerStateSnapshot(long playerId, float x, float y, PlayerAttributeSnapshot attributes)
+            : this(playerId, (Fixed64)x, (Fixed64)y, attributes)
+        {
+        }
+
+        public PlayerStateSnapshot(
+            long playerId,
+            float x,
+            float y,
+            PlayerAttributeSnapshot attributes,
+            IReadOnlyList<BuffState> activeBuffs,
+            long nextRuntimeBuffId,
+            NumericModifierSnapshot numeric)
+            : this(playerId, (Fixed64)x, (Fixed64)y, attributes, activeBuffs, nextRuntimeBuffId, numeric)
+        {
+        }
+
+        public PlayerStateSnapshot(long playerId, Fixed64 x, Fixed64 y)
+            : this(playerId, x, y, PlayerAttributeSnapshot.Default)
+        {
+        }
+
+        public PlayerStateSnapshot(long playerId, Fixed64 x, Fixed64 y, PlayerAttributeSnapshot attributes)
             : this(
                 playerId,
                 x,
@@ -24,8 +47,8 @@ namespace GameShared.FrameSync.Battle
 
         public PlayerStateSnapshot(
             long playerId,
-            float x,
-            float y,
+            Fixed64 x,
+            Fixed64 y,
             PlayerAttributeSnapshot attributes,
             IReadOnlyList<BuffState> activeBuffs,
             long nextRuntimeBuffId,
@@ -41,8 +64,8 @@ namespace GameShared.FrameSync.Battle
         }
 
         public long PlayerId { get; }
-        public float X { get; }
-        public float Y { get; }
+        public Fixed64 X { get; }
+        public Fixed64 Y { get; }
         public PlayerAttributeSnapshot Attributes { get; }
         public IReadOnlyList<BuffState> ActiveBuffs { get; }
         public long NextRuntimeBuffId { get; }

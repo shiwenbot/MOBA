@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Determinism;
 
 namespace GameShared.FrameSync.Core
@@ -14,6 +15,7 @@ namespace GameShared.FrameSync.Core
         private bool _isTicking;
         private long _nextRegistrationOrder;
         private uint _currentFrame;
+        private readonly Fixed64 _fixedDt;
 
         public TickDispatcher(
             float fixedDeltaTime = TickAccumulator.DefaultFixedDeltaTime,
@@ -21,6 +23,7 @@ namespace GameShared.FrameSync.Core
             IFrameSyncLogger? logger = null)
         {
             _tickAccumulator = new TickAccumulator(fixedDeltaTime, maxDeltaTime);
+            _fixedDt = (Fixed64)_tickAccumulator.FixedDeltaTime;
             _logger = logger;
         }
 
@@ -66,7 +69,7 @@ namespace GameShared.FrameSync.Core
             int tickCount = _tickAccumulator.Accumulate(deltaTime);
             for (int tickIndex = 0; tickIndex < tickCount; tickIndex++)
             {
-                ExecuteTick(_tickAccumulator.FixedDeltaTime);
+                ExecuteTick(_fixedDt);
             }
 
             if (!_isTicking && _pendingOperations.Count > 0)
@@ -77,7 +80,7 @@ namespace GameShared.FrameSync.Core
 
         public void TickOnce()
         {
-            ExecuteTick(_tickAccumulator.FixedDeltaTime);
+            ExecuteTick(_fixedDt);
 
             if (!_isTicking && _pendingOperations.Count > 0)
             {
@@ -99,7 +102,7 @@ namespace GameShared.FrameSync.Core
             }
         }
 
-        private void ExecuteTick(float fixedDeltaTime)
+        private void ExecuteTick(Fixed64 fixedDeltaTime)
         {
             DeterminismRules.AssertFixedDt(fixedDeltaTime);
 

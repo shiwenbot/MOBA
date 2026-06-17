@@ -61,14 +61,13 @@ namespace GameShared.Badminton
             InsertPendingCommand(queuedCommand);
         }
 
-        public void Tick(uint frameIndex, float fixedDt)
+        public void Tick(uint frameIndex, Fixed64 fixedDt)
         {
             DeterminismRules.AssertFixedDt(fixedDt);
-            Fixed64 dt = DeterminismRules.FixedDeltaTimeFixed64;
             ConsumePendingCommands(frameIndex);
             if (State.Phase == ShuttlecockFlightPhase.Flying)
             {
-                ShuttlecockPhysics.Step(State, dt, frameIndex);
+                ShuttlecockPhysics.Step(State, fixedDt, frameIndex);
             }
 
             SaveSnapshot(frameIndex);
@@ -180,13 +179,13 @@ namespace GameShared.Badminton
             replayEntity.EnqueueLaunch(templateCommand);
             for (uint frame = 1; frame <= totalFrames; frame++)
             {
-                replayEntity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                replayEntity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
             }
 
             replayEntity.RollBack(rollbackFrame);
             for (uint frame = rollbackFrame + 1; frame <= totalFrames; frame++)
             {
-                replayEntity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                replayEntity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
                 EnsureSnapshotsMatch(
                     baseline[frame],
                     replayEntity.TakeSnapshot().WithFrameIndex(frame),
@@ -205,7 +204,7 @@ namespace GameShared.Badminton
             snapshots[0] = entity.TakeSnapshot().WithFrameIndex(0);
             for (uint frame = 1; frame <= totalFrames; frame++)
             {
-                entity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                entity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
                 snapshots[frame] = entity.TakeSnapshot().WithFrameIndex(frame);
             }
 

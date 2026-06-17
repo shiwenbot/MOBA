@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using FixedMathSharp;
 using GameLogic;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
@@ -456,16 +457,16 @@ public static class TestRunner
         battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
         for (uint frame = 0; frame < 5; frame++)
         {
-            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
-            if (state.X != 0.0f)
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
+            if (state.X.m_rawValue != Fixed64.Zero.m_rawValue)
             {
                 return false;
             }
         }
 
-        battleLogic.Tick(5, DeterminismRules.FixedDeltaTime);
-        float expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
-        return Math.Abs(state.X - expectedX) < 0.0001f;
+        battleLogic.Tick(5, DeterminismRules.FixedDeltaTimeFixed64);
+        Fixed64 expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTimeFixed64;
+        return Near(state.X, expectedX);
     }
 
     private static bool ExpiredInputIsDropped()
@@ -473,11 +474,11 @@ public static class TestRunner
         BattleLogic battleLogic = new BattleLogic();
         PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
 
-        battleLogic.Tick(0, DeterminismRules.FixedDeltaTime);
+        battleLogic.Tick(0, DeterminismRules.FixedDeltaTimeFixed64);
         battleLogic.SubmitInput(1, 0, 1, 1.0f, 0.0f);
-        battleLogic.Tick(1, DeterminismRules.FixedDeltaTime);
+        battleLogic.Tick(1, DeterminismRules.FixedDeltaTimeFixed64);
 
-        return Math.Abs(state.X) < 0.0001f && battleLogic.LateInputDropCount == 1;
+        return NearZero(state.X) && battleLogic.LateInputDropCount == 1;
     }
 
     private static bool FutureInputIsBuffered()
@@ -488,16 +489,16 @@ public static class TestRunner
         battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
         for (uint frame = 0; frame < 5; frame++)
         {
-            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
-            if (Math.Abs(state.X) >= 0.0001f)
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
+            if (!NearZero(state.X))
             {
                 return false;
             }
         }
 
-        battleLogic.Tick(5, DeterminismRules.FixedDeltaTime);
-        float expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
-        return Math.Abs(state.X - expectedX) < 0.0001f &&
+        battleLogic.Tick(5, DeterminismRules.FixedDeltaTimeFixed64);
+        Fixed64 expectedX = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTimeFixed64;
+        return Near(state.X, expectedX) &&
                battleLogic.AcceptedInputCount == 1 &&
                battleLogic.FutureInputRejectCount == 0;
     }
@@ -511,10 +512,10 @@ public static class TestRunner
         battleLogic.SubmitInput(1, rejectedFrame, 1, 1.0f, 0.0f);
         for (uint frame = 0; frame <= rejectedFrame; frame++)
         {
-            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
         }
 
-        return Math.Abs(state.X) < 0.0001f && battleLogic.FutureInputRejectCount == 1;
+        return NearZero(state.X) && battleLogic.FutureInputRejectCount == 1;
     }
 
     private static bool MissingInputReusesLast()
@@ -522,19 +523,19 @@ public static class TestRunner
         BattleLogic battleLogic = new BattleLogic();
         PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
 
-        battleLogic.Tick(0, DeterminismRules.FixedDeltaTime);
-        if (Math.Abs(state.X) >= 0.0001f)
+        battleLogic.Tick(0, DeterminismRules.FixedDeltaTimeFixed64);
+        if (!NearZero(state.X))
         {
             return false;
         }
 
         battleLogic.SubmitInput(1, 1, 1, 1.0f, 0.0f);
-        battleLogic.Tick(1, DeterminismRules.FixedDeltaTime);
-        float afterFirstTick = state.X;
+        battleLogic.Tick(1, DeterminismRules.FixedDeltaTimeFixed64);
+        Fixed64 afterFirstTick = state.X;
 
-        battleLogic.Tick(2, DeterminismRules.FixedDeltaTime);
-        float expectedX = afterFirstTick + (DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime);
-        return Math.Abs(state.X - expectedX) < 0.0001f &&
+        battleLogic.Tick(2, DeterminismRules.FixedDeltaTimeFixed64);
+        Fixed64 expectedX = afterFirstTick + (DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTimeFixed64);
+        return Near(state.X, expectedX) &&
                battleLogic.ReusedInputCount == 1 &&
                battleLogic.ZeroInputFallbackCount == 1;
     }
@@ -555,7 +556,7 @@ public static class TestRunner
                 harness.Clients[i].SubmitInput(frame, dx, dy);
             }
 
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
         }
 
         ulong expectedHash = harness.Clients[0].GetStateHash();
@@ -584,7 +585,7 @@ public static class TestRunner
         {
             (float dx, float dy) = SharedMovementScript(frame);
             client.SubmitInput(frame, dx, dy);
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
             if (frame % 30 != 0)
             {
@@ -623,7 +624,7 @@ public static class TestRunner
                 harness.Clients[i].SubmitInput(frame, dx, dy);
             }
 
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
             if (frame <= StopInputFrame)
             {
@@ -721,7 +722,7 @@ public static class TestRunner
         {
             harness.Clients[0].SubmitInput(frame, 1.0f, 0.0f);
             harness.Clients[1].SubmitInput(frame, 0.0f, 0.0f);
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
             if (!TryGetOrderedPlayers(harness.Clients[0].WorldState, 1, 2, out PlayerState mover, out PlayerState blocker))
             {
@@ -730,9 +731,9 @@ public static class TestRunner
                 return false;
             }
 
-            float separation = blocker.X - mover.X;
+            float separation = (float)(blocker.X - mover.X);
             minimumSeparation = Math.Min(minimumSeparation, separation);
-            maximumStationaryDisplacement = Math.Max(maximumStationaryDisplacement, Math.Abs(blocker.X - stationaryPlayerX));
+            maximumStationaryDisplacement = Math.Max(maximumStationaryDisplacement, Math.Abs((float)blocker.X - stationaryPlayerX));
 
             PhysicsWorldSnapshot physicsSnapshot = harness.Clients[0].WorldState.TakeSnapshot().PhysicsSnapshot;
             if (physicsSnapshot != null && physicsSnapshot.Contacts.Count > 0)
@@ -786,7 +787,7 @@ public static class TestRunner
         battleLogic.SubmitInput(1, 5, 1, 0.0f, 0.0f, skillId);
         for (uint frame = 0; frame <= 5; frame++)
         {
-            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
         }
 
         return player.ActiveBuffs.Count == 1 &&
@@ -818,7 +819,7 @@ public static class TestRunner
         {
             harness.Clients[0].SubmitInput(frame, 1.0f, 0.0f);
             harness.Clients[1].SubmitInput(frame, -1.0f, 0.0f);
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
             if (!TryGetOrderedPlayers(harness.Clients[0].WorldState, 1, 2, out PlayerState leftPlayer, out PlayerState rightPlayer))
             {
@@ -827,7 +828,7 @@ public static class TestRunner
                 return false;
             }
 
-            float separation = rightPlayer.X - leftPlayer.X;
+            float separation = (float)(rightPlayer.X - leftPlayer.X);
             minimumSeparation = Math.Min(minimumSeparation, separation);
 
             PhysicsWorldSnapshot physicsSnapshot = harness.Clients[0].WorldState.TakeSnapshot().PhysicsSnapshot;
@@ -844,7 +845,7 @@ public static class TestRunner
             return false;
         }
 
-        float finalSeparation = finalRightPlayer.X - finalLeftPlayer.X;
+        float finalSeparation = (float)(finalRightPlayer.X - finalLeftPlayer.X);
         ulong serverHash = harness.BattleLogic.GetStateHash();
         ulong clientHash = harness.Clients[0].GetStateHash();
         if (serverHash != clientHash)
@@ -893,7 +894,7 @@ public static class TestRunner
         Harness harness = CreateHarness(Math.Max(2, options.Clients));
         long playerA = harness.Clients[0].PlayerId;
         long playerB = harness.Clients[1].PlayerId;
-        float beforeLeaveX = 0.0f;
+        Fixed64 beforeLeaveX = Fixed64.Zero;
         bool capturedBeforeLeave = false;
 
         for (uint frame = 0; frame < totalFrames; frame++)
@@ -915,7 +916,7 @@ public static class TestRunner
                 harness.Clients[i].SubmitInput(frame, dx, dy);
             }
 
-            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTime);
+            harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
             if (frame != LeaveFrame - 1)
             {
@@ -955,7 +956,7 @@ public static class TestRunner
         {
             return ScenarioResult.Fail(
                 "PlayerLeave (player B leaves at frame 100)",
-                $"player A stopped moving after leave beforeX={beforeLeaveX:F3} afterX={finalState.X:F3}");
+                $"player A stopped moving after leave beforeX={(float)beforeLeaveX:F3} afterX={(float)finalState.X:F3}");
         }
 
         ulong serverHash = harness.BattleLogic.GetStateHash();
@@ -1009,6 +1010,16 @@ public static class TestRunner
         }
 
         return new Harness(battleLogic, clients);
+    }
+
+    private static bool NearZero(Fixed64 value)
+    {
+        return FixedMath.Abs(value) < (Fixed64)0.0001f;
+    }
+
+    private static bool Near(Fixed64 actual, Fixed64 expected)
+    {
+        return FixedMath.Abs(actual - expected) < (Fixed64)0.0001f;
     }
 
     private static (float dx, float dy) SharedMovementScript(uint frame)

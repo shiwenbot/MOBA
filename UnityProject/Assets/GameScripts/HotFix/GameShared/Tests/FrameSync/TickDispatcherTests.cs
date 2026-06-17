@@ -1,6 +1,7 @@
 #if FANTASY_UNITY && UNITY_INCLUDE_TESTS
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Core;
 using NUnit.Framework;
 
@@ -94,7 +95,7 @@ namespace GameShared.FrameSync.Tests
             Assert.That(dispatcher.CurrentFrame, Is.EqualTo(1));
             Assert.That(tickable.Frames, Is.EqualTo(new[] { 0u }));
             Assert.That(tickable.Dts.Count, Is.EqualTo(1));
-            Assert.That(tickable.Dts[0], Is.EqualTo(TickAccumulator.DefaultFixedDeltaTime));
+            Assert.That(tickable.Dts[0].m_rawValue, Is.EqualTo(TickAccumulator.DefaultFixedDeltaTimeFixed64.m_rawValue));
         }
 
         private sealed class MockTickable : ITickable
@@ -110,9 +111,9 @@ namespace GameShared.FrameSync.Tests
             }
 
             public int Priority { get; }
-            public Action<uint, float> OnTick { get; set; }
+            public Action<uint, Fixed64> OnTick { get; set; }
 
-            public void Tick(uint frameIndex, float fixedDt)
+            public void Tick(uint frameIndex, Fixed64 fixedDt)
             {
                 _calls.Add($"{_name}:{frameIndex}");
                 OnTick?.Invoke(frameIndex, fixedDt);
@@ -129,7 +130,7 @@ namespace GameShared.FrameSync.Tests
             public int Priority { get; }
             public int Ticks { get; private set; }
 
-            public void Tick(uint frameIndex, float fixedDt)
+            public void Tick(uint frameIndex, Fixed64 fixedDt)
             {
                 Ticks++;
             }
@@ -144,7 +145,7 @@ namespace GameShared.FrameSync.Tests
 
             public int Priority { get; }
 
-            public void Tick(uint frameIndex, float fixedDt)
+            public void Tick(uint frameIndex, Fixed64 fixedDt)
             {
                 throw new InvalidOperationException("Tick failed.");
             }
@@ -159,9 +160,9 @@ namespace GameShared.FrameSync.Tests
 
             public int Priority { get; }
             public List<uint> Frames { get; } = new List<uint>();
-            public List<float> Dts { get; } = new List<float>();
+            public List<Fixed64> Dts { get; } = new List<Fixed64>();
 
-            public void Tick(uint frameIndex, float fixedDt)
+            public void Tick(uint frameIndex, Fixed64 fixedDt)
             {
                 Frames.Add(frameIndex);
                 Dts.Add(fixedDt);

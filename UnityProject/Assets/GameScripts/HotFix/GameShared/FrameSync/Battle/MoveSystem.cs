@@ -1,4 +1,5 @@
 using System;
+using FixedMathSharp;
 using GameShared.FrameSync.Determinism;
 
 namespace GameShared.FrameSync.Battle
@@ -6,6 +7,11 @@ namespace GameShared.FrameSync.Battle
     public static class MoveSystem
     {
         public static void Apply(BattleWorldState worldState, PlayerState state, float dx, float dy, float dt)
+        {
+            Apply(worldState, state, (Fixed64)dx, (Fixed64)dy, (Fixed64)dt);
+        }
+
+        public static void Apply(BattleWorldState worldState, PlayerState state, Fixed64 dx, Fixed64 dy, Fixed64 dt)
         {
             if (worldState == null)
             {
@@ -17,8 +23,6 @@ namespace GameShared.FrameSync.Battle
                 throw new ArgumentNullException(nameof(state));
             }
 
-            DeterminismRules.AssertFinite(dx, nameof(dx));
-            DeterminismRules.AssertFinite(dy, nameof(dy));
             DeterminismRules.AssertFixedDt(dt);
 
             worldState.PhysicsWorld.SetBodyMovementInput(checked((int)state.PlayerId), dx, dy);

@@ -1,4 +1,5 @@
 using System;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
 
@@ -92,7 +93,7 @@ namespace GameLogic
         {
             BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out SentInputRecorder recorder, out _);
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             return recorder.LastFrameIndex == 11;
         }
 
@@ -100,7 +101,7 @@ namespace GameLogic
         {
             BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out SentInputRecorder recorder, out _);
             simulation.SetJoined(9, 60, 0.0f, 0.0f);
-            simulation.Tick(61, DeterminismRules.FixedDeltaTime, 1.0f, 1.0f);
+            simulation.Tick(61, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.One);
 
             float sqrMagnitude = (recorder.LastDx * recorder.LastDx) + (recorder.LastDy * recorder.LastDy);
             return sqrMagnitude <= 1.0001f && sqrMagnitude >= 0.9990f;
@@ -112,8 +113,8 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
-            return worldState.TryGetPlayer(1, out PlayerState selfPlayer) && selfPlayer.X > 0.0f;
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            return worldState.TryGetPlayer(1, out PlayerState selfPlayer) && selfPlayer.X > Fixed64.Zero;
         }
 
         private static bool CatchUpTargetIsAuthPlusLead()
@@ -132,7 +133,7 @@ namespace GameLogic
                     }),
                 20);
 
-            TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             int expectedCatchUpFrames = (int)(20 + simulation.LeadFrames - 11);
             uint expectedTargetFrameExclusive = unchecked(20 + simulation.LeadFrames + 1u);
             return result.SnapshotApplied &&
@@ -146,7 +147,7 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -161,7 +162,7 @@ namespace GameLogic
                     }),
                 11);
 
-            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return !result.ConsistencyMismatch &&
                    simulation.ConsistencyChecked == 1 &&
                    simulation.ConsistencyHits == 1 &&
@@ -174,16 +175,16 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState afterFrame11))
             {
                 return false;
             }
 
-            float frame11X = afterFrame11.X;
-            float frame11Y = afterFrame11.Y;
+            Fixed64 frame11X = afterFrame11.X;
+            Fixed64 frame11Y = afterFrame11.Y;
 
-            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState afterFrame12))
             {
                 return false;
@@ -207,7 +208,7 @@ namespace GameLogic
                     }),
                 12);
 
-            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return result.SnapshotApplied &&
                    !result.ConsistencyMismatch &&
                    simulation.LastAppliedFrame == 12 &&
@@ -221,7 +222,7 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -232,11 +233,11 @@ namespace GameLogic
                     11,
                     new[]
                     {
-                        new PlayerStateSnapshot(1, selfPlayer.X + 1.0f, selfPlayer.Y)
+                        new PlayerStateSnapshot(1, selfPlayer.X + Fixed64.One, selfPlayer.Y)
                     }),
                 11);
 
-            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return result.ConsistencyMismatch &&
                    simulation.ConsistencyChecked == 1 &&
                    simulation.ConsistencyHits == 0 &&
@@ -249,7 +250,7 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -264,7 +265,7 @@ namespace GameLogic
                     }),
                 11);
 
-            TickResult result = simulation.Tick(99, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(99, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return !result.ConsistencyMismatch && simulation.ConsistencyHits == 1;
         }
 
@@ -282,7 +283,7 @@ namespace GameLogic
                     }),
                 11);
 
-            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return simulation.ConsistencySkippedNoRecord == 1 && simulation.ConsistencyChecked == 0;
         }
 
@@ -293,7 +294,7 @@ namespace GameLogic
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
             for (uint frame = 11; frame <= 43; frame++)
             {
-                simulation.Tick(frame, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             }
 
             return simulation.ConsistencySkippedEvicted >= 1;
@@ -314,7 +315,7 @@ namespace GameLogic
                     }),
                 20);
 
-            TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return result.SnapshotApplied &&
                    simulation.LastServerBufferedInputFrames == 0 &&
                    simulation.LeadFrames > leadBefore;
@@ -332,8 +333,8 @@ namespace GameLogic
                 return false;
             }
 
-            MoveSystem.Apply(worldState, remotePlayer, 1.0f, 0.0f, DeterminismRules.FixedDeltaTime);
-            worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTime);
+            MoveSystem.Apply(worldState, remotePlayer, Fixed64.One, Fixed64.Zero, DeterminismRules.FixedDeltaTimeFixed64);
+            worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTimeFixed64);
             MoveSystem.SyncFromPhysics(worldState, remotePlayer);
 
             simulation.EnqueueServerSnapshot(
@@ -352,7 +353,7 @@ namespace GameLogic
                         })),
                 11);
 
-            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
 
             if (!worldState.TryGetPlayer(2, out PlayerState restoredRemotePlayer))
             {
@@ -360,13 +361,13 @@ namespace GameLogic
             }
 
             BattleWorldSnapshot localSnapshot = worldState.TakeSnapshot();
-            return Math.Abs(restoredRemotePlayer.X - 5.0f) < 0.0001f &&
-                   Math.Abs(restoredRemotePlayer.Y) < 0.0001f &&
+            return Near(restoredRemotePlayer.X, F(5.0f)) &&
+                   Near(restoredRemotePlayer.Y, Fixed64.Zero) &&
                    TryGetBodySnapshot(localSnapshot, 2, out PhysicsBodySnapshot remoteBody) &&
-                   Math.Abs(remoteBody.PositionX - 5.0f) < 0.0001f &&
-                   Math.Abs(remoteBody.PositionY) < 0.0001f &&
-                   Math.Abs(remoteBody.LinearVelocityX) < 0.0001f &&
-                   Math.Abs(remoteBody.LinearVelocityY) < 0.0001f;
+                   Near(remoteBody.PositionX, F(5.0f)) &&
+                   Near(remoteBody.PositionY, Fixed64.Zero) &&
+                   Near(remoteBody.LinearVelocityX, Fixed64.Zero) &&
+                   Near(remoteBody.LinearVelocityY, Fixed64.Zero);
         }
 
         private static bool AuthoritativeSnapshotRestoresPlayerAttributes()
@@ -375,7 +376,7 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -391,7 +392,7 @@ namespace GameLogic
                     }),
                 11);
 
-            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
             {
                 return false;
@@ -437,7 +438,7 @@ namespace GameLogic
                     }),
                 11);
 
-            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState restoredPlayer))
             {
                 return false;
@@ -466,7 +467,7 @@ namespace GameLogic
                 FrameIndex = 11,
                 Flags = BuffFlags.Duration
             });
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -488,7 +489,7 @@ namespace GameLogic
                     }),
                 11);
 
-            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             return !result.ConsistencyMismatch &&
                    simulation.ConsistencyChecked == 1 &&
                    simulation.ConsistencyHits == 1 &&
@@ -497,20 +498,27 @@ namespace GameLogic
 
         private static bool RollbackReplaysBeforeNextConsistencyCheck()
         {
-            float step = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
             BattleWorldState worldState = new BattleWorldState();
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
-            simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame11))
+            {
+                return false;
+            }
+
+            Fixed64 authoritativeFrame11X = PredictNextX(afterFrame11.X);
+            Fixed64 authoritativeFrame12X = PredictNextX(authoritativeFrame11X);
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
 
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
                     11,
                     new[]
                     {
-                        new PlayerStateSnapshot(1, step * 2.0f, 0.0f)
+                        new PlayerStateSnapshot(1, authoritativeFrame11X, Fixed64.Zero)
                     }),
                 11);
 
@@ -519,11 +527,11 @@ namespace GameLogic
                     12,
                     new[]
                     {
-                        new PlayerStateSnapshot(1, step * 3.0f, 0.0f)
+                        new PlayerStateSnapshot(1, authoritativeFrame12X, Fixed64.Zero)
                     }),
                 12);
 
-            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTime, 0.0f, 0.0f);
+            TickResult result = simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
@@ -536,28 +544,34 @@ namespace GameLogic
                    simulation.ConsistencyMisses == 1 &&
                    simulation.RollbackCount == 1 &&
                    simulation.LastRollbackReplayFrames == 1 &&
-                   Math.Abs(selfPlayer.X - (step * 3.0f)) < 0.0001f;
+                   Near(selfPlayer.X, authoritativeFrame12X);
         }
 
         private static bool ManualRollbackReplaysAuthoritativeHistory()
         {
-            float step = DeterminismRules.MoveSpeed * DeterminismRules.FixedDeltaTime;
             BattleWorldState worldState = new BattleWorldState();
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            simulation.Tick(11, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame11))
+            {
+                return false;
+            }
+
+            Fixed64 authoritativeFrame11X = PredictNextX(afterFrame11.X);
+            Fixed64 expectedRestoredX = PredictNextX(authoritativeFrame11X);
 
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
                     11,
                     new[]
                     {
-                        new PlayerStateSnapshot(1, step * 2.0f, 0.0f)
+                        new PlayerStateSnapshot(1, authoritativeFrame11X, Fixed64.Zero)
                     }),
                 11);
 
-            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTime, 1.0f, 0.0f);
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             if (!result.ConsistencyMismatch)
             {
                 return false;
@@ -568,8 +582,8 @@ namespace GameLogic
                 return false;
             }
 
-            selfPlayer.X = 99.0f;
-            selfPlayer.Y = 99.0f;
+            selfPlayer.X = F(99.0f);
+            selfPlayer.Y = F(99.0f);
 
             simulation.RollBack(11);
 
@@ -580,8 +594,8 @@ namespace GameLogic
 
             return simulation.RollbackCount == 2 &&
                    simulation.LastRollbackReplayFrames == 1 &&
-                   Math.Abs(restoredPlayer.X - (step * 3.0f)) < 0.0001f &&
-                   Math.Abs(restoredPlayer.Y) < 0.0001f;
+                   Near(restoredPlayer.X, expectedRestoredX) &&
+                   Near(restoredPlayer.Y, Fixed64.Zero);
         }
 
         private static bool TryGetBodySnapshot(
@@ -605,6 +619,31 @@ namespace GameLogic
 
             bodySnapshot = default;
             return false;
+        }
+
+        private static Fixed64 F(float value)
+        {
+            return (Fixed64)value;
+        }
+
+        private static Fixed64 PredictNextX(Fixed64 startX)
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, startX, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                return startX;
+            }
+
+            MoveSystem.Apply(worldState, player, Fixed64.One, Fixed64.Zero, DeterminismRules.FixedDeltaTimeFixed64);
+            worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTimeFixed64);
+            MoveSystem.SyncFromPhysics(worldState, player);
+            return player.X;
+        }
+
+        private static bool Near(Fixed64 actual, Fixed64 expected)
+        {
+            return FixedMath.Abs(actual - expected) < F(0.0001f);
         }
 
         private static BattleSimulation CreateSimulation(

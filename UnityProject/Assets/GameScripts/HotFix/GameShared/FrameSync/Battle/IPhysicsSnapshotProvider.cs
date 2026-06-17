@@ -1,3 +1,5 @@
+using FixedMathSharp;
+
 namespace GameShared.FrameSync.Battle
 {
     public interface IPhysicsSnapshotProvider
@@ -11,15 +13,15 @@ namespace GameShared.FrameSync.Battle
     {
         void ClearBodies();
 
-        void EnsureBody(int bodyId, float x, float y);
+        void EnsureBody(int bodyId, Fixed64 x, Fixed64 y);
 
         void RemoveBody(int bodyId);
 
-        void SetBodyTransform(int bodyId, float x, float y, bool resetVelocity);
+        void SetBodyTransform(int bodyId, Fixed64 x, Fixed64 y, bool resetVelocity);
 
-        void SetBodyMovementInput(int bodyId, float dx, float dy);
+        void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy);
 
-        void Step(float dt);
+        void Step(Fixed64 dt);
 
         bool TryGetBodySnapshot(int bodyId, out PhysicsBodySnapshot snapshot);
     }

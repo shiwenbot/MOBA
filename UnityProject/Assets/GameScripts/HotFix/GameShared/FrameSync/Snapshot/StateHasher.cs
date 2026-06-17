@@ -7,7 +7,6 @@ namespace GameShared.FrameSync.Snapshot
     {
         private const ulong FnvOffsetBasis = 14695981039346656037UL;
         private const ulong FnvPrime = 1099511628211UL;
-        private const int NegativeZeroBits = unchecked((int)0x80000000);
 
         public static ulong Hash(BattleWorldSnapshot snapshot)
         {
@@ -22,8 +21,8 @@ namespace GameShared.FrameSync.Snapshot
                 PlayerStateSnapshot player = snapshot.Players[i];
                 MixInt(ref hash, (int)(player.PlayerId >> 32));
                 MixInt(ref hash, (int)player.PlayerId);
-                MixInt(ref hash, NormalizeFloatBits(player.X));
-                MixInt(ref hash, NormalizeFloatBits(player.Y));
+                MixLong(ref hash, player.X.m_rawValue);
+                MixLong(ref hash, player.Y.m_rawValue);
                 MixInt(ref hash, player.Health);
                 MixInt(ref hash, player.MaxHealth);
                 MixInt(ref hash, player.Mana);
@@ -72,12 +71,12 @@ namespace GameShared.FrameSync.Snapshot
                 {
                     PhysicsBodySnapshot body = snapshot.PhysicsSnapshot.Bodies[i];
                     MixInt(ref hash, body.BodyId);
-                    MixInt(ref hash, NormalizeFloatBits(body.PositionX));
-                    MixInt(ref hash, NormalizeFloatBits(body.PositionY));
-                    MixInt(ref hash, NormalizeFloatBits(body.RotationRadians));
-                    MixInt(ref hash, NormalizeFloatBits(body.LinearVelocityX));
-                    MixInt(ref hash, NormalizeFloatBits(body.LinearVelocityY));
-                    MixInt(ref hash, NormalizeFloatBits(body.AngularVelocity));
+                    MixLong(ref hash, body.PositionX.m_rawValue);
+                    MixLong(ref hash, body.PositionY.m_rawValue);
+                    MixLong(ref hash, body.RotationRadians.m_rawValue);
+                    MixLong(ref hash, body.LinearVelocityX.m_rawValue);
+                    MixLong(ref hash, body.LinearVelocityY.m_rawValue);
+                    MixLong(ref hash, body.AngularVelocity.m_rawValue);
                     MixBool(ref hash, body.IsAwake);
                     MixBool(ref hash, body.IsEnabled);
                 }
@@ -95,17 +94,6 @@ namespace GameShared.FrameSync.Snapshot
             return hash;
         }
 
-        private static int NormalizeFloatBits(float value)
-        {
-            if (float.IsNaN(value))
-            {
-                return 0;
-            }
-
-            int bits = BitConverter.SingleToInt32Bits(value);
-            return bits == NegativeZeroBits ? 0 : bits;
-        }
-
         private static void MixInt(ref ulong hash, int value)
         {
             unchecked
@@ -113,6 +101,12 @@ namespace GameShared.FrameSync.Snapshot
                 hash ^= (uint)value;
                 hash *= FnvPrime;
             }
+        }
+
+        private static void MixLong(ref ulong hash, long value)
+        {
+            MixInt(ref hash, (int)(value >> 32));
+            MixInt(ref hash, (int)value);
         }
 
         private static void MixBool(ref ulong hash, bool value)

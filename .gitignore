@@ -46,3 +46,12 @@ _codex_tmp/
 
 #根目录截图残留（claude code 会话产生）
 /*.png
+
+#codedb MCP 本地索引与配置（不应入库）
+.codedb-mcp/
+
+#pi 工具本地缓存
+.pi/
+
+#Windows 误生成的保留名文件
+nul

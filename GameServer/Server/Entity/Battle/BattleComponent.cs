@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using Fantasy.Network;
@@ -52,7 +53,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
         long playerId = _nextPlayerId++;
         (float spawnX, float spawnY) = GetSpawnPosition(_sessionsByPlayerId.Count);
-        PlayerState newState = _battleLogic.JoinPlayer(playerId, spawnX, spawnY);
+        PlayerState newState = _battleLogic.JoinPlayer(playerId, (Fixed64)spawnX, (Fixed64)spawnY);
 
         _sessionsByPlayerId[playerId] = new PlayerSession(playerId, session);
         _playerIdBySessionId[session.Id] = playerId;
@@ -75,7 +76,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.Dx, input.Dy, input.SkillId);
     }
 
-    public void Tick(uint frameIndex, float fixedDt)
+    public void Tick(uint frameIndex, Fixed64 fixedDt)
     {
         CleanupDisconnectedPlayers();
         RunAutomationScenario(frameIndex);
@@ -153,13 +154,13 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 frameSnapshot.Players.Add(new PlayerSnapshot
                 {
                     PlayerId = player.PlayerId,
-                    X = player.X,
-                    Y = player.Y,
+                    X = (float)player.X,
+                    Y = (float)player.Y,
                     LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
-                    Angle = hasPhysics ? bodySnapshot.RotationRadians : 0.0f,
-                    LinearVelocityX = hasPhysics ? bodySnapshot.LinearVelocityX : 0.0f,
-                    LinearVelocityY = hasPhysics ? bodySnapshot.LinearVelocityY : 0.0f,
-                    AngularVelocity = hasPhysics ? bodySnapshot.AngularVelocity : 0.0f,
+                    Angle = hasPhysics ? (float)bodySnapshot.RotationRadians : 0.0f,
+                    LinearVelocityX = hasPhysics ? (float)bodySnapshot.LinearVelocityX : 0.0f,
+                    LinearVelocityY = hasPhysics ? (float)bodySnapshot.LinearVelocityY : 0.0f,
+                    AngularVelocity = hasPhysics ? (float)bodySnapshot.AngularVelocity : 0.0f,
                     IsAwake = hasPhysics && bodySnapshot.IsAwake,
                     IsEnabled = !hasPhysics || bodySnapshot.IsEnabled,
                     AttributeDirtyMask = (uint)dirtyMask,

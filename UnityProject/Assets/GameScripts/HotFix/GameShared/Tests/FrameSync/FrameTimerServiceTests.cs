@@ -1,5 +1,6 @@
 #if FANTASY_UNITY && UNITY_INCLUDE_TESTS
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Timer;
 using NUnit.Framework;
 
@@ -19,7 +20,7 @@ namespace GameShared.FrameSync.Tests
 
             for (uint frame = 0; frame < 10; frame++)
             {
-                timerService.Tick(frame, 1.0f / 30.0f);
+                timerService.Tick(frame, new FixedMathSharp.Fixed64(1) / 30);
             }
 
             Assert.That(
@@ -44,7 +45,7 @@ namespace GameShared.FrameSync.Tests
             timerService.AddTimer(1, _ => timerService.RemoveTimer(secondId));
             secondId = timerService.AddTimer(1, _ => secondTriggered = true);
 
-            timerService.Tick(1, 1.0f / 30.0f);
+            timerService.Tick(1, new FixedMathSharp.Fixed64(1) / 30);
 
             Assert.That(secondTriggered, Is.False);
         }
@@ -60,8 +61,8 @@ namespace GameShared.FrameSync.Tests
                 timerService.AddTimer(0, frame => childTriggeredFrame = frame);
             });
 
-            timerService.Tick(1, 1.0f / 30.0f);
-            timerService.Tick(2, 1.0f / 30.0f);
+            timerService.Tick(1, new FixedMathSharp.Fixed64(1) / 30);
+            timerService.Tick(2, new FixedMathSharp.Fixed64(1) / 30);
 
             Assert.That(childTriggeredFrame, Is.EqualTo(2));
         }

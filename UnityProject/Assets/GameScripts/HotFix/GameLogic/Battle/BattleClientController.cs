@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Fantasy;
 using Fantasy.Async;
 using Fantasy.Network.Interface;
+using FixedMathSharp;
 using GameLogic.FrameSync;
 using GameShared.InputBuffering;
 using GameShared.FrameSync.Battle;
@@ -136,7 +137,7 @@ namespace GameLogic
             }
         }
 
-        public void Tick(uint frameIndex, float fixedDt)
+        public void Tick(uint frameIndex, Fixed64 fixedDt)
         {
             if (_simulation == null || !_simulation.IsJoined)
             {
@@ -163,7 +164,7 @@ namespace GameLogic
                 _inputBuffer.TryConsume(BufferedInputKind.Skill, out skillId);
             }
 
-            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, dx, dy, skillId);
+            TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, (Fixed64)dx, (Fixed64)dy, skillId);
             _inputBuffer.TickDecay();
             SyncRendering();
 
@@ -199,8 +200,8 @@ namespace GameLogic
                     {
                         playerId = player.PlayerId,
                         isSelf = isSelf,
-                        x = player.X,
-                        y = player.Y,
+                        x = (float)player.X,
+                        y = (float)player.Y,
                         health = player.Health,
                         maxHealth = player.MaxHealth,
                         mana = player.Mana,
@@ -321,7 +322,7 @@ namespace GameLogic
 
             _joinSucceeded = true;
             _joinFailureReason = string.Empty;
-            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, response.X, response.Y);
+            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, (Fixed64)response.X, (Fixed64)response.Y);
             if (_tickDriver != null && _simulation != null)
             {
                 uint alignedFrame = _simulation.InitialAlignedFrame;
@@ -437,20 +438,20 @@ namespace GameLogic
                 _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
                 players[i] = new PlayerStateSnapshot(
                     player.PlayerId,
-                    player.X,
-                    player.Y,
+                    (Fixed64)player.X,
+                    (Fixed64)player.Y,
                     mergedAttributes,
                     authoritativeBuffs,
                     nextRuntimeBuffId,
                     BuildNumericSnapshot(player.Numeric, mergedAttributes));
                 bodies[i] = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
-                    player.X,
-                    player.Y,
-                    player.Angle,
-                    player.LinearVelocityX,
-                    player.LinearVelocityY,
-                    player.AngularVelocity,
+                    (Fixed64)player.X,
+                    (Fixed64)player.Y,
+                    (Fixed64)player.Angle,
+                    (Fixed64)player.LinearVelocityX,
+                    (Fixed64)player.LinearVelocityY,
+                    (Fixed64)player.AngularVelocity,
                     player.IsAwake,
                     player.IsEnabled);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
@@ -678,14 +679,14 @@ namespace GameLogic
             }
         }
 
-        private static void SendInputCommand(uint frameIndex, uint inputSeq, float dx, float dy, int skillId)
+        private static void SendInputCommand(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
         {
             GameClient.Instance.Send(new C2B_PlayerInput
             {
                 FrameIndex = frameIndex,
                 InputSeq = inputSeq,
-                Dx = dx,
-                Dy = dy,
+                Dx = (float)dx,
+                Dy = (float)dy,
                 SkillId = skillId
             });
         }
@@ -719,9 +720,9 @@ namespace GameLogic
             return capsule;
         }
 
-        private static Vector3 ToWorldPosition(float x, float y)
+        private static Vector3 ToWorldPosition(Fixed64 x, Fixed64 y)
         {
-            return new Vector3(x, 0.5f, y);
+            return new Vector3((float)x, 0.5f, (float)y);
         }
 
         private static BattleAutomationBuffSnapshot[] BuildAutomationBuffSnapshots(IReadOnlyList<BuffState> activeBuffs)

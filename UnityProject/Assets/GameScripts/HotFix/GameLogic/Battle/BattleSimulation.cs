@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Command;
 using GameShared.FrameSync.Determinism;
@@ -10,7 +11,7 @@ using Log = TEngine.Log;
 
 namespace GameLogic
 {
-    public delegate void BattleInputSender(uint frameIndex, uint inputSeq, float dx, float dy, int skillId);
+    public delegate void BattleInputSender(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId);
 
     public sealed class BattleSimulation : IBuffCommandSink
     {
@@ -61,8 +62,8 @@ namespace GameLogic
         private int _leadDecreaseCooldownSnapshots;
         private int _lastServerBufferedInputFrames;
         private bool _hasLastSentInput;
-        private float _lastSentDx;
-        private float _lastSentDy;
+        private Fixed64 _lastSentDx;
+        private Fixed64 _lastSentDy;
         private bool _hasQueuedServerSnapshot;
         private uint _latestQueuedSnapshotFrame;
         private int _rollbackCount;
@@ -156,7 +157,7 @@ namespace GameLogic
             RefreshBaselineLeadFrames();
         }
 
-        public TickResult Tick(uint frameIndex, float fixedDt, float dx, float dy, int skillId = 0)
+        public TickResult Tick(uint frameIndex, Fixed64 fixedDt, Fixed64 dx, Fixed64 dy, int skillId = 0)
         {
             if (!_isJoined)
             {
@@ -166,8 +167,6 @@ namespace GameLogic
             try
             {
                 DeterminismRules.AssertFixedDt(fixedDt);
-                DeterminismRules.AssertFinite(dx, nameof(dx));
-                DeterminismRules.AssertFinite(dy, nameof(dy));
 
                 _localFrame = frameIndex;
                 NormalizeInput(ref dx, ref dy);
@@ -201,6 +200,11 @@ namespace GameLogic
 
         public void SetJoined(long playerId, uint serverFrame, float x, float y)
         {
+            SetJoined(playerId, serverFrame, (Fixed64)x, (Fixed64)y);
+        }
+
+        public void SetJoined(long playerId, uint serverFrame, Fixed64 x, Fixed64 y)
+        {
             ClearWorldState();
 
             _selfPlayerId = playerId;
@@ -222,8 +226,8 @@ namespace GameLogic
             _leadDecreaseCooldownSnapshots = 0;
             _lastServerBufferedInputFrames = 0;
             _hasLastSentInput = false;
-            _lastSentDx = 0.0f;
-            _lastSentDy = 0.0f;
+            _lastSentDx = Fixed64.Zero;
+            _lastSentDy = Fixed64.Zero;
             _selfPredictions.Clear();
             _inputHistory.Clear();
             _pendingServerSnapshots.Clear();
@@ -263,7 +267,7 @@ namespace GameLogic
                 return;
             }
 
-            ReconcileAuthoritativeSnapshot(snapshot, _localFrame, DeterminismRules.FixedDeltaTime, true, "manual");
+            ReconcileAuthoritativeSnapshot(snapshot, _localFrame, DeterminismRules.FixedDeltaTimeFixed64, true, "manual");
         }
 
         public static bool RunSelfTest(out string failedCase)
@@ -273,7 +277,7 @@ namespace GameLogic
 
         private bool ApplyPendingServerSnapshot(
             uint currentFrame,
-            float fixedDt,
+            Fixed64 fixedDt,
             out int catchUpFrames,
             out uint targetFrameExclusive,
             out bool consistencyMismatch)
@@ -353,8 +357,8 @@ namespace GameLogic
             }
 
             _checked++;
-            bool matched = prediction.X == authoritativeSelf.X &&
-                           prediction.Y == authoritativeSelf.Y &&
+            bool matched = prediction.X.m_rawValue == authoritativeSelf.X.m_rawValue &&
+                           prediction.Y.m_rawValue == authoritativeSelf.Y.m_rawValue &&
                            ArePlayerSnapshotsEquivalent(prediction.Snapshot, authoritativeSelf);
             if (matched)
             {
@@ -363,11 +367,11 @@ namespace GameLogic
             else
             {
                 _misses++;
-                float deltaX = authoritativeSelf.X - prediction.X;
-                float deltaY = authoritativeSelf.Y - prediction.Y;
+                Fixed64 deltaX = authoritativeSelf.X - prediction.X;
+                Fixed64 deltaY = authoritativeSelf.Y - prediction.Y;
                 Log.Warning(
                     $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
-                    $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({deltaX:F4},{deltaY:F4}) " +
+                    $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({(float)deltaX:F4},{(float)deltaY:F4}) " +
                     $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
                     $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack}) " +
                     $"predBuffs={FormatBuffs(prediction.Snapshot.ActiveBuffs)} authBuffs={FormatBuffs(authoritativeSelf.ActiveBuffs)}");
@@ -410,7 +414,7 @@ namespace GameLogic
         private void ReconcileAuthoritativeSnapshot(
             BattleWorldSnapshot snapshot,
             uint replayTargetFrame,
-            float fixedDt,
+            Fixed64 fixedDt,
             bool logRollback,
             string rollbackReason)
         {
@@ -457,7 +461,7 @@ namespace GameLogic
             _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
-        private void LogInputEdgeIfNeeded(uint frameIndex, float dx, float dy)
+        private void LogInputEdgeIfNeeded(uint frameIndex, Fixed64 dx, Fixed64 dy)
         {
             if (_hasLastSentInput && AreInputsEqual(dx, dy, _lastSentDx, _lastSentDy))
             {
@@ -535,7 +539,7 @@ namespace GameLogic
             }
         }
 
-        private void AdvancePredictionTo(uint targetFrame, float fixedDt)
+        private void AdvancePredictionTo(uint targetFrame, Fixed64 fixedDt)
         {
             int frameCount = unchecked((int)(targetFrame - _lastPredictedFrame));
             if (frameCount <= 0)
@@ -560,7 +564,7 @@ namespace GameLogic
             _lastPredictedFrame = targetFrame;
         }
 
-        private void SaveInputHistory(uint frameIndex, float dx, float dy, int skillId)
+        private void SaveInputHistory(uint frameIndex, Fixed64 dx, Fixed64 dy, int skillId)
         {
             if (!_inputHistory.ContainsKey(frameIndex) && _inputHistory.Count >= InputHistoryCapacity)
             {
@@ -631,7 +635,7 @@ namespace GameLogic
             }
         }
 
-        private void ApplyLocalPrediction(uint frameIndex, float dx, float dy, int skillId, float fixedDt)
+        private void ApplyLocalPrediction(uint frameIndex, Fixed64 dx, Fixed64 dy, int skillId, Fixed64 fixedDt)
         {
             if (!_worldState.TryGetPlayer(_selfPlayerId, out PlayerState selfPlayer))
             {
@@ -762,25 +766,25 @@ namespace GameLogic
                 throw new ArgumentNullException(nameof(legacySender));
             }
 
-            return (frameIndex, inputSeq, dx, dy, skillId) => legacySender(frameIndex, inputSeq, dx, dy);
+            return (frameIndex, inputSeq, dx, dy, skillId) => legacySender(frameIndex, inputSeq, (float)dx, (float)dy);
         }
 
-        private static void NormalizeInput(ref float dx, ref float dy)
+        private static void NormalizeInput(ref Fixed64 dx, ref Fixed64 dy)
         {
-            float sqrMagnitude = (dx * dx) + (dy * dy);
-            if (sqrMagnitude <= 1.0f)
+            Fixed64 sqrMagnitude = (dx * dx) + (dy * dy);
+            if (sqrMagnitude <= Fixed64.One)
             {
                 return;
             }
 
-            float inverseMagnitude = 1.0f / MathF.Sqrt(sqrMagnitude);
+            Fixed64 inverseMagnitude = Fixed64.One / FixedMath.Sqrt(sqrMagnitude);
             dx *= inverseMagnitude;
             dy *= inverseMagnitude;
         }
 
-        private static bool AreInputsEqual(float leftDx, float leftDy, float rightDx, float rightDy)
+        private static bool AreInputsEqual(Fixed64 leftDx, Fixed64 leftDy, Fixed64 rightDx, Fixed64 rightDy)
         {
-            return leftDx == rightDx && leftDy == rightDy;
+            return leftDx.m_rawValue == rightDx.m_rawValue && leftDy.m_rawValue == rightDy.m_rawValue;
         }
 
         private static bool AreAttributesEqual(PlayerAttributeSnapshot left, PlayerAttributeSnapshot right)
@@ -794,8 +798,8 @@ namespace GameLogic
 
         private bool ArePlayerSnapshotsEquivalent(PlayerStateSnapshot predicted, PlayerStateSnapshot authoritative)
         {
-            return predicted.X == authoritative.X &&
-                   predicted.Y == authoritative.Y &&
+            return predicted.X.m_rawValue == authoritative.X.m_rawValue &&
+                   predicted.Y.m_rawValue == authoritative.Y.m_rawValue &&
                    AreAttributesEqual(predicted.Attributes, authoritative.Attributes) &&
                    predicted.NextRuntimeBuffId == authoritative.NextRuntimeBuffId &&
                    AreBuffsEqual(predicted.ActiveBuffs, authoritative.ActiveBuffs) &&
@@ -1003,22 +1007,22 @@ namespace GameLogic
         }
 
         public PlayerStateSnapshot Snapshot { get; }
-        public float X => Snapshot.X;
-        public float Y => Snapshot.Y;
+        public Fixed64 X => Snapshot.X;
+        public Fixed64 Y => Snapshot.Y;
         public PlayerAttributeSnapshot Attributes => Snapshot.Attributes;
     }
 
     internal readonly struct BufferedInput
     {
-        public BufferedInput(float dx, float dy, int skillId)
+        public BufferedInput(Fixed64 dx, Fixed64 dy, int skillId)
         {
             Dx = dx;
             Dy = dy;
             SkillId = skillId;
         }
 
-        public float Dx { get; }
-        public float Dy { get; }
+        public Fixed64 Dx { get; }
+        public Fixed64 Dy { get; }
         public int SkillId { get; }
     }
 

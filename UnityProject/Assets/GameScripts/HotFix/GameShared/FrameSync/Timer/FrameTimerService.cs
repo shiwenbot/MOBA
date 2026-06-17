@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 using GameShared.FrameSync.Core;
 
 namespace GameShared.FrameSync.Timer
@@ -62,7 +63,7 @@ namespace GameShared.FrameSync.Timer
             return true;
         }
 
-        public void Tick(uint frameIndex, float fixedDt)
+        public void Tick(uint frameIndex, Fixed64 fixedDt)
         {
             _currentFrame = frameIndex;
             _dueTimers.Clear();

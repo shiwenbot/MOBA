@@ -24,11 +24,11 @@ namespace GameShared.Badminton.Tests
                 DirectionXZ = Vector2d.Forward,
             });
 
-            entity.Tick(1, DeterminismRules.FixedDeltaTime);
+            entity.Tick(1, DeterminismRules.FixedDeltaTimeFixed64);
             Assert.That(entity.State.Phase, Is.EqualTo(ShuttlecockFlightPhase.Idle));
             Assert.That(entity.PendingCommandCount, Is.EqualTo(1));
 
-            entity.Tick(2, DeterminismRules.FixedDeltaTime);
+            entity.Tick(2, DeterminismRules.FixedDeltaTimeFixed64);
             Assert.That(entity.PendingCommandCount, Is.EqualTo(0));
             Assert.That(entity.State.Phase, Is.EqualTo(ShuttlecockFlightPhase.Flying));
             Assert.That(entity.State.ActiveShotType, Is.EqualTo(ShuttlecockShotType.Clear));
@@ -96,7 +96,7 @@ namespace GameShared.Badminton.Tests
 
             for (uint frame = 1; frame <= 10; frame++)
             {
-                entity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                entity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
             }
 
             Assert.That(entity.TryGetSnapshot(5, out ShuttlecockSnapshot snapshotAtFive), Is.True);
@@ -163,7 +163,7 @@ namespace GameShared.Badminton.Tests
         {
             for (uint frame = 1; frame <= maxFrames; frame++)
             {
-                entity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                entity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
                 if (entity.State.IsTerminal)
                 {
                     return;
@@ -189,7 +189,7 @@ namespace GameShared.Badminton.Tests
             uint finalFrame = 0;
             for (uint frame = 1; frame <= 180; frame++)
             {
-                entity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                entity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
                 if (entity.State.IsTerminal)
                 {
                     finalFrame = frame;

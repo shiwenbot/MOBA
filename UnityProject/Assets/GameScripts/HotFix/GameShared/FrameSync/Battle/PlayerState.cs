@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FixedMathSharp;
 
 namespace GameShared.FrameSync.Battle
 {
@@ -12,11 +13,21 @@ namespace GameShared.FrameSync.Battle
         private int _attack;
 
         public PlayerState(long playerId, float x, float y)
-            : this(playerId, x, y, PlayerAttributeSnapshot.Default)
+            : this(playerId, (Fixed64)x, (Fixed64)y)
         {
         }
 
         public PlayerState(long playerId, float x, float y, PlayerAttributeSnapshot attributes)
+            : this(playerId, (Fixed64)x, (Fixed64)y, attributes)
+        {
+        }
+
+        public PlayerState(long playerId, Fixed64 x, Fixed64 y)
+            : this(playerId, x, y, PlayerAttributeSnapshot.Default)
+        {
+        }
+
+        public PlayerState(long playerId, Fixed64 x, Fixed64 y, PlayerAttributeSnapshot attributes)
         {
             PlayerId = playerId;
             X = x;
@@ -25,8 +36,8 @@ namespace GameShared.FrameSync.Battle
         }
 
         public long PlayerId { get; }
-        public float X { get; set; }
-        public float Y { get; set; }
+        public Fixed64 X { get; set; }
+        public Fixed64 Y { get; set; }
         public int Health
         {
             get => _health;

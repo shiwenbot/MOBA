@@ -1,6 +1,7 @@
 #if FANTASY_UNITY && UNITY_INCLUDE_TESTS
 using FixedMathSharp;
 using GameShared.Badminton;
+using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
 using NUnit.Framework;
@@ -65,6 +66,63 @@ namespace GameShared.FixedPoint.Tests
             Fixed64 accumulatorDelta = (Fixed64)TickAccumulator.DefaultFixedDeltaTime;
 
             AssertFixedRawEqual(DeterminismRules.FixedDeltaTimeFixed64, accumulatorDelta);
+        }
+
+        [Test]
+        public void MoveSystem_SameFixedInputProducesSameRawState()
+        {
+            BattleWorldState firstWorld = new BattleWorldState();
+            BattleWorldState secondWorld = new BattleWorldState();
+            firstWorld.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
+            secondWorld.AddOrUpdatePlayer(1, Fixed64.Zero, Fixed64.Zero);
+
+            Assert.That(firstWorld.TryGetPlayer(1, out PlayerState firstPlayer), Is.True);
+            Assert.That(secondWorld.TryGetPlayer(1, out PlayerState secondPlayer), Is.True);
+
+            Fixed64 dt = DeterminismRules.FixedDeltaTimeFixed64;
+            Fixed64 dx = new Fixed64(0.75);
+            Fixed64 dy = new Fixed64(0.25);
+            MoveSystem.Apply(firstWorld, firstPlayer, dx, dy, dt);
+            MoveSystem.Apply(secondWorld, secondPlayer, dx, dy, dt);
+            firstWorld.PhysicsWorld.Step(dt);
+            secondWorld.PhysicsWorld.Step(dt);
+            MoveSystem.SyncFromPhysics(firstWorld, firstPlayer);
+            MoveSystem.SyncFromPhysics(secondWorld, secondPlayer);
+
+            AssertFixedRawEqual(firstPlayer.X, secondPlayer.X);
+            AssertFixedRawEqual(firstPlayer.Y, secondPlayer.Y);
+        }
+
+        [Test]
+        public void PhysicsWorld_SameFixedInputProducesSameRawSnapshot()
+        {
+            FrameSyncPhysicsWorld firstWorld = new FrameSyncPhysicsWorld();
+            FrameSyncPhysicsWorld secondWorld = new FrameSyncPhysicsWorld();
+            Fixed64 dt = DeterminismRules.FixedDeltaTimeFixed64;
+
+            firstWorld.EnsureBody(1, Fixed64.Zero, Fixed64.Zero);
+            secondWorld.EnsureBody(1, Fixed64.Zero, Fixed64.Zero);
+            firstWorld.SetBodyMovementInput(1, Fixed64.One, Fixed64.Zero);
+            secondWorld.SetBodyMovementInput(1, Fixed64.One, Fixed64.Zero);
+            firstWorld.Step(dt);
+            secondWorld.Step(dt);
+
+            PhysicsWorldSnapshot firstSnapshot = firstWorld.TakeSnapshot();
+            PhysicsWorldSnapshot secondSnapshot = secondWorld.TakeSnapshot();
+
+            Assert.That(secondSnapshot.Bodies.Count, Is.EqualTo(firstSnapshot.Bodies.Count));
+            for (int i = 0; i < firstSnapshot.Bodies.Count; i++)
+            {
+                PhysicsBodySnapshot expected = firstSnapshot.Bodies[i];
+                PhysicsBodySnapshot actual = secondSnapshot.Bodies[i];
+                Assert.That(actual.BodyId, Is.EqualTo(expected.BodyId));
+                AssertFixedRawEqual(expected.PositionX, actual.PositionX);
+                AssertFixedRawEqual(expected.PositionY, actual.PositionY);
+                AssertFixedRawEqual(expected.RotationRadians, actual.RotationRadians);
+                AssertFixedRawEqual(expected.LinearVelocityX, actual.LinearVelocityX);
+                AssertFixedRawEqual(expected.LinearVelocityY, actual.LinearVelocityY);
+                AssertFixedRawEqual(expected.AngularVelocity, actual.AngularVelocity);
+            }
         }
 
         private static void AssertFixedRawEqual(Fixed64 expected, Fixed64 actual)

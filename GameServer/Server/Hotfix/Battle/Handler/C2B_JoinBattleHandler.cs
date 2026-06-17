@@ -20,8 +20,8 @@ public sealed class C2B_JoinBattleHandler : MessageRPC<C2B_JoinBattle, C2B_JoinB
 
         PlayerState state = battleComponent.Join(session);
         response.PlayerId = state.PlayerId;
-        response.X = state.X;
-        response.Y = state.Y;
+        response.X = (float)state.X;
+        response.Y = (float)state.Y;
         response.ServerFrameIndex = battleComponent.LastFrameIndex;
 
         await FTask.CompletedTask;

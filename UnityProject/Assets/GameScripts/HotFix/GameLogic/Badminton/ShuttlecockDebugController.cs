@@ -90,7 +90,7 @@ namespace GameLogic
             {
                 _accumulator -= DeterminismRules.FixedDeltaTime;
                 CurrentFrame++;
-                _entity.Tick(CurrentFrame, DeterminismRules.FixedDeltaTime);
+                _entity.Tick(CurrentFrame, DeterminismRules.FixedDeltaTimeFixed64);
                 if (_entity.State.Phase == ShuttlecockFlightPhase.Flying)
                 {
                     CurrentFlightTimeSeconds += DeterminismRules.FixedDeltaTime;
@@ -190,7 +190,7 @@ namespace GameLogic
             int cappedFrames = Mathf.Max(1, maxFrames);
             for (uint frame = 1; frame <= cappedFrames; frame++)
             {
-                previewEntity.Tick(frame, DeterminismRules.FixedDeltaTime);
+                previewEntity.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
                 points.Add(ToWorldPosition(previewEntity.State.XZ, previewEntity.State.Y));
                 if (previewEntity.State.IsTerminal)
                 {

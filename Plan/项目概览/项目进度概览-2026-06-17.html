@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TEngine 项目进度概览 - 2026-06-17</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9e1ec;
+      --blue: #2f6fed;
+      --green: #1f8a5b;
+      --amber: #b7791f;
+      --red: #c2410c;
+      --slate: #344054;
+      --soft-blue: #eaf1ff;
+      --soft-green: #e9f7ef;
+      --soft-amber: #fff4db;
+      --soft-red: #fff0e8;
+      --radius: 8px;
+      --shadow: 0 14px 42px rgba(20, 32, 54, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+      line-height: 1.58;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .shell {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #ffffff 0%, #edf4ff 100%);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0;
+      margin-bottom: 8px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 34px;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 22px;
+      margin-bottom: 14px;
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    p { margin: 0 0 10px; }
+
+    .summary {
+      max-width: 900px;
+      color: #344054;
+      font-size: 16px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .meta-card, .panel, .lane, .risk, .next {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .meta-card {
+      padding: 14px;
+      min-height: 94px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .value {
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    .value.small {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .panel {
+      padding: 20px;
+      box-shadow: 0 8px 24px rgba(20, 32, 54, 0.05);
+    }
+
+    .full { grid-column: 1 / -1; }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: 160px 1fr 150px;
+      gap: 12px;
+      align-items: center;
+      padding: 11px 0;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .status-row:last-child { border-bottom: 0; }
+
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: #eef2f7;
+      overflow: hidden;
+    }
+
+    .bar > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--blue);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .done { color: var(--green); background: var(--soft-green); }
+    .doing { color: var(--amber); background: var(--soft-amber); }
+    .risk-tag { color: var(--red); background: var(--soft-red); }
+    .info { color: var(--blue); background: var(--soft-blue); }
+    .neutral { color: var(--slate); background: #eef2f7; }
+
+    .arch {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .lane {
+      padding: 14px;
+      min-height: 180px;
+    }
+
+    .lane ul, .panel ul, .risk ul, .next ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .lane li, .panel li, .risk li, .next li { margin: 5px 0; }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      background: #fbfcff;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .timeline {
+      border-left: 3px solid var(--line);
+      padding-left: 16px;
+    }
+
+    .commit {
+      position: relative;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #edf1f7;
+    }
+
+    .commit:last-child {
+      border-bottom: 0;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .commit::before {
+      content: "";
+      position: absolute;
+      left: -24px;
+      top: 6px;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--blue);
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px var(--line);
+    }
+
+    .commit .hash {
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .risk, .next {
+      padding: 14px;
+    }
+
+    .code {
+      font-family: Consolas, "SFMono-Regular", monospace;
+      background: #f2f5f9;
+      border: 1px solid #e4e9f1;
+      border-radius: 6px;
+      padding: 2px 6px;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 10px;
+      border-bottom: 1px solid #edf1f7;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      background: #fbfcff;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 20px 0 4px;
+    }
+
+    @media (max-width: 960px) {
+      .shell { padding: 18px; }
+      .meta-grid, .grid, .arch, .two-col { grid-template-columns: 1fr; }
+      .status-row { grid-template-columns: 1fr; }
+      h1 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">D:\unity\Tencent\TEngine · 生成日期 2026-06-17 · 分支 TEngine_Fantasy</div>
+      <h1>TEngine 项目进度概览</h1>
+      <p class="summary">
+        这个仓库已经从通用 TEngine 框架，演进成一个围绕 Fantasy 服务端、HybridCLR 热更、状态帧同步、Buff/技能链路和羽毛球核心玩法的实验型商业游戏工程。
+        当前主线最重要的判断是：帧同步基础、预测回滚、物理快照、属性同步、Buff 增量同步基本完成；羽毛球玩法完成了第一阶段物理基础，下一步应该进入“角色移动 + 击球闭环”的可玩化阶段。
+      </p>
+
+      <div class="meta-grid">
+        <div class="meta-card">
+          <div class="label">当前分支</div>
+          <div class="value">TEngine_Fantasy</div>
+          <div class="label">HEAD: 35ad0427</div>
+        </div>
+        <div class="meta-card">
+          <div class="label">最近提交</div>
+          <div class="value small">2026-06-01</div>
+          <div>羽毛球物理、Fixed64 准备、FBX 资源</div>
+        </div>
+        <div class="meta-card">
+          <div class="label">工作区状态</div>
+          <div class="value"><span class="tag risk-tag">有大量未提交改动</span></div>
+          <div>代码、文档、资源均有变更</div>
+        </div>
+        <div class="meta-card">
+          <div class="label">建议恢复点</div>
+          <div class="value small">先整理定点数迁移改动</div>
+          <div>再推进羽毛球 MVP-b</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>一句话结论</h2>
+        <p>
+          项目目前不是停在“框架搭建”，而是已经完成了多人帧同步核心闭环和 Buff 同步链路，正在把确定性基础设施迁移到 Fixed64，并把这些能力用于羽毛球玩法原型。
+        </p>
+        <div class="flow">
+          <span class="node">30Hz 全局 FrameIndex</span>
+          <span class="node">服务端权威 Tick</span>
+          <span class="node">客户端预测</span>
+          <span class="node">快照/哈希</span>
+          <span class="node">回滚重播</span>
+          <span class="node">Box2D 平面移动</span>
+          <span class="node">属性/Buff 同步</span>
+          <span class="node">羽毛球弹道</span>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>当前注意点</h2>
+        <ul>
+          <li>工作区有未提交的 Fixed64 全局迁移痕迹，涉及 <span class="code">ITickable</span>、<span class="code">PlayerState</span>、<span class="code">BattleSimulation</span>、服务端 Battle 逻辑和测试。</li>
+          <li>HEAD 提交加入的大量 PureBadminton FBX 资源，在当前工作区又有不少删除/修改，需要确认是资源瘦身、恢复现场，还是误删。</li>
+          <li>状态帧同步文档说 v0.5b 未开始，但代码已有 SkillGraph-to-Buff 集成提交；下一步需要区分“Buff 侧技能触发”与“完整技能系统同步”。</li>
+        </ul>
+      </article>
+
+      <article class="panel full">
+        <h2>系统架构地图</h2>
+        <div class="arch">
+          <div class="lane">
+            <h3>Unity 客户端</h3>
+            <ul>
+              <li>热更业务在 <span class="code">GameScripts/HotFix/GameLogic</span></li>
+              <li><span class="code">BattleClientController</span> 接输入、渲染和自动化</li>
+              <li>羽毛球调试链路在 <span class="code">GameLogic/Badminton</span></li>
+            </ul>
+          </div>
+          <div class="lane">
+            <h3>共享战斗逻辑</h3>
+            <ul>
+              <li><span class="code">GameShared/FrameSync</span> 是双端共用核心</li>
+              <li>Tick、快照、哈希、物理世界、Buff、属性均在这里</li>
+              <li>目标是纯 C#、无 Unity/Fantasy 运行时依赖</li>
+            </ul>
+          </div>
+          <div class="lane">
+            <h3>Fantasy 服务端</h3>
+            <ul>
+              <li><span class="code">GameServer/Server/Entity/Battle</span> 维护权威 BattleLogic</li>
+              <li>服务端固定 30Hz 消费帧命令</li>
+              <li>通过快照广播同步客户端</li>
+            </ul>
+          </div>
+          <div class="lane">
+            <h3>配置与工具</h3>
+            <ul>
+              <li>Luban 用于配置表，不用于运行时帧消息</li>
+              <li>自动化验收支持双 Unity Editor + 服务端</li>
+              <li>Puerts bridge 已跑通基础场景</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>版本线进度</h2>
+        <div class="status-row">
+          <strong>状态帧同步</strong>
+          <div>
+            <div class="bar"><span style="width:72%"></span></div>
+            <div class="label">已完成到 v0.5a：Buff 增量同步；v0.5b 技能系统同步未开始</div>
+          </div>
+          <span class="tag done">主线成熟</span>
+        </div>
+        <div class="status-row">
+          <strong>战斗 Buff 系统</strong>
+          <div>
+            <div class="bar"><span style="width:45%"></span></div>
+            <div class="label">v0.2a 叠加/刷新/互斥完成；v0.2b 多来源实例管理未开始</div>
+          </div>
+          <span class="tag doing">继续补规则</span>
+        </div>
+        <div class="status-row">
+          <strong>羽毛球核心玩法</strong>
+          <div>
+            <div class="bar"><span style="width:15%"></span></div>
+            <div class="label">MVP-a 球场与羽毛球物理完成；MVP-b 角色移动未开始</div>
+          </div>
+          <span class="tag info">玩法起步</span>
+        </div>
+        <div class="status-row">
+          <strong>Fixed64 迁移</strong>
+          <div>
+            <div class="bar"><span style="width:55%"></span></div>
+            <div class="label">计划文档标记未开始，但工作区已有大量相关代码改动</div>
+          </div>
+          <span class="tag risk-tag">需收口</span>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Git 时间线</h2>
+        <div class="timeline">
+          <div class="commit">
+            <strong>羽毛球物理与资源进入仓库</strong>
+            <div class="hash">35ad0427 · 2026-06-01</div>
+            <div>优化羽毛球物理，加入 FixedMathSharp 准备和 PureBadminton FBX 资源。</div>
+          </div>
+          <div class="commit">
+            <strong>羽毛球 Luban 配置接入</strong>
+            <div class="hash">0ee7ddbd · 2026-05-31</div>
+            <div>接入球路配置，补充 MVP-a 计划和弹道参数。</div>
+          </div>
+          <div class="commit">
+            <strong>输入缓冲接入客户端</strong>
+            <div class="hash">f56eeabe · 2026-05-25</div>
+            <div>新增 InputBuffer 并接入 BattleClientController。</div>
+          </div>
+          <div class="commit">
+            <strong>Buff 增量同步完成</strong>
+            <div class="hash">d5f31082 · 2026-05-24</div>
+            <div>实现观察者/目标维度的 Buff 增量同步。</div>
+          </div>
+          <div class="commit">
+            <strong>技能触发 Buff 闭环</strong>
+            <div class="hash">be1bad8f · 2026-05-23</div>
+            <div>SkillGraph-to-Buff 集成，并通过双客户端验证。</div>
+          </div>
+          <div class="commit">
+            <strong>Box2D 物理与属性同步</strong>
+            <div class="hash">f71857a9 / 3588420f · 2026-05-17~19</div>
+            <div>引入 Box2D 碰撞与物理快照，随后完成玩家属性脏同步。</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel full">
+        <h2>代码模块快照</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>模块</th>
+              <th>关键文件</th>
+              <th>现在承担的职责</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>服务端权威战斗</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/GameServer/Server/Entity/Battle/BattleLogic.cs">BattleLogic.cs</a></td>
+              <td>玩家加入/移除、输入提交、按帧 Tick、状态哈希、Buff 命令队列和查询。</td>
+            </tr>
+            <tr>
+              <td>客户端预测</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameLogic/Battle/BattleSimulation.cs">BattleSimulation.cs</a></td>
+              <td>本地预测、接收权威快照、RTT/leadFrames、回滚重播、自测。</td>
+            </tr>
+            <tr>
+              <td>客户端控制器</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameLogic/Battle/BattleClientController.cs">BattleClientController.cs</a></td>
+              <td>输入采样、网络发送、渲染同步、自动化快照采集。</td>
+            </tr>
+            <tr>
+              <td>共享世界状态</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameShared/FrameSync/Battle/BattleWorldState.cs">BattleWorldState.cs</a></td>
+              <td>玩家状态集合、快照生成/恢复、物理世界快照挂接。</td>
+            </tr>
+            <tr>
+              <td>物理移动</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs">FrameSyncPhysicsWorld.cs</a></td>
+              <td>Box2D Body 管理、移动输入、占位/碰撞、物理快照与恢复。</td>
+            </tr>
+            <tr>
+              <td>Buff 系统</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameShared/FrameSync/Battle/BuffSystem.cs">BuffSystem.cs</a></td>
+              <td>Buff 添加、Tick 到期、移除、叠加规则、查询和快照同步基础。</td>
+            </tr>
+            <tr>
+              <td>羽毛球物理</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/UnityProject/Assets/GameScripts/HotFix/GameShared/Badminton/ShuttlecockEntity.cs">ShuttlecockEntity.cs</a></td>
+              <td>帧命令击发、弹道 Tick、快照/回滚、确定性与一致性自测。</td>
+            </tr>
+            <tr>
+              <td>自动化验收</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Tools/AutomationAcceptance/README.md">Tools/AutomationAcceptance</a></td>
+              <td>真实服务端 + 双 Unity 客户端 + Puerts/Builtin controller 的验收框架。</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="panel">
+        <h2>未提交改动画像</h2>
+        <ul>
+          <li>删除 OpenSpec 相关 agent/Claude skill 与 commands，约 12 个文件。</li>
+          <li>服务端 Battle 逻辑、测试 Harness、JoinBattle handler 有修改。</li>
+          <li>客户端 BattleClientController / BattleSimulation / SnapshotManager 有修改。</li>
+          <li>GameShared 帧同步核心多处改动：ITickable、TickDispatcher、FrameTimerService、StateHasher、PlayerState、Physics snapshot、MoveSystem 等。</li>
+          <li>新增或修改 FixedMathSharp 测试，说明 Fixed64 迁移已进入实现阶段。</li>
+          <li>PureBadminton FBX 资源有大量删除/修改，资源状态需要单独确认。</li>
+        </ul>
+      </article>
+
+      <article class="panel">
+        <h2>验收与测试口径</h2>
+        <ul>
+          <li>状态帧同步文档要求每阶段必须有确定性验证。</li>
+          <li>羽毛球 MVP-a 记录：Unity 手动验收通过；EditMode 42 项中 41 项通过，剩余项是既有 TickAccumulator 精度问题。</li>
+          <li>自动化验收入口：<span class="code">Tools\AutomationAcceptance\Run-BattleAcceptance.ps1</span></li>
+          <li>默认真实客户端场景：双端加入、双端基础移动、断线测试。</li>
+        </ul>
+      </article>
+
+      <article class="panel full">
+        <h2>下一步建议</h2>
+        <div class="two-col">
+          <div class="next">
+            <h3>1. 先收口工作区</h3>
+            <ul>
+              <li>确认 Fixed64 全局迁移是否是当前要继续的主线。</li>
+              <li>跑服务端编译和自测，修掉签名迁移导致的编译/测试问题。</li>
+              <li>把资源变更分离出来，避免代码提交混入大批 FBX 删除/修改。</li>
+            </ul>
+          </div>
+          <div class="next">
+            <h3>2. 再推进玩法</h3>
+            <ul>
+              <li>羽毛球下一阶段建议做 MVP-b：角色在球场上的 Box2D 平面移动。</li>
+              <li>移动完成后接 MVP-c：输入、时机窗口、球路选择、击球命令。</li>
+              <li>保持帧命令语义：预测状态变化必须携带 FrameIndex，并在 Tick 中消费。</li>
+            </ul>
+          </div>
+          <div class="next">
+            <h3>3. 补齐 Buff 后续规则</h3>
+            <ul>
+              <li>战斗 Buff 下一步是 v0.2b：多来源实例管理。</li>
+              <li>随后补死亡/驱散/免疫边界和统一快照域验证。</li>
+              <li>一致性日志应继续打印真实差异域，尤其是属性和 Buff。</li>
+            </ul>
+          </div>
+          <div class="next">
+            <h3>4. 做一次文档同步</h3>
+            <ul>
+              <li>状态帧同步总目录应补充 Fixed64 迁移的当前真实状态。</li>
+              <li>羽毛球 MVP-a 计划仍有早期 float 描述，代码已迁移到 Fixed64 后需要更新口径。</li>
+              <li>把“可玩阶段”和“确定性基础设施阶段”分开记录，后续更好接续。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel full">
+        <h2>参考入口</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>用途</th>
+              <th>入口</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>项目约定</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/AGENTS.md">D:\unity\Tencent\TEngine\AGENTS.md</a></td>
+            </tr>
+            <tr>
+              <td>状态帧同步总目录</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Plan/状态帧同步/状态帧同步-阶段总目录.md">Plan\状态帧同步\状态帧同步-阶段总目录.md</a></td>
+            </tr>
+            <tr>
+              <td>Fixed64 全局迁移计划</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Plan/状态帧同步/定点数全局迁移计划.md">Plan\状态帧同步\定点数全局迁移计划.md</a></td>
+            </tr>
+            <tr>
+              <td>战斗 Buff 总目录</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Plan/战斗Buff系统/战斗Buff系统-阶段总目录.md">Plan\战斗Buff系统\战斗Buff系统-阶段总目录.md</a></td>
+            </tr>
+            <tr>
+              <td>羽毛球玩法总目录</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Plan/羽毛球/羽毛球核心玩法-阶段总目录.md">Plan\羽毛球\羽毛球核心玩法-阶段总目录.md</a></td>
+            </tr>
+            <tr>
+              <td>羽毛球 MVP-a 计划</td>
+              <td><a href="file:///D:/unity/Tencent/TEngine/Plan/羽毛球/羽毛球核心玩法-MVP-a计划.md">Plan\羽毛球\羽毛球核心玩法-MVP-a计划.md</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+    <div class="footer">
+      本页根据仓库文件、计划文档、代码结构、git log 和 git status 生成；未执行 Unity / dotnet 测试。工作区已有用户改动，未做回滚或清理。
+    </div>
+  </main>
+</body>
+</html>
