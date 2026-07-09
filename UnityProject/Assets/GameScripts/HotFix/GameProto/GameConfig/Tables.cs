@@ -33,49 +33,6 @@ public partial class Tables
             m_TbItem.ResolveRef(this);
         }
     }
-    /// <summary>
-    /// 羽毛球球路最小验证表
-    /// </summary>
-    private badminton.TbShuttlecockShotTest m_TbShuttlecockShotTest;
-    public badminton.TbShuttlecockShotTest TbShuttlecockShotTest 
-    {
-        get
-        {
-            if (m_TbShuttlecockShotTest == null)
-            {
-                m_TbShuttlecockShotTest = new badminton.TbShuttlecockShotTest(defaultLoader("badminton_tbshuttlecockshottest"));
-                m_TbShuttlecockShotTest.ResolveRef(this);
-            }
-            return m_TbShuttlecockShotTest;
-        }
-        set
-        {
-            m_TbShuttlecockShotTest = value;
-            m_TbShuttlecockShotTest.ResolveRef(this);
-        }
-    }
-    /// <summary>
-    /// ??????????
-    /// </summary>
-    private badminton.TbShuttlecockShot m_TbShuttlecockShot;
-    public badminton.TbShuttlecockShot TbShuttlecockShot 
-    {
-        get
-        {
-            if (m_TbShuttlecockShot == null)
-            {
-                m_TbShuttlecockShot = new badminton.TbShuttlecockShot(defaultLoader("badminton_tbshuttlecockshot"));
-                m_TbShuttlecockShot.ResolveRef(this);
-            }
-            return m_TbShuttlecockShot;
-        }
-        set
-        {
-            m_TbShuttlecockShot = value;
-            m_TbShuttlecockShot.ResolveRef(this);
-        }
-    }
-
     #endregion
 
     System.Func<string, ByteBuf> defaultLoader;
@@ -95,8 +52,6 @@ public partial class Tables
     public void Reload()
     {
         m_TbItem = null;
-        m_TbShuttlecockShotTest = null;
-        m_TbShuttlecockShot = null;
     }
 
     //public partial void Init();

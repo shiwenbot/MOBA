@@ -1,9 +1,9 @@
 using System.Globalization;
-using GameConfig.badminton;
+using GameConfig.item;
 
-ShuttlecockShotTest firstRecord = ServerConfigSystem.Instance.Tables.TbShuttlecockShotTest.DataList.First();
+Item firstRecord = ServerConfigSystem.Instance.Tables.TbItem.DataList.First();
 
 Console.WriteLine(
     string.Create(
         CultureInfo.InvariantCulture,
-        $"Id={firstRecord.Id},Name={firstRecord.Name},HorizontalSpeed={firstRecord.HorizontalSpeed},LaunchAngle={firstRecord.LaunchAngle},Drag={firstRecord.Drag},SpeedBits={BitConverter.SingleToInt32Bits(firstRecord.HorizontalSpeed)},AngleBits={BitConverter.SingleToInt32Bits(firstRecord.LaunchAngle)},DragBits={BitConverter.SingleToInt32Bits(firstRecord.Drag)}"));
+        $"Id={firstRecord.Id},Name={firstRecord.Name},Price={firstRecord.Price}"));

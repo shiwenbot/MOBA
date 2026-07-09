@@ -1,21 +1,21 @@
 using System.Globalization;
 using System.IO;
 using GameConfig;
-using GameConfig.badminton;
+using GameConfig.item;
 using Luban;
 
 string configPath = Path.Combine(
-    "D:\\unity\\Tencent\\TEngine",
+    Directory.GetCurrentDirectory(),
     "UnityProject",
     "Assets",
     "AssetRaw",
     "Configs",
     "bytes",
-    "badminton_tbshuttlecockshottest.bytes");
+    "item_tbitem.bytes");
 
 Tables tables = new Tables(file =>
 {
-    if (!string.Equals(file, "badminton_tbshuttlecockshottest", StringComparison.Ordinal))
+    if (!string.Equals(file, "item_tbitem", StringComparison.Ordinal))
     {
         throw new InvalidOperationException($"Unexpected config file request: {file}");
     }
@@ -23,8 +23,8 @@ Tables tables = new Tables(file =>
     return new ByteBuf(File.ReadAllBytes(configPath));
 });
 
-ShuttlecockShotTest firstRecord = tables.TbShuttlecockShotTest.DataList.First();
+Item firstRecord = tables.TbItem.DataList.First();
 Console.WriteLine(
     string.Create(
         CultureInfo.InvariantCulture,
-        $"Id={firstRecord.Id},Name={firstRecord.Name},HorizontalSpeed={firstRecord.HorizontalSpeed},LaunchAngle={firstRecord.LaunchAngle},Drag={firstRecord.Drag},SpeedBits={BitConverter.SingleToInt32Bits(firstRecord.HorizontalSpeed)},AngleBits={BitConverter.SingleToInt32Bits(firstRecord.LaunchAngle)},DragBits={BitConverter.SingleToInt32Bits(firstRecord.Drag)}"));
+        $"Id={firstRecord.Id},Name={firstRecord.Name},Price={firstRecord.Price}"));
