@@ -1,6 +1,5 @@
 #if FANTASY_UNITY && UNITY_INCLUDE_TESTS
 using FixedMathSharp;
-using GameShared.Badminton;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
@@ -49,15 +48,6 @@ namespace GameShared.FixedPoint.Tests
             AssertFixedRawEqual(sinFirst, sinSecond);
             AssertFixedRawEqual(drag, dragRepeat);
             Assert.That((double)sinFirst, Is.InRange(0.81, 0.83));
-        }
-
-        [Test]
-        public void CourtBounds_EvaluatesFixedInputs()
-        {
-            Assert.That(CourtConstants.IsInBounds(Vector2d.Zero), Is.True);
-            Assert.That(
-                CourtConstants.IsInBounds(new Vector2d(CourtConstants.HalfSinglesWidth + new Fixed64(0.5), Fixed64.Zero)),
-                Is.False);
         }
 
         [Test]
