@@ -20,11 +20,14 @@ namespace GameLogic
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
         private const int SkillInputBufferFrames = 2;
+
+        /// <summary>球体表现半径，与逻辑层 FrameSyncPhysicsWorld.PlayerBodyRadius 保持一致</summary>
+        private const float BallVisualRadius = 0.45f;
 #if BATTLE_PREDICTION_SELF_TEST
         private static bool s_predictionSelfTestExecuted;
 #endif
 
-        private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
+        private readonly Dictionary<long, GameObject> _playerBalls = new Dictionary<long, GameObject>();
         private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
         private readonly Dictionary<long, AuthoritativeBuffBaseline> _authoritativeBuffsByPlayerId = new Dictionary<long, AuthoritativeBuffBaseline>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
@@ -102,7 +105,7 @@ namespace GameLogic
             _inputBuffer.Clear();
             _automationInputSource = null;
 
-            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
+            foreach (KeyValuePair<long, GameObject> pair in _playerBalls)
             {
                 if (pair.Value != null)
                 {
@@ -110,7 +113,7 @@ namespace GameLogic
                 }
             }
 
-            _playerCapsules.Clear();
+            _playerBalls.Clear();
             _activePlayers.Clear();
             _authoritativeAttributesByPlayerId.Clear();
             _authoritativeBuffsByPlayerId.Clear();
@@ -393,12 +396,12 @@ namespace GameLogic
             {
                 _activePlayers.Add(player.PlayerId);
                 bool isSelf = player.PlayerId == _simulation.SelfPlayerId;
-                GameObject capsule = GetOrCreateCapsule(player.PlayerId, isSelf);
-                capsule.transform.position = ToWorldPosition(player.X, player.Y);
-                capsule.SetActive(true);
+                GameObject ball = GetOrCreateBall(player.PlayerId, isSelf);
+                ball.transform.position = ToWorldPosition(player.X, player.Y);
+                ball.SetActive(true);
             }
 
-            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
+            foreach (KeyValuePair<long, GameObject> pair in _playerBalls)
             {
                 if (_activePlayers.Contains(pair.Key))
                 {
@@ -699,30 +702,33 @@ namespace GameLogic
             });
         }
 
-        private GameObject GetOrCreateCapsule(long playerId, bool isSelf)
+        private GameObject GetOrCreateBall(long playerId, bool isSelf)
         {
-            if (_playerCapsules.TryGetValue(playerId, out GameObject exist) && exist != null)
+            if (_playerBalls.TryGetValue(playerId, out GameObject exist) && exist != null)
             {
                 return exist;
             }
 
-            GameObject capsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            capsule.name = $"BattleCapsule_{playerId}";
-            capsule.transform.position = Vector3.zero;
+            GameObject ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            ball.name = $"BattleBall_{playerId}";
+            ball.transform.position = Vector3.zero;
+            // 球体直径对齐逻辑层物理半径（FrameSyncPhysicsWorld.PlayerBodyRadius = 0.45）
+            ball.transform.localScale = Vector3.one * (BallVisualRadius * 2.0f);
 
-            Renderer renderer = capsule.GetComponent<Renderer>();
+            Renderer renderer = ball.GetComponent<Renderer>();
             if (renderer != null)
             {
                 renderer.material.color = isSelf ? Color.green : Color.cyan;
             }
 
-            _playerCapsules[playerId] = capsule;
-            return capsule;
+            _playerBalls[playerId] = ball;
+            return ball;
         }
 
         private static Vector3 ToWorldPosition(Fixed64 x, Fixed64 y)
         {
-            return new Vector3((float)x, 0.5f, (float)y);
+            // Y 抬升一个半径，让球贴地而非埋进地面
+            return new Vector3((float)x, BallVisualRadius, (float)y);
         }
 
         private static BattleAutomationBuffSnapshot[] BuildAutomationBuffSnapshots(IReadOnlyList<BuffState> activeBuffs)
