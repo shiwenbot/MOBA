@@ -15,7 +15,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\FrameSync\**\*.cs" />
+    <!-- 排除 SnapshotSelfTestSuite：它依赖 GameShared.SkillGraph（进而依赖 Fantasy.Async / Newtonsoft.Json），
+         而本 Validator 只做 Tick 间隔、时间漂移与确定性静态扫描，不需要快照用例。
+         该 Suite 由 Entity.csproj 编译，通过服务端测试模式执行。 -->
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\FrameSync\**\*.cs"
+             Exclude="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\FrameSync\Snapshot\SnapshotSelfTestSuite.cs" />
+    <!-- FrameSync 的位置/速度/dt 已定点化，必须一并链接 FixedMathSharp，否则 Fixed64 未定义 -->
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\ThirdParty\FixedMathSharp\**\*.cs" Link="FixedMathSharp\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\..\Server\Entity\TestHarness\CommandLineOptionReader.cs" Link="CommandLineOptionReader.cs" />
     <Compile Include="..\..\Server\Entity\TestHarness\FrameSyncValidationRunner.cs" Link="FrameSyncValidationRunner.cs" />
   </ItemGroup>

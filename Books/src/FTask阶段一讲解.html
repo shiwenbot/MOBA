@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段一：FTask —— 自定义 awaitable</title>
+<style>
+:root{
+  --bg:#12151a; --panel:#1a1f27; --panel2:#212832;
+  --fg:#d8dee9; --dim:#8b95a5; --line:#2c343f;
+  --accent:#7fb4ff; --warn:#ffb86b; --good:#8fd18f; --bad:#ff8b8b;
+  --kw:#c792ea; --str:#c3e88d; --cmt:#6b7688; --type:#82d2d8; --num:#f78c6c;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:16px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  padding:0 20px 80px;
+}
+.wrap{max-width:900px;margin:0 auto}
+header{padding:48px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+h1{font-size:30px;margin:0 0 12px;letter-spacing:.5px}
+.sub{color:var(--dim);font-size:15px}
+.sub code{font-size:13px}
+h2{
+  font-size:22px;margin:52px 0 18px;padding-left:14px;
+  border-left:3px solid var(--accent);line-height:1.3;
+}
+h3{font-size:17px;margin:32px 0 12px;color:var(--accent)}
+p{margin:14px 0}
+code{
+  background:var(--panel2);padding:2px 6px;border-radius:4px;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:14px;
+}
+pre{
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:18px;overflow-x:auto;margin:18px 0;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:13.5px;line-height:1.65;
+}
+pre code{background:none;padding:0;font-size:inherit}
+.kw{color:var(--kw)}.str{color:var(--str)}.cmt{color:var(--cmt)}
+.type{color:var(--type)}.num{color:var(--num)}
+.filetag{
+  display:inline-block;background:var(--panel2);color:var(--dim);
+  font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px;
+  padding:4px 10px;border-radius:5px 5px 0 0;border:1px solid var(--line);
+  border-bottom:none;margin:18px 0 0;
+}
+.filetag + pre{margin-top:0;border-top-left-radius:0}
+.note,.warn,.tip{
+  border-radius:8px;padding:14px 18px;margin:20px 0;
+  border-left:3px solid var(--accent);background:var(--panel);
+}
+.warn{border-left-color:var(--warn)}
+.tip{border-left-color:var(--good)}
+.note b,.warn b,.tip b{display:block;margin-bottom:6px;font-size:14px}
+.warn b{color:var(--warn)}.tip b{color:var(--good)}.note b{color:var(--accent)}
+table{border-collapse:collapse;width:100%;margin:20px 0;font-size:14.5px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:var(--accent);font-weight:600}
+td code{font-size:13px}
+ol,ul{padding-left:24px}
+li{margin:8px 0}
+.flow{
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:20px;margin:20px 0;font-family:"Cascadia Code",Consolas,monospace;
+  font-size:13px;line-height:1.9;white-space:pre;overflow-x:auto;color:var(--dim);
+}
+.flow b{color:var(--accent);font-weight:600}
+.flow i{color:var(--warn);font-style:normal}
+.q{
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:16px 20px;margin:14px 0;
+}
+.q b{color:var(--accent)}
+.checklist{list-style:none;padding-left:0}
+.checklist li{
+  padding:10px 14px;margin:8px 0;background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;display:flex;gap:12px;
+}
+.checklist .n{color:var(--accent);font-family:monospace;flex-shrink:0}
+.checklist .ln{color:var(--dim);font-size:13px;margin-left:auto;flex-shrink:0}
+footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
+.verified{color:var(--good);font-size:13px}
+.unverified{color:var(--warn);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>阶段一：FTask —— 自定义 awaitable</h1>
+  <div class="sub">
+    Fantasy 源码阅读 · 1248 行 / 9 个文件<br>
+    <code>Fantasy.Unity/Runtime/Core/FTask/</code>
+  </div>
+</header>
+
+<p>这是全项目学习价值密度最高的模块。绝大多数 C# 开发者只会用 <code>async/await</code>，读完这里你会写。</p>
+
+<p>核心文件 <code>Task/FTask.cs</code> 只有 262 行，却完整实现了一个可被 <code>await</code> 的类型，以及让 <code>async FTask</code> 方法能通过编译的全套机制。干净到可以一口气读完。</p>
+
+<h2>一、先建立问题意识</h2>
+
+<p>写 <code>await someTask</code> 时，编译器到底要求 <code>someTask</code> 长什么样？</p>
+
+<p>答案出人意料地宽松：<b>C# 不要求它是 <code>Task</code>，甚至不要求实现任何接口</b>。编译器只做「鸭子类型」检查 —— 只要这个类型有一个 <code>GetAwaiter()</code> 方法，返回的对象具备三个成员，就能被 <code>await</code>。</p>
+
+<p>这三个成员构成了所谓的 <b>awaiter 契约</b>：</p>
+
+<table>
+<tr><th>成员</th><th>签名</th><th>作用</th></tr>
+<tr><td><code>IsCompleted</code></td><td><code>bool</code> 属性</td><td>同步快速路径：已完成就不挂起</td></tr>
+<tr><td><code>OnCompleted</code></td><td><code>void (Action)</code></td><td>未完成时，登记「完成后要执行什么」</td></tr>
+<tr><td><code>GetResult</code></td><td><code>void</code> 或 <code>T</code></td><td>取结果，或把异常抛出来</td></tr>
+</table>
+
+<p>再加上 <code>ICriticalNotifyCompletion</code> 里的 <code>UnsafeOnCompleted</code>，就是我在索引里说的「四件套」。</p>
+
+<div class="note">
+<b>为什么值得读</b>
+这套契约平时被 <code>Task</code> 完全遮住了。自己看一遍实现，之后再看 UniTask、ValueTask、Unity 的 <code>Awaitable</code>，会发现它们全是同一个模子，差别只在「谁来存回调」和「要不要池化」。
+</div>
+
+<h2>二、从最简单的开始：FVoid</h2>
+
+<p>不要一上来读 <code>FTask.cs</code>。先看 <code>Task/FVoid.cs</code>（28 行），它是整个体系里最小的 awaitable，用来做 fire-and-forget。</p>
+
+<p>读它的目的只有一个：确认「一个可 await 的类型可以有多小」。28 行里没有池化、没有异常捕获、没有泛型，骨架一目了然。</p>
+
+<h2>三、核心：FTask.cs 的状态机</h2>
+
+<p>整个类围绕一个三态枚举运转：</p>
+
+<div class="filetag">Core/FTask/Task/FTask.cs</div>
+<pre><code><span class="kw">public enum</span> <span class="type">STaskStatus</span> : <span class="kw">byte</span>
+{
+    Pending = <span class="num">0</span>,   <span class="cmt">// 尚未完成</span>
+    Succeeded = <span class="num">1</span>, <span class="cmt">// 成功完成</span>
+    Faulted = <span class="num">2</span>    <span class="cmt">// 带异常完成</span>
+}
+
+[<span class="type">AsyncMethodBuilder</span>(<span class="kw">typeof</span>(<span class="type">AsyncFTaskMethodBuilder</span>))]
+<span class="kw">public sealed partial class</span> <span class="type">FTask</span> : <span class="type">ICriticalNotifyCompletion</span>
+{
+    <span class="kw">private</span> <span class="type">Action</span> _callBack;
+    <span class="kw">private</span> <span class="type">ExceptionDispatchInfo</span> _exception;
+    <span class="kw">private</span> <span class="type">STaskStatus</span> _status = <span class="type">STaskStatus</span>.Pending;</code></pre>
+
+<p>三个字段就是全部状态：<b>一个回调、一个异常、一个状态位</b>。对比 <code>System.Threading.Tasks.Task</code> 动辄十几个字段（含 ExecutionContext、TaskScheduler、continuation 链表），这里的极简是刻意的。</p>
+
+<h3>3.1 GetAwaiter 返回自己</h3>
+
+<pre><code><span class="kw">public</span> <span class="type">FTask</span> <span class="type">GetAwaiter</span>() => <span class="kw">this</span>;</code></pre>
+
+<p>这是个关键设计。<code>Task</code> 的 <code>GetAwaiter()</code> 会新建一个 <code>TaskAwaiter</code> 结构体，而这里 task 和 awaiter 是<b>同一个对象</b>。少一次分配，也少一层间接。</p>
+
+<p>代价是职责耦合：同一个类既是「结果的持有者」（对外提供 <code>SetResult</code>），又是「等待的协议实现者」（对内提供 <code>GetResult</code>）。读代码时要分清哪些方法给谁用 —— 这也是后面那个坑的根源。</p>
+
+<h3>3.2 IsCompleted：同步快速路径</h3>
+
+<pre><code><span class="kw">public bool</span> IsCompleted
+{
+    <span class="kw">get</span> => _status != <span class="type">STaskStatus</span>.Pending;
+}</code></pre>
+
+<p>编译器生成的状态机会<b>先</b>查这个属性。为 <code>true</code> 时直接调 <code>GetResult()</code> 继续往下跑，完全不挂起、不分配状态机堆对象。这就是为什么「await 一个已完成的任务」几乎零开销。</p>
+
+<h3>3.3 OnCompleted：存回调，就这么简单</h3>
+
+<pre><code><span class="kw">public void</span> <span class="type">OnCompleted</span>(<span class="type">Action</span> action)
+{
+    <span class="type">UnsafeOnCompleted</span>(action);
+}
+
+<span class="kw">public void</span> <span class="type">UnsafeOnCompleted</span>(<span class="type">Action</span> action)
+{
+    <span class="kw">if</span> (_status != <span class="type">STaskStatus</span>.Pending)
+    {
+        action?.<span class="type">Invoke</span>();  <span class="cmt">// 竞态兜底：已完成则立刻执行</span>
+        <span class="kw">return</span>;
+    }
+
+    _callBack = action;   <span class="cmt">// 注意：直接赋值，不是 +=</span>
+}</code></pre>
+
+<p>两处值得停下来想：</p>
+
+<ol>
+<li><b><code>_callBack = action</code> 是赋值而非累加。</b>意味着一个 FTask <b>只支持一个等待者</b>。<code>Task</code> 允许多处 await 同一个实例，FTask 不行 —— 第二个 await 会覆盖第一个的续体，前一个永久丢失。这是有意的取舍：游戏逻辑里一个异步操作通常只有一个等待方，换来了字段从「链表」简化成「单个委托」。</li>
+<li><b><code>OnCompleted</code> 直接转发给 <code>UnsafeOnCompleted</code>。</b>标准库里这两者的区别是：前者要捕获并还原 <code>ExecutionContext</code>（保证 <code>AsyncLocal</code>、身份凭据等跨 await 传递），后者跳过。这里全部跳过 —— <span class="unverified">纯性能取向，代价是不支持 ExecutionContext 流转</span>。对单线程驱动的游戏客户端来说是合理的。</li>
+</ol>
+
+<div class="note">
+<b>ICriticalNotifyCompletion 的意义</b>
+实现这个接口，就是在向编译器声明「我知道我在跳过 ExecutionContext」。状态机会优先调用 <code>UnsafeOnCompleted</code>。接口名里的 Critical/Unsafe 不是指线程不安全，而是指<b>安全上下文</b>不流转。
+</div>
+
+<h3>3.4 SetResult：完成并触发</h3>
+
+<pre><code><span class="kw">public void</span> <span class="type">SetResult</span>()
+{
+    <span class="kw">if</span> (_status != <span class="type">STaskStatus</span>.Pending)
+    {
+        <span class="kw">throw new</span> <span class="type">InvalidOperationException</span>(<span class="str">"The task has been completed"</span>);
+    }
+
+    _status = <span class="type">STaskStatus</span>.Succeeded;
+
+    <span class="kw">if</span> (_callBack == <span class="kw">null</span>)
+    {
+        <span class="kw">return</span>;
+    }
+
+    <span class="kw">var</span> callBack = _callBack;
+    _callBack = <span class="kw">null</span>;      <span class="cmt">// 先清空，再调用</span>
+    callBack.<span class="type">Invoke</span>();
+}</code></pre>
+
+<p><b>「先把字段清空、再 Invoke」这个顺序是关键。</b>如果先 Invoke 后清空，回调内部若又对这个对象做操作（在池化场景下它可能已经被复用），就会踩到已经失效的引用。这是写池化对象的通用纪律，值得记住。</p>
+
+<h3>3.5 GetResult：取结果，兼归还对象</h3>
+
+<p>这是全文件最需要细看的方法。以 <code>FTask&lt;T&gt;</code> 版本为例：</p>
+
+<pre><code><span class="kw">public</span> T <span class="type">GetResult</span>()
+{
+    <span class="kw">switch</span> (_status)
+    {
+        <span class="kw">case</span> <span class="type">STaskStatus</span>.Succeeded:
+        {
+            <span class="kw">var</span> value = _value;
+            <span class="type">Return</span>();          <span class="cmt">// ← 归还到对象池！</span>
+            <span class="kw">return</span> value;      <span class="cmt">// 先存值再归还，顺序不可颠倒</span>
+        }
+        <span class="kw">case</span> <span class="type">STaskStatus</span>.Faulted:
+        {
+            <span class="type">Return</span>();
+
+            <span class="kw">if</span> (_exception == <span class="kw">null</span>) <span class="kw">return default</span>;
+
+            <span class="kw">var</span> exception = _exception;
+            _exception = <span class="kw">null</span>;
+            exception.<span class="type">Throw</span>();  <span class="cmt">// 保留原始调用栈</span>
+            <span class="kw">return default</span>;
+        }
+        <span class="kw">default</span>:
+        {
+            <span class="kw">throw new</span> <span class="type">NotSupportedException</span>(
+                <span class="str">"Direct call to getResult is not allowed"</span>);
+        }
+    }
+}</code></pre>
+
+<p>三个细节：</p>
+
+<ul>
+<li><b><code>GetResult()</code> 有副作用 —— 它会归还对象。</b>这不是「读取属性」而是「消费并销毁」。所以它天然只能调用一次。</li>
+<li><b><code>ExceptionDispatchInfo.Throw()</code> 而非 <code>throw exception</code>。</b>后者会重置 <code>StackTrace</code>，让你只看到抛出点、丢失原始现场。前者保留完整调用栈。这个 API 在任何需要「跨线程/跨帧转发异常」的场合都该用。</li>
+<li><b><code>default</code> 分支抛异常。</b>状态还是 Pending 却调了 <code>GetResult</code>，说明有人绕过 await 直接手调。这个防御把误用变成显式崩溃。</li>
+</ul>
+
+<h2>四、AsyncMethodBuilder：让 async FTask 能编译</h2>
+
+<p>光有 awaiter 契约，只解决了「FTask 能被 await」。反方向的问题是：</p>
+
+<pre><code><span class="kw">public async</span> <span class="type">FTask</span>&lt;<span class="kw">bool</span>&gt; <span class="type">ConnectAsync</span>(...)  <span class="cmt">// 凭什么能这么写？</span></code></pre>
+
+<p><code>async</code> 方法的返回类型不是随便挑的。编译器要求该类型上标注 <code>[AsyncMethodBuilder(...)]</code>，指向一个「建造者」，由它负责创建 task、驱动状态机、写入结果。这就是类声明上那行特性的作用：</p>
+
+<pre><code>[<span class="type">AsyncMethodBuilder</span>(<span class="kw">typeof</span>(<span class="type">AsyncFTaskMethodBuilder</span>&lt;&gt;))]
+<span class="kw">public sealed partial class</span> <span class="type">FTask</span>&lt;T&gt; : <span class="type">ICriticalNotifyCompletion</span></code></pre>
+
+<p>Builder 需要实现一组固定签名的成员（<code>Create</code> / <code>Start</code> / <code>SetResult</code> / <code>SetException</code> / <code>AwaitOnCompleted</code> / <code>AwaitUnsafeOnCompleted</code> / <code>Task</code>）。<span class="unverified">这三个 Builder 文件（51 / 139 / 61 行）我这次没读到内部实现，留给你自己对照上面的成员清单去看 —— 重点是找出「状态机在哪一步被推进」和「异常怎么从 async 方法体流到 task 上」。</span></p>
+
+<h3>编译器把 async 方法变成了什么</h3>
+
+<p>理解 Builder 最有效的方式是看编译产物。下面这段 async 方法：</p>
+
+<pre><code><span class="kw">async</span> <span class="type">FTask</span>&lt;<span class="kw">bool</span>&gt; <span class="type">Foo</span>()
+{
+    <span class="kw">var</span> ok = <span class="kw">await</span> <span class="type">Bar</span>();
+    <span class="kw">return</span> ok;
+}</code></pre>
+
+<p>大致等价于（伪代码，省略大量细节）：</p>
+
+<pre><code><span class="type">FTask</span>&lt;<span class="kw">bool</span>&gt; <span class="type">Foo</span>()
+{
+    <span class="kw">var</span> sm = <span class="kw">new</span> FooStateMachine();
+    sm.builder = <span class="type">AsyncFTaskMethodBuilder</span>&lt;<span class="kw">bool</span>&gt;.<span class="type">Create</span>();
+    sm.state = -<span class="num">1</span>;
+    sm.builder.<span class="type">Start</span>(<span class="kw">ref</span> sm);   <span class="cmt">// 同步跑到第一个 await</span>
+    <span class="kw">return</span> sm.builder.Task;
+}
+
+<span class="cmt">// 状态机的 MoveNext，被反复调用</span>
+<span class="kw">void</span> <span class="type">MoveNext</span>()
+{
+    <span class="kw">switch</span> (state)
+    {
+        <span class="kw">case</span> -<span class="num">1</span>:
+            awaiter = <span class="type">Bar</span>().<span class="type">GetAwaiter</span>();        <span class="cmt">// ① 拿 awaiter</span>
+            <span class="kw">if</span> (awaiter.IsCompleted) <span class="kw">goto</span> done; <span class="cmt">// ② 快速路径</span>
+            state = <span class="num">0</span>;
+            builder.<span class="type">AwaitUnsafeOnCompleted</span>(       <span class="cmt">// ③ 登记续体</span>
+                <span class="kw">ref</span> awaiter, <span class="kw">ref this</span>);
+            <span class="kw">return</span>;                              <span class="cmt">// 挂起，控制权交还调用方</span>
+        <span class="kw">case</span> <span class="num">0</span>:
+            <span class="kw">goto</span> done;                           <span class="cmt">// 被回调唤醒，从这里续跑</span>
+    }
+done:
+    <span class="kw">var</span> ok = awaiter.<span class="type">GetResult</span>();             <span class="cmt">// ④ 取结果</span>
+    builder.<span class="type">SetResult</span>(ok);                     <span class="cmt">// ⑤ 写回外层 task</span>
+}</code></pre>
+
+<div class="flow"><b>把四件套的调用时机连起来看：</b>
+
+  await 表达式
+       │
+       ├─→ ① <b>GetAwaiter()</b>        返回 this（零分配）
+       │
+       ├─→ ② <b>IsCompleted</b>         ─── true ──→ 不挂起，直奔 ④
+       │         │
+       │        false
+       │         ↓
+       ├─→ ③ <b>UnsafeOnCompleted</b>(续体)   _callBack = 续体
+       │         ↓
+       │      <i>[ 方法返回，线程去干别的 ]</i>
+       │         ↓
+       │      外部某处调用 <b>SetResult(value)</b>
+       │         ↓
+       │      _status = Succeeded → Invoke 续体 → MoveNext 恢复
+       │         ↓
+       └─→ ④ <b>GetResult()</b>          取值 + <i>Return() 归还池</i>
+                 ↓
+              ⑤ builder.SetResult() 让外层 task 也完成
+</div>
+
+<p>看懂这张图，<code>async/await</code> 就不再是魔法了。它只是「编译器把方法切成若干片段，用 <code>_callBack</code> 把片段串起来」。</p>
+
+<h2>五、池化的代价 —— 项目里的真实坑</h2>
+
+<p>这是本阶段最有实践价值的部分。回到你项目的代码：</p>
+
+<div class="filetag">GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs</div>
+<pre><code><span class="cmt">// 创建待完成的 Task</span>
+m_connectTask = <span class="type">FTask</span>&lt;<span class="kw">bool</span>&gt;.<span class="type">Create</span>(isPool: <span class="kw">false</span>);
+<span class="kw">if</span> (Scene.Session == <span class="kw">null</span> || Scene.Session.IsDisposed)
+{
+    Scene.<span class="type">Connect</span>(..., OnConnectComplete, OnConnectFail, OnConnectDisconnect, <span class="kw">false</span>);
+}
+<span class="kw">return await</span> m_connectTask;</code></pre>
+
+<p><b>那个 <code>isPool: false</code> 不是随手写的。</b>把前面两处源码事实拼起来就明白了：</p>
+
+<ol>
+<li><code>GetResult()</code> 在返回值后立刻调 <code>Return()</code> 归还对象池；</li>
+<li><code>m_connectTask</code> 是个<b>字段</b>，会跨帧存活，还被 <code>OnConnectComplete</code> / <code>OnConnectFail</code> / <code>Disconnect</code> 等多处引用。</li>
+</ol>
+
+<p>如果启用池化，一旦某处 await 完成触发归还，这个实例就可能被框架内部其它异步操作取走复用。而 <code>m_connectTask</code> 字段还指向它 —— 此时任何一处再调 <code>SetResult(false)</code>（比如紧接着来的断线回调），就会把结果写到<b>别人的 task</b> 上。表现是随机的、极难复现的逻辑错乱。</p>
+
+<div class="warn">
+<b>池化 awaitable 的铁律</b>
+池化 task 的生命周期<b>必须</b>严格等于「创建 → 单次 await → 结束」。任何需要长期持有、跨帧保存、多处引用的场景，都要关掉池化。<br><br>
+这条规则对 UniTask 的 <code>UniTaskCompletionSource</code>、<code>ValueTask</code> 的 <code>IValueTaskSource</code> 同样成立 —— 官方文档反复强调「ValueTask 不要 await 两次、不要存起来」，原因就是这个。
+</div>
+
+<p>顺带解释了另一处代码：</p>
+
+<pre><code><span class="kw">public void</span> <span class="type">Disconnect</span>()
+{
+    m_connectTask?.<span class="type">SetResult</span>(<span class="kw">false</span>);
+    m_connectTask = <span class="kw">null</span>;      <span class="cmt">// 立刻断开引用，避免二次 SetResult 抛异常</span>
+    ...
+}</code></pre>
+
+<p>因为 <code>SetResult</code> 在非 Pending 状态会抛 <code>InvalidOperationException</code>，所以每个完成路径（<code>OnConnectComplete</code> / <code>OnConnectFail</code> / <code>OnConnectDisconnect</code> / <code>Disconnect</code>）都遵循「SetResult 后立刻置 null」。这四处的写法完全一致，是防御同一个问题。</p>
+
+<h2>六、FTask 与 UniTask 混用</h2>
+
+<p>你项目里两套异步体系并存。已知的交界点：</p>
+
+<div class="filetag">GameScripts/HotFix/GameLogic/DataCenter/ClientConnectWatcher.cs:242</div>
+<pre><code><span class="kw">public async</span> <span class="type">UniTaskVoid</span> <span class="type">CheckClientVersion</span>()
+{
+    ...
+    <span class="kw">await</span> operation.<span class="type">ToUniTask</span>();
+}</code></pre>
+
+<p>目前全项目只有这一处桥接，且是 YooAsset 的 operation 转 UniTask，并未真正跨越 FTask 与 UniTask。<b>这是好事</b> —— 两套 awaitable 各有独立的池和调度假设，混合传递容易出问题。</p>
+
+<div class="tip">
+<b>建议维持的边界</b>
+Fantasy 网络层内部用 FTask（框架要求），业务层用 UniTask（TEngine 生态）。交界处就放在 <code>GameClient</code> 这一层，用普通回调或 <code>UniTaskCompletionSource</code> 转接，不要让 FTask 泄漏到业务代码里。你现在的结构已经是这样了。
+</div>
+
+<h2>七、阅读清单</h2>
+
+<p>按顺序勾掉。行数为实测值。</p>
+
+<ul class="checklist">
+<li><span class="n">1</span><span>Task/FVoid.cs —— 最小 awaitable，建立骨架印象</span><span class="ln">28 行</span></li>
+<li><span class="n">2</span><span>Task/FTask.cs —— 核心，四件套 + 两个类</span><span class="ln">262 行</span></li>
+<li><span class="n">3</span><span>Builder/AsyncFVoidMethodBuilder.cs —— 最简 builder</span><span class="ln">61 行</span></li>
+<li><span class="n">4</span><span>Builder/AsyncFTaskMethodBuilder.cs —— 带返回值</span><span class="ln">139 行</span></li>
+<li><span class="n">5</span><span>Builder/AsyncFTaskCompletedMethodBuilder.cs</span><span class="ln">51 行</span></li>
+<li><span class="n">6</span><span>Task/FTaskCompleted.cs —— 已完成任务的零分配优化</span><span class="ln">30 行</span></li>
+<li><span class="n">7</span><span>FTask.Extension/FTask.Factory.cs —— Create 与池的入口</span><span class="ln">175 行</span></li>
+<li><span class="n">8</span><span>FTask.Extension/FTask.Tools.cs —— WaitAll 等组合操作</span><span class="ln">370 行</span></li>
+<li><span class="n">9</span><span>FCancellationToken/FCancellationToken.cs —— 取消机制</span><span class="ln">131 行</span></li>
+</ul>
+
+<div class="note">
+<b>找不到文件？</b>
+<code>FTask</code> 的命名空间是 <code>Fantasy.Async</code>，不是 <code>Fantasy</code>。而且它是 <code>partial class</code> —— <code>FTask.Factory.cs</code> 和 <code>FTask.Tools.cs</code> 也是同一个类的组成部分，按类名跳转可能落到你没预期的文件里。<code>FTask&lt;T&gt;</code> 与 <code>FTask</code> 同在 <code>Task/FTask.cs</code> 一个文件内。
+</div>
+
+<h2>八、读完后自测</h2>
+
+<div class="q"><b>Q1</b> 为什么 <code>GetAwaiter()</code> 返回 <code>this</code> 而不是新建一个 awaiter？这么做放弃了什么？</div>
+<div class="q"><b>Q2</b> <code>_callBack = action</code> 用赋值而非 <code>+=</code>，导致 FTask 有什么使用限制？<code>Task</code> 为什么没这个限制？</div>
+<div class="q"><b>Q3</b> <code>SetResult</code> 里为什么要「先把 <code>_callBack</code> 置 null，再 Invoke」？调换顺序会出什么问题？</div>
+<div class="q"><b>Q4</b> 为什么用 <code>ExceptionDispatchInfo.Throw()</code> 而不是 <code>throw _exception</code>？</div>
+<div class="q"><b>Q5</b> 如果把 <code>GameClient</code> 里的 <code>isPool: false</code> 改成 <code>true</code>，会在什么时机、以什么形式出错？</div>
+<div class="q"><b>Q6</b> <code>IsCompleted</code> 为 <code>true</code> 时，整个 await 过程跳过了哪几步？省下了哪些分配？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>Task/FTask.cs</code> 全 262 行（<code>FTask</code> 与 <code>FTask&lt;T&gt;</code> 两个类的完整实现）、<code>GameClient.cs</code> 的调用现场、各文件行数。</p>
+<p><span class="unverified">⚠ 未核实</span>：三个 Builder 文件与 <code>FTask.Factory.cs</code> 的内部实现本次未读取，文中相关叙述基于 <code>[AsyncMethodBuilder]</code> 的语言规范与 <code>GetResult()</code> 中 <code>Return()</code> 的调用事实推导，具体实现细节请以源码为准。</p>
+<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+</footer>
+
+</div>
+</body>
+</html>
