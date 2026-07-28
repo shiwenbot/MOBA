@@ -1004,6 +1004,126 @@ Offset = <span class="num">0</span>;
   </details>
 </section>
 
+<section id="kcp-send-fragment">
+  <h2>ikcp_send 为什么"不发数据只分片"？frg 倒序编号精巧在哪？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>网络层三-KCP讲解.html</code> 第二章 §2.1~2.2；<code>Base/c/kcp.cs:451-545</code>（ikcp_send）、<code>:337-446</code>（ikcp_peeksize）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>反直觉点：<code>ikcp_send</code> 一个字节都不发，只做分片</li>
+    <li><code>frg</code> 倒序编号 → <code>frg==0</code> 一个值身兼两职</li>
+    <li>廉价预检 <code>nrcv_que &lt; frg+1</code> 连遍历都省了</li>
+    <li>stream 模式 Fantasy 没开 → 消息模式靠 frg 维护边界</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>反直觉：<code>ikcp_send</code> 一个字节的网络数据都不发。</b>它只做一件事——把你要寄的东西切成 MSS 大小的标准小箱，贴好标签，挂到 <code>snd_queue</code>（待发货货架）尾部。真正往网络上发是后面 <code>ikcp_flush</code> 的事（第四章）。延续第一章的快递比喻：<code>ikcp_send</code> 是柜台后<b>拆包分箱的师傅</b>，把大衣柜拆成几箱贴标签码到货架上；什么时候真交给快递员发，归后面的调度员（<code>ikcp_flush</code>）管。</p>
+
+  <p><b>为什么要这样拆？</b>"切箱子"和"决定发送时机"是两件复杂度天差地别的事：前者来一批切一批、逻辑简单；后者要看窗口、看拥塞、看到没到重传时间——复杂的时间逻辑。把简单活和复杂活分开各管各的。这是第一章 24 字节标签能落地的第一步：<b>先有切好、贴好标签的箱子，后面才能谈怎么发。</b></p>
+
+  <h4>切箱规则三段</h4>
+  <p><b>① 向上取整算箱数</b>：<code>count = (len + mss - 1) / mss</code>。mss = 一个箱子净载荷上限。例：mss=100 寄 250 字节 → 3 箱（100+100+50），最后那箱哪怕只装 1 字节也要单独一箱。这是整数向上取整的标准写法，记住它到处都是。</p>
+  <p><b>② 两个拒绝条件（返回 -2）</b>：</p>
+  <ul>
+    <li><code>count &gt; 255</code>：因为 <code>frg</code> 上网压成 u8（见第一章），最大 255，所以单条消息硬上限 256 片。<b>这就是第一章"内存形态≠网络形态"的直接后果</b>——省那 3 字节的代价。</li>
+    <li><code>count &gt;= rcv_wnd</code>：超过对端仓库容量，还没发就先拒，让你（上层）自己处理，别塞进来堆门口烂掉。</li>
+  </ul>
+  <p><b>③ 循环切箱</b>：申请新箱 → memcpy 装货 → 填 len（这箱多重）→ 填 frg（倒序第几箱）→ <code>iqueue_add_tail</code> 码到货架尾。最后一箱 <code>size = len &gt; mss ? mss : len</code> 处理零头。</p>
+
+  <h4>★ frg 倒序编号 —— 本章最精巧的设计</h4>
+  <p><code>seg-&gt;frg = count - i - 1</code>。寄 3 箱，三箱 frg 依次是 <b>2, 1, 0</b>（末片是 0）。</p>
+
+  <p><b>对比正序方案（0,1,2）为什么不行</b>：朋友收到 frg=0 的箱，不知道总共几箱——是 3 箱？5 箱？要么额外传"总片数"字段（又多花字节），要么干等超时赌"应该齐了"。</p>
+
+  <p><b>倒序方案</b>：朋友收到 <code>frg==0</code> 的箱，<b>那一刻就知道这是末片、整套齐了</b>。不需要知道总数，不需要等超时。</p>
+
+  <blockquote><b>洞察</b>：倒序把「我是第几片」和「我是不是最后一片」<b>编码进了同一个字段</b>——<code>frg==0</code> 这个值身兼两职：既表示序号 0，又表示"完成了"。一个字段干两件事，这是 KCP 省字节的典型套路（跟第一章 cmd 用 u8 同一思路）。</blockquote>
+
+  <h4>这个约定在 ikcp_peeksize 里直接兑现</h4>
+  <p><code>ikcp_peeksize</code> 是"先问长度、再按长度取"的 API，怎么知道一条消息齐没齐、总长多少？就靠倒序约定。三个分支一个比一个省：</p>
+  <ol>
+    <li><b>单片消息</b>（<code>seg-&gt;frg == 0</code>）：一条就一箱，直接返回 <code>len</code>，连遍历都省。</li>
+    <li><b>廉价预检</b>：<code>nrcv_que &lt; seg-&gt;frg + 1</code>。队首那箱 frg 最大（倒序），它说自己后面还有 frg 片，那队列里<b>至少要有 frg+1 个</b>才可能完整。不够直接返回 -1，<b>省掉整个遍历</b>。例：寄 3 箱(frg=2,1,0)，队列只有 1 箱 → <code>1 &lt; 3</code> → 没齐；3 箱 → <code>3 &lt; 3</code> false → 才遍历。</li>
+    <li><b>完整遍历</b>：从头加 len 到 <code>frg==0</code> 那箱。</li>
+  </ol>
+
+  <p>Fantasy 集成层 <code>KCPClientNetwork.Input()</code> 直接吃这个约定：<code>peekSize = _kcp.PeekSize(); if (peekSize &lt; 0) break;</code>。<b>"没齐"和"出错"都返回 -1</b>，调用方精确分配 buffer：先问长度，长度够了再 <code>Receive(长度)</code>，不用猜、不用预分配最大 buffer。</p>
+
+  <h4>stream 模式：Fantasy 没开（死代码，但要懂为什么）</h4>
+  <p><code>if (kcp-&gt;stream != 0)</code> 那一大块做"把新数据追加到上一个没装满的 segment 里"——让 KCP 退化成<b>字节流</b>像 TCP 一样没有消息边界。Fantasy 从没调过 <code>SetStreamMode</code>，所以 stream 恒为 0，<b>读源码直接跳过这段</b>。</p>
+
+  <p>但要懂这个选择：Fantasy 走<b>消息模式</b>，靠 frg 维护消息边界——这正是第二篇 <code>BufferPacketParser</code> 能<b>省掉分包粘包状态机</b>的根本原因，KCP 自己把边界维护了，解析器不用再切。<b>但这是绑定脆弱性</b>：如果哪天有人手贱开了 stream 模式，<code>BufferPacketParser</code> 会立刻出错，因为它假设"收到的每条都是完整消息"。"省事的设计"绑定了"脆弱性"。</p>
+
+  <h3>证据</h3>
+  <p class="code-caption">ikcp_send 分片主循环（c/kcp.cs:451-545）</p>
+  <pre><code><span class="kw">if</span> (len &lt;= (<span class="kw">int</span>)kcp-&gt;mss) count = <span class="num">1</span>;
+<span class="kw">else</span> count = (<span class="kw">int</span>)((len + kcp-&gt;mss - <span class="num">1</span>) / kcp-&gt;mss);   <span class="cmt">// 向上取整</span>
+
+<span class="kw">if</span> (kcp-&gt;stream == <span class="num">0</span> &amp;&amp; count &gt; <span class="num">255</span>) <span class="kw">return</span> -<span class="num">2</span>;      <span class="cmt">// frg 是 u8，最多 255 片</span>
+<span class="kw">if</span> (count &gt;= (<span class="kw">int</span>)kcp-&gt;rcv_wnd) <span class="kw">return</span> -<span class="num">2</span>;         <span class="cmt">// 超过对端窗口，拒绝</span>
+
+<span class="kw">for</span> (i = <span class="num">0</span>; i &lt; count; i++)
+{
+    <span class="kw">int</span> size = len &gt; (<span class="kw">int</span>)kcp-&gt;mss ? (<span class="kw">int</span>)kcp-&gt;mss : len;
+    seg = <span class="type">ikcp_segment_new</span>(kcp, size);
+    <span class="type">memcpy</span>(seg-&gt;data, buffer, (<span class="kw">nuint</span>)size);
+
+    seg-&gt;len = (<span class="kw">uint</span>)size;
+    seg-&gt;frg = (<span class="kw">uint</span>)((kcp-&gt;stream == <span class="num">0</span>) ? (count - i - <span class="num">1</span>) : <span class="num">0</span>);   <span class="cmt">// ← 倒序</span>
+
+    <span class="type">iqueue_add_tail</span>(&amp;seg-&gt;node, &amp;kcp-&gt;snd_queue);
+    kcp-&gt;nsnd_que++;
+    buffer += size;  len -= size;
+}</code></pre>
+
+  <p class="code-caption">ikcp_peeksize 三分支判断完整性（c/kcp.cs:337-446）</p>
+  <pre><code><span class="kw">if</span> (<span class="type">iqueue_is_empty</span>(&amp;kcp-&gt;rcv_queue)) <span class="kw">return</span> -<span class="num">1</span>;
+
+seg = 队首;
+<span class="kw">if</span> (seg-&gt;frg == <span class="num">0</span>) <span class="kw">return</span> (<span class="kw">int</span>)seg-&gt;len;        <span class="cmt">// ① 单片，直接返回</span>
+
+<span class="kw">if</span> (kcp-&gt;nrcv_que &lt; seg-&gt;frg + <span class="num">1</span>) <span class="kw">return</span> -<span class="num">1</span>;      <span class="cmt">// ② 廉价预检：凑不够片数</span>
+
+<span class="kw">for</span> (p = 队首; p != 队尾; p = p-&gt;next)
+{
+    length += seg-&gt;len;
+    <span class="kw">if</span> (seg-&gt;frg == <span class="num">0</span>) <span class="kw">break</span>;                  <span class="cmt">// ③ 走到末片，收工</span>
+}
+<span class="kw">return</span> length;</code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:90-153</code>（§2 全）/ <code>:122-145</code>（peeksize + Fantasy 集成依赖）/ <code>:147-153</code>（stream 模式）</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 设计的"省"与绑定的"脆弱"</span>
+    KCP 反复在用同一招——<b>把多个语义压进同一个字段</b>：<code>frg==0</code> 既表序号又表末片、<code>PeekSize()&lt;0</code> 既表"没齐"又表"出错"。换来的是字段更窄、API 更简洁。代价是<b>语义耦合</b>：比如哪天开 stream 模式，<code>BufferPacketParser</code> 的"每条都是完整消息"假设就崩了。读 KCP 代码要警惕这种"约定式省略"，它在被打破时不会报错，只会静默出错。
+  </div>
+
+  <details class="qa">
+    <summary>自测：ikcp_send 凭什么叫 send 却不发数据？这样拆分的好处是什么？</summary>
+    <p>它只做分箱贴标签挂货架，不碰网络。真正发送在 <code>ikcp_flush</code>。好处是<b>把"切箱子"（简单、来一批切一批）和"决定发送时机"（复杂、要看窗口/拥塞/重传时间）解耦</b>。各管各的，<code>ikcp_flush</code> 才能在合适时机按窗口批量发、做重传调度。如果 send 里直接发，就没法实现"攒一批一起发""超时重传""快重传"这些时间相关的策略了。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：frg 倒序编号，如果改成正序（0,1,2）接收侧需要多做什么？</summary>
+    <p>正序时接收方收到 frg=0 的箱<b>不知道总共几箱</b>，无法判断齐没齐。补救办法：要么额外加一个"总片数"字段（多花字节，且首片就得带上），要么干等到超时才敢赌"应该齐了"。倒序则让 <code>frg==0</code> 同时承担"序号"和"末片标记"，接收方看到 0 就立刻知道齐了，零额外字段、零等待。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：廉价预检 nrcv_que &lt; frg+1 拿 frg=2,1,0（3箱）走一遍</summary>
+    <p>队首是 frg=2 那箱（倒序所以首片 frg 最大）。它说自己后面还有 2 片，那总共需要 3 片才完整。</p>
+    <ul>
+      <li>队列只有 1 箱：<code>nrcv_que(1) &lt; frg+1(3)</code> → true → 没齐，返回 -1，<b>不用遍历</b></li>
+      <li>队列有 2 箱：<code>2 &lt; 3</code> → true → 还是没齐</li>
+      <li>队列有 3 箱：<code>3 &lt; 3</code> → false → 才进入完整遍历算总长</li>
+    </ul>
+    <p>关键在于它<b>只看队首那箱的 frg</b> 就能知道"至少需要几片"，不用遍历整个队列——这就是"廉价"的含义。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么 count &gt; 255 直接拒绝？这跟第一章哪里呼应？</summary>
+    <p>因为 <code>frg</code> 上网时被压成 u8（1 字节，最大 255），所以单条消息最多 256 片（0~255）。这正是第一章"内存形态≠网络形态"的<b>直接后果</b>——内存里 frg 是 uint，但为省 3 字节上网压成 u8，于是有了 256 片的硬上限。<b>省字节的代价在这里兑现。</b></p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
