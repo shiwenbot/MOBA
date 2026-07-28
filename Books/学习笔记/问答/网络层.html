@@ -102,6 +102,144 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
   </details>
 </section>
 
+<section id="session-send-overloads">
+  <h2>「Session 管逻辑会话、Channel 管物理连接」太抽象——具体各自有哪些发送行为？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Session/Session.cs:101-222</code>、<code>Session/ProcessSession/ProcessSession.cs</code>、<code>Protocol/Interface/INetworkChannel.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>看方法数量就能分清两层：Channel 接口只有 <b>1 个 Send</b>，Session 有 <b>5 个 Send + 1 个 Call</b></li>
+    <li>「业务层有多种发送语义」全被 Session 翻译成 Channel 那<b>同一个</b>底层调用</li>
+    <li>Session 还有两种形态：普通会话（走 socket）、进程内会话（绕过 socket）</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    Session 的 5 个 Send 重载按「数据是<b>未打包还是已打包</b>」分两大类。未打包的是业务层最常用的入口（发消息、发 RPC），
+    已打包的是服务端「零序列化转发」用的（消息从一个连接收进来，原样转发到另一个连接，省掉反复序列化）。
+    无论哪个重载，最后都汇成一个调用：<code>Channel.Send(rpcId, address, memoryStream, message, messageType)</code>。
+    Channel 这一个签名要应付 TCP/KCP/WebSocket 三种协议，但<b>发送策略各不相同</b>——TCP 要自己排队串行化，KCP 直接交给 KCP 内部队列。
+  </p>
+
+  <h3>证据 —— Session 的 5 种发送方式</h3>
+  <p class="code-caption">按「未打包 / 已打包」分两大类（Session.cs:101-202）</p>
+  <pre><code><span class="cmt">// ===== A. 未打包：业务层最常用，客户端服务端都能用 =====</span>
+
+<span class="cmt">// Send 4：非泛型，手动传 Type</span>
+<span class="kw">public virtual void</span> <span class="type">Send</span>(<span class="type">IMessage</span> message, <span class="type">Type</span> messageType, <span class="kw">uint</span> rpcId = <span class="num">0</span>, <span class="kw">long</span> address = <span class="num">0</span>)
+    → Channel.<span class="type">Send</span>(rpcId, address, <span class="kw">null</span>, message, messageType);   <span class="cmt">// memoryStream 传 null</span>
+
+<span class="cmt">// Send 5：泛型，自动推断 Type（最常用）</span>
+<span class="kw">public virtual void</span> <span class="type">Send</span>&lt;<span class="type">T</span>&gt;(T message, <span class="kw">uint</span> rpcId = <span class="num">0</span>, <span class="kw">long</span> address = <span class="num">0</span>)
+    → Channel.<span class="type">Send</span>(rpcId, address, <span class="kw">null</span>, message, <span class="kw">typeof</span>(T));
+
+<span class="cmt">// Call&lt;T&gt;：RPC，要回包（Session.cs:210）</span>
+<span class="kw">public virtual</span> <span class="type">FTask</span>&lt;<span class="type">IResponse</span>&gt; <span class="type">Call</span>&lt;<span class="type">T</span>&gt;(T request, <span class="kw">long</span> address = <span class="num">0</span>)
+{
+    <span class="kw">var</span> rpcId = ++_rpcId;                          <span class="cmt">// ① 取唯一序号</span>
+    <span class="kw">var</span> task = <span class="type">FTask</span>&lt;<span class="type">IResponse</span>&gt;.<span class="type">Create</span>();
+    RequestCallback.<span class="type">Add</span>(rpcId, task);              <span class="cmt">// ② 存进字典，等响应来配对</span>
+    <span class="type">Send</span>&lt;T&gt;(request, rpcId, address);             <span class="cmt">// ③ 走 Send 5 把 rpcId 塞进包头</span>
+    <span class="kw">return</span> task;                                <span class="cmt">// ④ 返回，await 它等回包</span>
+}
+
+<span class="cmt">// ===== B. 已打包：服务端框架内部转发用，全包在 #if FANTASY_NET 里 =====</span>
+
+<span class="cmt">// Send 1：转发 APackInfo（不释放，调用方负责）</span>
+<span class="kw">public virtual void</span> <span class="type">Send</span>(<span class="kw">uint</span> rpcId, <span class="kw">long</span> address, <span class="type">Type</span> messageType, <span class="type">APackInfo</span> packInfo)
+    → Channel.<span class="type">Send</span>(rpcId, address, packInfo.MemoryStream, <span class="kw">null</span>, messageType);
+
+<span class="cmt">// Send 2：转发 ProcessPackInfo（自己 using 释放）</span>
+<span class="kw">public virtual void</span> <span class="type">Send</span>(<span class="type">ProcessPackInfo</span> packInfo, <span class="kw">uint</span> rpcId = <span class="num">0</span>, <span class="kw">long</span> address = <span class="num">0</span>)
+    → <span class="kw">using</span> (packInfo) { Channel.<span class="type">Send</span>(rpcId, address, packInfo.MemoryStream, <span class="kw">null</span>, ...); }
+
+<span class="cmt">// Send 3：转发裸 MemoryStream</span>
+<span class="kw">public virtual void</span> <span class="type">Send</span>(<span class="type">MemoryStreamBuffer</span> memoryStream, <span class="kw">uint</span> rpcId = <span class="num">0</span>, <span class="kw">long</span> address = <span class="num">0</span>)
+    → Channel.<span class="type">Send</span>(rpcId, address, memoryStream, <span class="kw">null</span>, <span class="kw">null</span>);</code></pre>
+  <p><small>引用：<code>Session.cs:178-202</code>（A 类，公共）、<code>:101-144</code>（B 类，<code>#if FANTASY_NET</code>）、<code>:210-222</code>（<code>Call</code>）。RPC 响应配对在 <code>ProcessScheduler.cs</code> 的 <code>ResponseHandler</code> 里完成——按包头 rpcId 从字典取出 Task 调 <code>SetResult</code>。</small></p>
+
+  <h3>证据 —— Session 的两种形态</h3>
+  <table>
+    <tr><th>形态</th><th>类</th><th>用在哪</th><th>Send 最终调什么</th></tr>
+    <tr>
+      <td>普通会话</td>
+      <td><code>Session</code>（基类）</td>
+      <td>客户端连接、服务端外网连接</td>
+      <td><code>Channel.Send</code>（走 socket）</td>
+    </tr>
+    <tr>
+      <td>进程内会话</td>
+      <td><code>ProcessSession : Session</code>（sealed）</td>
+      <td>服务端进程内派发（<code>#if FANTASY_NET</code>）</td>
+      <td><b>绕过 Channel</b>，直接 <code>this.Scheduler(...)</code> 进程内派发</td>
+    </tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">ProcessSession 禁用了两个方法</span>
+    <code>ProcessSession.Send(MemoryStreamBuffer, ...)</code> 和 <code>Call&lt;T&gt;</code> 都被 override 成
+    <code>throw new Exception("不支持")</code>（<code>ProcessSession.cs:66,71</code>）。原因：进程内派发不需要 RPC 配对走网络——响应在同一个进程里直接
+    <code>ResponseHandler</code> 就完成了，根本不需要 <code>Call</code> 那套「发包-等回包」机制。
+  </div>
+
+  <h3>证据 —— Channel 的 1 个签名，3 种发送策略</h3>
+  <p>接口只有一个签名，但入队之后<b>因协议差异巨大</b>：</p>
+  <table>
+    <tr><th>协议</th><th>发送机制</th><th>自建队列？</th><th>为什么</th></tr>
+    <tr>
+      <td>TCP（客户端/服务端）</td>
+      <td><code>SocketAsyncEventArgs</code> 事件链 + <code>_isSending</code> 单飞</td>
+      <td>有 <code>_sendBuffers</code></td>
+      <td>socket 不能并发 <code>SendAsync</code>，必须串行化</td>
+    </tr>
+    <tr>
+      <td>WebSocket 服务端</td>
+      <td><code>SendAsync</code> await</td>
+      <td>有 <code>_sendBuffers</code></td>
+      <td>同理</td>
+    </tr>
+    <tr>
+      <td><b>KCP</b></td>
+      <td>直接 <code>Kcp.Send</code></td>
+      <td><b>无</b></td>
+      <td>KCP 内部已有可靠传输+发送队列，Channel 层不用再造</td>
+    </tr>
+  </table>
+  <p><small>引用：<code>TCPClientNetwork.cs:333-375</code>（TCP，有队列）、<code>KCPClientNetwork.cs:571</code>（KCP，无自建队列，靠 KCP 内部）。<b>这是 Channel 抽象最值钱的地方</b>：Session 调的都是同一个 <code>Channel.Send</code>，但底下 TCP 要排队、KCP 直接扔给 KCP 内部队列——这些差异 Session 完全不感知。</small></p>
+
+  <h3>address 参数：客户端恒为 0，服务端才用</h3>
+  <p>这是「传输 vs 业务」分层的一个具体落点：</p>
+  <ul>
+    <li><b>客户端</b>：用 Outer 协议，包头<b>不含 address</b>，传 <code>0</code> 被丢弃。所以 <code>session.Send(msg)</code> 从不传 address。</li>
+    <li><b>服务端间</b>：用 Inner 协议，包头 20 字节含 address，用于<b>进程间路由</b>（把消息送到正确的 gate/map 进程）。服务端转发时 address 才是必须的。</li>
+  </ul>
+  <p><small>引用：<code>ReadOnlyMemoryPacketParser.cs</code> 的 <code>InnerReadOnlyMemoryPacketParser</code>（写 address）vs <code>OuterReadOnlyMemoryPacketParser</code>（忽略 address）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">「5 种发送」对应「5 种业务语义」</span>
+    不要被 5 个重载吓到。它们本质只对应几种业务诉求：<br>
+    • 发普通消息 → <code>Send&lt;T&gt;</code><br>
+    • 发 RPC 要回包 → <code>Call&lt;T&gt;</code><br>
+    • 服务端转发收到的消息（不重新序列化）→ Send 1/2/3（带 memoryStream/packInfo）<br>
+    客户端只会用到前两种，后三种是服务端框架内部的转发优化。
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么 Channel 接口只有 1 个 Send，Session 却有 5 个？</summary>
+    <p>因为它们在不同抽象层。Session 是<b>业务层</b>，要表达「发消息/发 RPC/转发已打包数据」等多种业务语义；Channel 是<b>传输层</b>，只关心「把字节发出去」，所以一个签名够用。Session 的每个重载都把不同的业务语义翻译成同一个 <code>Channel.Send</code> 调用——这正是分层抽象的意义：业务层的复杂语义在传输层被归一化。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么 KCP 的 Channel 不需要 _sendBuffers 队列，TCP 却需要？</summary>
+    <p>因为 KCP 协议<b>内部已经有可靠传输 + 发送队列</b>，调一次 <code>Kcp.Send</code> 数据就进了 KCP 的发送缓冲，由 KCP 的 update 循环负责分包、重传、拥塞控制。而 TCP socket 不能并发 <code>SendAsync</code>（会乱序或异常），所以 TCP 的 Channel 必须自己用 <code>_sendBuffers + _isSending</code> 把多次业务调用串行化成一次次的 socket 发送。<b>这个差异被 Channel 接口屏蔽了</b>——Session 调的都是同一个 <code>Channel.Send</code>。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：客户端代码里 address 参数为什么总是 0？</summary>
+    <p>因为客户端用的是 Outer 协议（<code>NetworkTarget.Client</code>），<code>OuterReadOnlyMemoryPacketParser</code> 的包头里<b>根本没有 address 字段</b>，传进去也会被忽略。address 是 Inner 协议（服务端间通信）才用的，表示「目标 Scene/进程的地址」，用于把消息路由到正确的服务器。客户端的连接对象只有一个服务端，不需要路由，所以 address 恒为 0。</p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
