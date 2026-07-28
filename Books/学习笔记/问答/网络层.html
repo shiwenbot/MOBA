@@ -298,7 +298,171 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
 
   <details class="qa">
     <summary>自测：Connect 和 Send 为什么是 abstract 而不是 virtual 给默认实现？</summary>
-    <p>因为 TCP/KCP/WebSocket 三种协议的连接和发送机制<b>完全不同</b>：TCP 用 <code>Socket.ConnectAsync</code> + <code>SocketAsyncEventArgs</code>，KCP 用握手协议 + <code>Kcp.Send</code>，WebSocket 用 <code>ClientWebSocket.ConnectAsync</code> + <code>SendAsync</code>。没有"默认实现"可以给——任何默认实现都只对一种协议成立。所以用 <code>abstract</code> 强制每个子类必须自己实现，<b>承认这一层没有共性可提取</b>。</p>
+    <p>因为 TCP/KCP/WebSocket 三种协议的连接机制<b>完全不同</b>：TCP 用 <code>Socket.ConnectAsync</code> + <code>SocketAsyncEventArgs</code>，KCP 用握手协议 + <code>Kcp.Send</code>，WebSocket 用 <code>ClientWebSocket.ConnectAsync</code> + <code>SendAsync</code>。没有"默认实现"可以给——任何默认实现都只对一种协议成立。所以用 <code>abstract</code> 强制每个子类必须自己实现，<b>承认这一层没有共性可提取</b>。</p>
+  </details>
+</section>
+
+<section id="connect-flow">
+  <h2>TCPClientNetwork.Connect 连接流——它同步返回 Session，但其实还没连上？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Protocol/TCP/Client/TCPClientNetwork.cs:115-189</code>、<code>GameScripts/HotFix/GameLogic/DataCenter/GameClient.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>一句话：<code>Connect()</code> 同步返回 Session，但连接本身是<b>异步</b>的——结果通过三个回调通知</li>
+    <li>最反直觉的点：方法返回了 Session，其实<b>还没连上</b></li>
+    <li><code>_connectDisconnectEvent</code> 标志位：解决"Dispose 自带副作用通知"的优雅手法</li>
+    <li><code>ConnectAsync</code> 返回 false 不是失败，是<b>已同步完成</b>——SAEA 系列 API 最容易踩的坑</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>Connect()</code> 发起连接后<b>立刻返回</b> Session，业务层拿到这个 Session 就能调 <code>session.Send(...)</code>，
+    但连接结果（成功/失败/断开）通过传进来的三个回调异步通知。这是「<b>同步返回句柄 + 异步通知结果</b>」模式——
+    让调用方不用阻塞等连接。这正是项目 <code>GameClient.cs</code> 要手动搓一个 <code>FTask&lt;bool&gt;</code>
+    把三个回调转成 await 的原因：框架给的是回调风格，业务层想要 await 风格，中间那层胶水得自己写。
+  </p>
+
+  <h3>证据 1 —— Connect 的 8 步（TCPClientNetwork.cs:115-156）</h3>
+  <pre><code><span class="kw">public override</span> <span class="type">Session</span> <span class="type">Connect</span>(...)
+{
+    <span class="cmt">// ① 防重入：一个实例只能 Connect 一次，重连必须 new 新的</span>
+    <span class="kw">if</span> (IsInit) <span class="kw">throw new</span> <span class="type">NotSupportedException</span>(<span class="str">"...please re instantiate it."</span>);
+    IsInit = <span class="kw">true</span>;
+
+    <span class="cmt">// ② 存三个回调（后面所有路径都要回调它们）</span>
+    _onConnectFail = onConnectFail;
+    _onConnectComplete = onConnectComplete;
+    _onConnectDisconnect = onConnectDisconnect;
+
+    <span class="cmt">// ③ 挂超时定时器（全流程最值得学的设计）</span>
+    _connectTimeoutId = Scene.TimerComponent.Net.<span class="type">OnceTimer</span>(connectTimeout, () =&gt;
+    {
+        _connectDisconnectEvent = <span class="kw">false</span>;     <span class="cmt">// ← 关键：抑制"断开"通知</span>
+        _onConnectFail?.<span class="type">Invoke</span>();
+        <span class="type">Dispose</span>();
+    });
+
+    <span class="cmt">// ④ 造解析器 + 解析地址 + 造 socket</span>
+    _packetParser = <span class="type">PacketParserFactory</span>.<span class="type">CreateClientReadOnlyMemoryPacket</span>(<span class="kw">this</span>);
+    _remoteEndPoint = <span class="type">NetworkHelper</span>.<span class="type">GetIPEndPoint</span>(remoteAddress);
+    _socket = <span class="kw">new</span> <span class="type">Socket</span>(..., <span class="type">ProtocolType</span>.Tcp);
+    _socket.NoDelay = <span class="kw">true</span>;                  <span class="cmt">// 禁用 Nagle，小包立即发（游戏低延迟标配）</span>
+
+    <span class="cmt">// ⑤ 发起异步连接（SAEA 最容易踩的坑）</span>
+    <span class="kw">var</span> outArgs = <span class="kw">new</span> <span class="type">SocketAsyncEventArgs</span> { RemoteEndPoint = _remoteEndPoint };
+    outArgs.Completed += <span class="type">OnConnectSocketCompleted</span>;
+    <span class="kw">if</span> (!_socket.<span class="type">ConnectAsync</span>(outArgs))
+    {
+        <span class="type">OnReceiveSocketComplete</span>();       <span class="cmt">// 同步完成了，直接走</span>
+    }
+
+    <span class="cmt">// ⑥ 立即创建并返回 Session——这会儿可能还没连上！</span>
+    Session = <span class="type">Session</span>.<span class="type">Create</span>(<span class="kw">this</span>, _remoteEndPoint);
+    <span class="kw">return</span> Session;
+}</code></pre>
+  <p><small>引用：<code>TCPClientNetwork.cs:115-156</code>。<b>防重入</b>的原因：类内部有一堆一次性状态（<code>_cancellationTokenSource</code>、<code>_pipe</code>、<code>_packetParser</code> 解析进度、<code>_sendArgs</code>），逐个重置比重建更容易出错——这就是项目 <code>ClientConnectWatcher</code> 走「Dispose 旧的 → 造新的」而不是复用的根源。</small></p>
+
+  <h3>证据 2 —— <code>_connectDisconnectEvent</code> 标志位：全文件最值得学的设计</h3>
+  <p>问题：<code>Dispose()</code> 默认要通知业务层「连接断了」（<code>:78</code> 的 <code>if (_connectDisconnectEvent) _onConnectDisconnect?.Invoke()</code>）。但<b>连接失败</b>和<b>连接断开</b>是两种不同语义——连都没连上，凭什么报「断开」？而失败路径又必须调 <code>Dispose()</code> 清理资源。</p>
+  <p>解法：用一个标志位在调 <code>Dispose()</code> <b>之前</b>把断开通知关掉。三处失败路径全是同一个套路：</p>
+  <pre><code><span class="cmt">// 超时（:132）/ connect 错误（:175）/ connect 异常 —— 三处完全一致</span>
+_connectDisconnectEvent = <span class="kw">false</span>;   <span class="cmt">// ← 先抑制"断开"通知</span>
+_onConnectFail?.<span class="type">Invoke</span>();          <span class="cmt">// ← 报"失败"</span>
+<span class="type">Dispose</span>();                       <span class="cmt">// ← 清理时不会再误报"断开"</span></code></pre>
+  <p><small>引用：<code>TCPClientNetwork.cs:78-81</code>（Dispose 里的判断）、<code>:132</code>（超时）、<code>:175</code>（connect 错误）。</small></p>
+
+  <h3>证据 3 —— <code>ConnectAsync</code> 返回 false 不是失败，是同步完成</h3>
+  <table>
+    <tr><th>返回值</th><th>含义</th><th>接下来</th></tr>
+    <tr><td><code>true</code></td><td>操作挂起，异步进行中</td><td>等 <code>Completed</code> 事件回调</td></tr>
+    <tr><td><code>false</code></td><td><b>已同步完成</b>，不会触发事件</td><td>你必须自己接着往下走</td></tr>
+  </table>
+  <p>这是 <code>SocketAsyncEventArgs</code> 系列 API 的统一约定。<b>忘了处理 <code>false</code> 这条同步路径，是这套 API 最常见的 bug</b>——本地连接、地址已缓存等情况下真的会走到。</p>
+
+  <h3>证据 4 —— 连接完成的两条路 + 失败路径</h3>
+  <p class="code-caption">路径 A：同步完成（false），直接走，不 Post（因为还在 Scene 线程）</p>
+  <pre><code><span class="kw">if</span> (!_socket.<span class="type">ConnectAsync</span>(outArgs))
+{
+    <span class="type">OnReceiveSocketComplete</span>();   <span class="cmt">// 本线程，不用 Post</span>
+}</code></pre>
+
+  <p class="code-caption">路径 B：异步完成（true → 事件回调在 IO 线程，必须 Post 回 Scene 线程）</p>
+  <pre><code><span class="kw">private void</span> <span class="type">OnConnectSocketCompleted</span>(...)
+{
+    <span class="kw">if</span> (asyncEventArgs.SocketError == <span class="type">SocketError</span>.Success)
+    {
+        Scene.ThreadSynchronizationContext.<span class="type">Post</span>(<span class="type">OnReceiveSocketComplete</span>);  <span class="cmt">// ← 线程边界</span>
+    }
+    <span class="kw">else</span>
+    {
+        Scene.ThreadSynchronizationContext.<span class="type">Post</span>(() =&gt;
+        {
+            _connectDisconnectEvent = <span class="kw">false</span>;   <span class="cmt">// 同样的抑制套路</span>
+            _onConnectFail?.<span class="type">Invoke</span>();
+            <span class="type">Dispose</span>();
+        });
+    }
+}</code></pre>
+  <p><small>Fantasy 的 Scene 是<b>单线程模型</b>，所有业务逻辑必须回到 Scene 线程执行。socket 回调是<b>唯一</b>需要跨线程的地方，所以这里的 <code>Post</code> 是整个网络层的<b>线程边界</b>。同步路径 A 不 Post，是因为 <code>Connect()</code> 本身就在 Scene 线程上调用，同步完成时线程没变。</small></p>
+
+  <h3>证据 5 —— OnReceiveSocketComplete：连接成功的统一收尾</h3>
+  <pre><code><span class="kw">private void</span> <span class="type">OnReceiveSocketComplete</span>()
+{
+    <span class="type">ClearConnectTimeout</span>();                <span class="cmt">// ① 取消超时定时器</span>
+    _onConnectComplete?.<span class="type">Invoke</span>();         <span class="cmt">// ② 通知业务层"连上了"</span>
+    <span class="type">ReadPipeDataAsync</span>().<span class="type">Coroutine</span>();      <span class="cmt">// ③ 启动消费者循环（解流，3.2 内容）</span>
+    <span class="type">ReceiveSocketAsync</span>().<span class="type">Coroutine</span>();     <span class="cmt">// ④ 启动生产者循环（收流，3.2 内容）</span>
+}</code></pre>
+  <p><small>引用：<code>TCPClientNetwork.cs:183-189</code>。连接成功后取消超时、通知业务层，然后启动两个<b>互不等待</b>的循环（3.2 的内容）。<code>.Coroutine()</code> 就是 FTask 的 fire-and-forget，详见 <code>问答/fantasy-ftask.html#coroutine-fire-and-forget</code>。</small></p>
+
+  <h3>整条流的总图</h3>
+  <pre><code><span class="type">Connect</span>()
+  ├─ ① 防重入（IsInit）
+  ├─ ② 存三个回调
+  ├─ ③ 挂超时定时器 ──(超时)──→ 抑制 + 报失败 + <span class="type">Dispose</span>
+  ├─ ④ 造 socket/解析器/SAEA
+  ├─ ⑤ <span class="type">ConnectAsync</span>(outArgs)
+  │     ├─ 返回 false(同步完成) → <span class="type">OnReceiveSocketComplete</span>() [本线程]
+  │     └─ 返回 true(异步)      → <span class="type">OnConnectSocketCompleted</span> [IO线程]
+  │                                ├─ 成功 → <span class="type">Post</span> → <span class="type">OnReceiveSocketComplete</span>
+  │                                └─ 失败 → <span class="type">Post</span> → 抑制 + 报失败 + <span class="type">Dispose</span>
+  └─ ⑥ <span class="type">Session</span>.<span class="type">Create</span> + <span class="kw">return</span> <span class="type">Session</span>  ← 立即返回，不管连没连上
+
+<span class="type">OnReceiveSocketComplete</span>()  ← 成功的统一收尾
+  ├─ 清超时
+  ├─ 报"连上了"
+  └─ 启动收流 + 解流两个循环（3.2 的内容）</code></pre>
+
+  <div class="callout tip">
+    <span class="callout-title">这条流最值钱的三个点</span>
+    <b>(1) <code>_connectDisconnectEvent</code> 标志位</b>——解决"Dispose 自带副作用通知"的优雅手法：当一个清理方法自带副作用通知，而某些调用方需要「静默清理」时，标志位是最省事的解法。<br>
+    <b>(2) <code>ConnectAsync</code> 返回 false 是同步完成</b>——SAEA 系列 API 最容易踩的坑，忘了处理这条路径会让本地连接场景失效。<br>
+    <b>(3) 同步返回 Session + 异步通知结果</b>——让业务层不用阻塞等连接，这就是 <code>GameClient.cs</code> 那层 <code>FTask&lt;bool&gt;</code> 胶水代码存在的原因。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">可迁移的经验：标志位抑制副作用</span>
+    当一个清理方法（Dispose/Close）自带副作用通知，而某些调用方需要「静默清理」时，标志位是最省事的解法。替代方案是 <code>Dispose(bool notify)</code> 重载，但那会让 <code>IDisposable</code> 的契约变脏。KCP 分支里有一模一样的字段和一模一样的用法——读 KCP 时会再遇到它。
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么 Connect 同步返回 Session，却还没连上？</summary>
+    <p>这是「同步返回句柄 + 异步通知结果」模式。<code>Connect()</code> 发起连接后立即创建并返回 Session，让调用方先拿到句柄用着（可以提前 <code>session.Send</code>，消息会先进队列），连接结果异步通知。好处是调用方不用阻塞等待——<code>Connect()</code> 立刻返回，业务逻辑继续走，连上了再被回调通知。这正是 <code>GameClient.cs</code> 要把三个回调包装成 <code>FTask&lt;bool&gt;</code> await 的原因：框架是回调风格，业务想要 await 风格。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：ConnectAsync 返回 false 为什么不是失败？忘了处理会怎样？</summary>
+    <p><code>false</code> 表示「操作已同步完成，不会触发 <code>Completed</code> 事件」。这是 <code>SocketAsyncEventArgs</code> 系列的统一约定（<code>ReceiveAsync</code>/<code>SendAsync</code>/<code>ConnectAsync</code> 都一样）。本地连接、地址已缓存等情况下真的会同步完成。如果忘了处理 <code>false</code> 分支，连接成功但后续逻辑不执行——收发循环启动不了，表现为「明明连上了却收不到消息」。这是这套 API 最常见的 bug。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么同步路径不 Post，异步路径必须 Post？</summary>
+    <p>因为 Fantasy 的 Scene 是单线程模型，所有业务逻辑必须在 Scene 线程执行。同步路径里 <code>Connect()</code> 本身就是在 Scene 线程调用的，同步完成时线程没变，直接调 <code>OnReceiveSocketComplete</code> 没问题。异步路径的 <code>OnConnectSocketCompleted</code> 回调是在 <b>IO 完成线程</b>上触发的，不在 Scene 线程，必须 <code>Post</code> 回去。socket 回调是整个网络层<b>唯一</b>需要跨线程的地方，所以这里的 <code>Post</code> 就是线程边界。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：一个 TCPClientNetwork 实例为什么只能 Connect 一次？</summary>
+    <p>因为类内部有一堆<b>一次性状态</b>：<code>_cancellationTokenSource</code>（已取消的 CTS 没法复活）、<code>_pipe</code>（读写指针已经推进）、<code>_packetParser</code> 的解析进度（跨包状态机，中途重置会丢包）、<code>_sendArgs</code>（绑定了旧的 Completed 事件）。逐个正确重置比重建一个新实例更容易出错。所以重连的正确姿势是「Dispose 旧的 → new 新的」，这正是项目 <code>ClientConnectWatcher</code> 的做法。</p>
   </details>
 </section>
 
