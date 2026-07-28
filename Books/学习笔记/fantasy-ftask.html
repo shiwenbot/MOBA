@@ -137,6 +137,87 @@
   </div>
 </section>
 
+<section id="awaiter-functions-caller">
+  <h2>FTask 的 GetAwaiter/IsCompleted/OnCompleted/GetResult 这些函数到底在哪里被调用？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/FTask/Task/FTask.cs:24,38</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>这些函数你自己写的业务代码里几乎从不直接调</li>
+    <li>await 是编译时语法糖，不是运行时魔法</li>
+    <li>await 一侧 vs 完成 task 一侧，是两条独立的线</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    这五个函数的<b>调用方是 C# 编译器生成的状态机代码</b>，不是任何运行时机制，更不是你写的代码。
+    <code>await expr</code> 是纯编译时语法糖——编译器把它展开成一个 <code>IAsyncStateMachine</code> 状态机的 <code>MoveNext</code> 方法，
+    在里面<b>硬编码</b>了对 <code>GetAwaiter</code>/<code>IsCompleted</code>/<code>GetResult</code> 的调用。
+    所以"在哪被调用"的答案是：在那个你看不到源码、但确实存在于编译后 dll 里的 <code>MoveNext</code> 方法里。
+  </p>
+  <p>
+    <code>SetResult</code> 是唯一的例外——它属于<b>完成 task 的一侧</b>，由你的业务回调（比如 <code>OnConnectComplete</code>）手动调。
+    它内部 <code>Invoke</code> 之前 await 登记的回调（就是状态机的 <code>MoveNext</code>），从而把两条线串起来。
+  </p>
+
+  <h3>证据 —— 编译器把 <code>await m_connectTask</code> 翻成了什么</h3>
+  <p class="code-caption">编译器生成的状态机 MoveNext（伪代码，简化到只剩骨架）</p>
+  <pre><code><span class="kw">void</span> <span class="type">MoveNext</span>()
+{
+    <span class="kw">switch</span> (state)
+    {
+        <span class="kw">default</span>:                 <span class="cmt">// 第一次进，state == -1</span>
+            awaiter = m_connectTask.<span class="type">GetAwaiter</span>();     <span class="cmt">// ① 编译器硬编码调</span>
+            <span class="kw">if</span> (!awaiter.<span class="type">IsCompleted</span>)           <span class="cmt">// ② 编译器硬编码调</span>
+            {
+                state = <span class="num">0</span>;
+                builder.<span class="type">AwaitUnsafeOnCompleted</span>(       <span class="cmt">// ③ Builder 转调 awaiter.UnsafeOnCompleted</span>
+                    <span class="kw">ref</span> awaiter, <span class="kw">ref this</span>);
+                <span class="kw">return</span>;                        <span class="cmt">// ← 挂起，控制权还给调用方</span>
+            }
+            <span class="kw">goto</span> done;
+        <span class="kw">case</span> <span class="num">0</span>:                    <span class="cmt">// 续体被唤醒，从这续跑</span>
+            <span class="kw">break</span>;
+    }
+done:
+    awaiter.<span class="type">GetResult</span>();               <span class="cmt">// ④ 编译器硬编码调</span>
+    builder.<span class="type">SetResult</span>();                 <span class="cmt">// ⑤ 方法正常结束（这个 SetResult 是 Builder 的，不是 FTask 的）</span>
+}</code></pre>
+  <p><small>引用：编译产物在 <code>Library/ScriptAssemblies/&lt;程序集&gt;.dll</code>，用 ILSpy/dnSpy 反编译可见真实 MoveNext。</small></p>
+
+  <h3>函数 → 调用方 对照表</h3>
+  <table>
+    <tr><th>FTask 的函数</th><th>在哪被调</th><th>谁调的</th></tr>
+    <tr><td><code>GetAwaiter()</code></td><td>编译器生成的 MoveNext</td><td>状态机</td></tr>
+    <tr><td><code>IsCompleted</code></td><td>编译器生成的 MoveNext</td><td>状态机</td></tr>
+    <tr><td><code>UnsafeOnCompleted</code></td><td>Builder 的 <code>AwaitUnsafeOnCompleted</code> 内部转调</td><td>Builder 转发</td></tr>
+    <tr><td><code>GetResult()</code></td><td>编译器生成的 MoveNext</td><td>状态机</td></tr>
+    <tr><td><code>SetResult()</code></td><td><b>你的业务回调</b>（如 OnConnectComplete）</td><td>你手写的代码</td></tr>
+  </table>
+
+  <h3>两条独立的线，在 SetResult 交汇</h3>
+  <pre><code><span class="cmt">线 A：await 一侧（读 task 的人）</span>
+你的 async 方法 → 状态机 MoveNext
+  → GetAwaiter / IsCompleted / UnsafeOnCompleted（登记"完成后要干什么"）
+  → 方法挂起，返回调用方 → [等待] → 被唤醒 → GetResult() → 继续跑
+
+<span class="cmt">线 B：完成 task 一侧（写 task 的人）</span>
+业务回调 OnConnectComplete
+  → m_connectTask.SetResult()
+  → 内部 _status = Succeeded → Invoke 之前登记的回调（= 状态机 MoveNext）
+  → 线 A 被唤醒，继续往下跑</code></pre>
+
+  <div class="callout tip">
+    <span class="callout-title">理解 await 最快的办法</span>
+    别看讲解，去看真实的编译产物。对用了 <code>async FTask</code> 的程序集，编译后去 <code>Library/ScriptAssemblies/</code> 找对应 dll，用 ILSpy 打开，找到你的 async 方法，会亲眼看到编译器生成的 <code>MoveNext</code> 里那套 <code>GetAwaiter</code>/<code>IsCompleted</code>/<code>GetResult</code> 调用。比任何文档都直观。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">注意区分两个 SetResult</span>
+    生成代码里同时出现两个 <code>SetResult</code>：<code>builder.SetResult()</code>（Builder 的，标记"整个 async 方法跑完了"）和 <code>m_connectTask.SetResult()</code>（FTask 的，标记"这个 task 完成了"）。前者驱动状态机收尾，后者驱动 await 唤醒。别混。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
