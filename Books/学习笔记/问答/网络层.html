@@ -21,107 +21,30 @@
 <!-- 问答回答从这里往下追加，最新的在最下方 -->
 
 <section id="channel-vs-session">
-  <h2>读 INetworkChannel 时卡住：接口里有 Session，Session 里又有 Channel，这俩到底什么关系？是同一个东西的两个名字吗？</h2>
-  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/Network/Session/Session.cs</code>、<code>Protocol/Interface/INetworkChannel.cs</code></p>
+  <h2>Channel 和 Session 到底什么关系？互相持有，各自具体干什么？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Network/Session/Session.cs</code>、<code>Protocol/Interface/INetworkChannel.cs</code>、<code>Protocol/Interface/AClientNetwork.cs</code></p>
 
   <h3>线索</h3>
   <ul>
-    <li>一句话：<code>Channel</code> 管物理连接（怎么发字节），<code>Session</code> 管逻辑会话（发什么、谁接收、RPC 配对）</li>
-    <li>这是「传输 vs 业务」的经典分层，不是同一物的两个名字</li>
-    <li>互相持有 ≠ 同级：Session 持有 Channel 是 internal，Channel 反向持有 Session 是 public</li>
+    <li>一句话：<code>Channel</code> 管传输（怎么发字节），<code>Session</code> 管会话（发什么、谁接收、RPC 配对）</li>
+    <li><b>方法数量不对称就是分层最硬的证据</b>：Channel 接口只有 1 个 <code>Send</code>，Session 有 5 个 <code>Send</code> + 1 个 <code>Call</code></li>
+    <li>业务层的多种发送语义，全被 Session 翻译成 Channel 那<b>同一个</b>底层调用</li>
+    <li>互相持有 ≠ 同级：<code>Session.Channel</code> 是 <code>internal</code>，<code>INetworkChannel.Session</code> 是 public</li>
   </ul>
 
   <h3>核心理解</h3>
   <p>
-    <b>Channel 是传输层抽象，Session 是业务会话层。</b>Channel 只懂「发字节」——
-    它的 <code>Send</code> 签名 <code>Send(uint rpcId, long address, MemoryStreamBuffer, IMessage, Type)</code>
-    全是为打包服务的参数，没有任何业务语义，它不知道这条消息是什么、谁该处理。
-    Session 才懂「消息分发」和「RPC」：<code>Session.Receive</code> 交给调度器分发，
-    <code>Session.Call&lt;T&gt;</code> 用 <code>_rpcId</code> + <code>RequestCallback</code> 实现「请求-响应配对」——
-    这层逻辑 Channel 完全不参与。
-  </p>
-  <p>
-    分两层的真正理由是<b>底下会换</b>：同一个 Session，今天挂 <code>TCPClientNetwork</code>，
-    明天换 <code>KCPClientNetwork</code>，后天出 WebGL 换 <code>WebSocketClientNetwork</code>——
-    Session 一行代码都不用改。<b>Channel 是可替换的传输插件，Session 是不动的业务外壳。</b>
-  </p>
-
-  <h3>证据 —— 两者职责的对照</h3>
-  <table>
-    <tr><th>维度</th><th><b>Channel</b>（<code>INetworkChannel</code>）</th><th><b>Session</b>（<code>Session</code>）</th></tr>
-    <tr><td><b>是什么</b></td><td>传输抽象（13 行最小契约）</td><td>逻辑会话（继承 <code>Entity</code>）</td></tr>
-    <tr><td><b>对外方法</b></td><td>只有 <code>Send</code> + <code>Dispose</code></td><td><code>Send</code> / <code>Call</code>（RPC）/ <code>Receive</code> / <code>Dispose</code></td></tr>
-    <tr><td><b>协议痕迹</b></td><td>实现里有 socket、Pipe、SAEA（TCP 版 427 行）</td><td><b>完全没有协议痕迹</b>，底下换 TCP/KCP/WS 它都不动</td></tr>
-    <tr><td><b>谁持有谁</b></td><td>反向持有 <code>Session</code> 属性（public）</td><td>持有 <code>Channel</code>（<code>internal</code>，外部碰不到）</td></tr>
-  </table>
-
-  <h3>证据 —— 数据流向上各自的活</h3>
-  <p class="code-caption">接收方向：Channel 交付字节，Session 负责分发</p>
-  <pre><code><span class="cmt">// Channel 这边：UnPack 凿出完整包，交付出去</span>
-UnPack 凿出完整包 → <span class="type">Session</span>.<span class="type">Receive</span>(packInfo)
-                        ↓
-                      <span class="cmt">// Session 这边：更新心跳 + 交给调度器分发</span>
-                      NetworkMessageScheduler.<span class="type">Scheduler</span>(<span class="kw">this</span>, packInfo) → Handler
-
-<span class="cmt">// 发送方向：Session 配 rpcId，Channel 负责发字节</span>
-session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// Session 用 _rpcId + RequestCallback 配对 RPC</span>
-      → channel.<span class="type">Send</span>(rpcId, address, ...)  <span class="cmt">// Channel 只管把字节发出去</span></code></pre>
-  <p><small>引用：<code>Session.cs:42</code>（<code>Channel</code> 属性，internal）、<code>:210</code>（<code>Call</code> RPC）、<code>:224</code>（<code>Receive</code>）；<code>INetworkChannel.cs</code>（13 行全文，<code>Session</code> 属性 public）。</small></p>
-
-  <h3>对比表 —— 客户端的「一人分饰两角」</h3>
-  <table>
-    <tr><th>形态</th><th>客户端</th><th>服务端</th></tr>
-    <tr><td>Channel 实现</td><td>Network 类<b>自己就是</b> Channel（<code>TCPClientNetwork : AClientNetwork, INetworkChannel</code>）</td><td>Network 和 Channel 分开（1 个 Network 管 N 个 Channel）</td></tr>
-    <tr><td>原因</td><td>客户端只有一条连接，没必要再分层</td><td>服务端要管多条连接，必须分层</td></tr>
-    <tr><td>Session</td><td colspan="2"><b>始终独立</b>——不管 Channel 是独立的还是合体的，Session 都是外面那层业务壳</td></tr>
-  </table>
-
-  <div class="callout tip">
-    <span class="callout-title">可迁移的类比</span>
-    「Channel vs Session」和这些是同一类思路：<br>
-    • <code>HttpClient</code>（传输） vs <code>HttpRequest</code>（语义）<br>
-    • TCP 里 <code>socket</code>（传输） vs <code>connection</code>（会话）<br>
-    • 数据库 <code>DbConnection</code>（传输） vs <code>DbTransaction</code>（会话）
-  </div>
-
-  <div class="callout warn">
-    <span class="callout-title">可见性不对称不是偶然</span>
-    <code>Session.Channel</code> 是 <code>internal</code>（外部碰不到），<code>INetworkChannel.Session</code> 是 public。
-    这个不对称说明：<b>业务代码应该只通过 Session 交互</b>，Channel 是框架内部细节，不该被业务直接操作。
-    如果你发现业务代码在想办法拿 Channel，多半是分层用错了。
-  </div>
-
-  <details class="qa">
-    <summary>自测：为什么 INetworkChannel 和 Session 要互相持有？</summary>
-    <p>接收方向需要 Channel → Session（Channel 收到字节后要回调 Session.Receive 分发）；发送方向需要 Session → Channel（Session.Send 要转调 Channel.Send 发字节）。去掉任一方向，数据流就断了。互相持有是因为<b>数据是双向流动的</b>。</p>
-  </details>
-
-  <details class="qa">
-    <summary>自测：新增一个 QUIC 传输层，需要改 Session 类吗？</summary>
-    <p>不需要。只需新增 <code>QUICClientNetwork : AClientNetwork, INetworkChannel</code> 实现传输细节，Session 一行不改。<b>这正是分层抽象的价值——传输层是可插拔的。</b>需要改的只有协议选择处（如 <code>GameClient.cs</code> 里写死 <code>NetworkProtocolType</code> 的地方）。</p>
-  </details>
-</section>
-
-<section id="session-send-overloads">
-  <h2>「Session 管逻辑会话、Channel 管物理连接」太抽象——具体各自有哪些发送行为？</h2>
-  <p class="meta">2026-07-28 · 相关：<code>Session/Session.cs:101-222</code>、<code>Session/ProcessSession/ProcessSession.cs</code>、<code>Protocol/Interface/INetworkChannel.cs</code></p>
-
-  <h3>线索</h3>
-  <ul>
-    <li>看方法数量就能分清两层：Channel 接口只有 <b>1 个 Send</b>，Session 有 <b>5 个 Send + 1 个 Call</b></li>
-    <li>「业务层有多种发送语义」全被 Session 翻译成 Channel 那<b>同一个</b>底层调用</li>
-    <li>Session 还有两种形态：普通会话（走 socket）、进程内会话（绕过 socket）</li>
-  </ul>
-
-  <h3>核心理解</h3>
-  <p>
-    Session 的 5 个 Send 重载按「数据是<b>未打包还是已打包</b>」分两大类。未打包的是业务层最常用的入口（发消息、发 RPC），
-    已打包的是服务端「零序列化转发」用的（消息从一个连接收进来，原样转发到另一个连接，省掉反复序列化）。
+    <b>Channel 是传输层抽象，Session 是业务会话层。</b>Session 的 5 个 <code>Send</code> 重载按「数据是<b>未打包还是已打包</b>」分两大类：
+    未打包的是业务层最常用的入口（发消息、发 RPC），已打包的是服务端「零序列化转发」用的。
     无论哪个重载，最后都汇成一个调用：<code>Channel.Send(rpcId, address, memoryStream, message, messageType)</code>。
     Channel 这一个签名要应付 TCP/KCP/WebSocket 三种协议，但<b>发送策略各不相同</b>——TCP 要自己排队串行化，KCP 直接交给 KCP 内部队列。
   </p>
+  <p>
+    分两层的真正理由是<b>底下会换</b>：同一个 Session，今天挂 <code>TCPClientNetwork</code>，明天换 <code>KCPClientNetwork</code>，
+    后天出 WebGL 换 <code>WebSocketClientNetwork</code>——Session 一行代码都不用改。<b>Channel 是可替换的传输插件，Session 是不动的业务外壳。</b>
+  </p>
 
-  <h3>证据 —— Session 的 5 种发送方式</h3>
+  <h3>证据 1 —— Session 的 5 种发送方式</h3>
   <p class="code-caption">按「未打包 / 已打包」分两大类（Session.cs:101-202）</p>
   <pre><code><span class="cmt">// ===== A. 未打包：业务层最常用，客户端服务端都能用 =====</span>
 
@@ -156,9 +79,9 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
 <span class="cmt">// Send 3：转发裸 MemoryStream</span>
 <span class="kw">public virtual void</span> <span class="type">Send</span>(<span class="type">MemoryStreamBuffer</span> memoryStream, <span class="kw">uint</span> rpcId = <span class="num">0</span>, <span class="kw">long</span> address = <span class="num">0</span>)
     → Channel.<span class="type">Send</span>(rpcId, address, memoryStream, <span class="kw">null</span>, <span class="kw">null</span>);</code></pre>
-  <p><small>引用：<code>Session.cs:178-202</code>（A 类，公共）、<code>:101-144</code>（B 类，<code>#if FANTASY_NET</code>）、<code>:210-222</code>（<code>Call</code>）。RPC 响应配对在 <code>ProcessScheduler.cs</code> 的 <code>ResponseHandler</code> 里完成——按包头 rpcId 从字典取出 Task 调 <code>SetResult</code>。</small></p>
+  <p><small>引用：<code>Session.cs:178-202</code>（A 类，公共）、<code>:101-144</code>（B 类，<code>#if FANTASY_NET</code>）、<code>:210-222</code>（<code>Call</code>）。RPC 响应配对在 <code>ProcessScheduler.cs</code> 的 <code>ResponseHandler</code> 里完成——按包头 rpcId 从字典取出 Task 调 <code>SetResult</code>。服务端为什么要 B 类那么多转发重载？因为它是「消息中转站」——从客户端 A 收进的消息可能要原样转给 map 进程再转给客户端 B，每转一次都反序列化再序列化是白烧 CPU，所以传 <code>memoryStream</code>（已序列化好的字节）只回填包头里的 rpcId/address 就直接发，<b>零序列化转发</b>。</small></p>
 
-  <h3>证据 —— Session 的两种形态</h3>
+  <h3>证据 2 —— Session 的两种形态</h3>
   <table>
     <tr><th>形态</th><th>类</th><th>用在哪</th><th>Send 最终调什么</th></tr>
     <tr>
@@ -182,7 +105,7 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
     <code>ResponseHandler</code> 就完成了，根本不需要 <code>Call</code> 那套「发包-等回包」机制。
   </div>
 
-  <h3>证据 —— Channel 的 1 个签名，3 种发送策略</h3>
+  <h3>证据 3 —— Channel 的 1 个签名，3 种发送策略</h3>
   <p>接口只有一个签名，但入队之后<b>因协议差异巨大</b>：</p>
   <table>
     <tr><th>协议</th><th>发送机制</th><th>自建队列？</th><th>为什么</th></tr>
@@ -205,15 +128,35 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
       <td>KCP 内部已有可靠传输+发送队列，Channel 层不用再造</td>
     </tr>
   </table>
-  <p><small>引用：<code>TCPClientNetwork.cs:333-375</code>（TCP，有队列）、<code>KCPClientNetwork.cs:571</code>（KCP，无自建队列，靠 KCP 内部）。<b>这是 Channel 抽象最值钱的地方</b>：Session 调的都是同一个 <code>Channel.Send</code>，但底下 TCP 要排队、KCP 直接扔给 KCP 内部队列——这些差异 Session 完全不感知。</small></p>
+  <p><small>引用：<code>TCPClientNetwork.cs:333-375</code>（TCP，有队列）、<code>KCPClientNetwork.cs:571</code>（KCP，无自建队列，靠 KCP 内部）。<b>这个差异被 Channel 接口屏蔽了</b>——Session 调的都是同一个 <code>Channel.Send</code>，底下 TCP 要排队还是 KCP 直扔，Session 完全不感知。</small></p>
 
-  <h3>address 参数：客户端恒为 0，服务端才用</h3>
-  <p>这是「传输 vs 业务」分层的一个具体落点：</p>
+  <h3>证据 4 —— 客户端的「一人分饰两角」</h3>
+  <table>
+    <tr><th>形态</th><th>客户端</th><th>服务端</th></tr>
+    <tr><td>Channel 实现</td><td>Network 类<b>自己就是</b> Channel（<code>TCPClientNetwork : AClientNetwork, INetworkChannel</code>）</td><td>Network 和 Channel 分开（1 个 Network 管 N 个 Channel）</td></tr>
+    <tr><td>原因</td><td>客户端只有一条连接，没必要再分层</td><td>服务端要管多条连接，必须分层</td></tr>
+    <tr><td>Session</td><td colspan="2"><b>始终独立</b>——不管 Channel 是独立的还是合体的，Session 都是外面那层业务壳</td></tr>
+  </table>
+
+  <h3>证据 5 —— address 参数：客户端恒为 0，服务端才用</h3>
   <ul>
     <li><b>客户端</b>：用 Outer 协议，包头<b>不含 address</b>，传 <code>0</code> 被丢弃。所以 <code>session.Send(msg)</code> 从不传 address。</li>
     <li><b>服务端间</b>：用 Inner 协议，包头 20 字节含 address，用于<b>进程间路由</b>（把消息送到正确的 gate/map 进程）。服务端转发时 address 才是必须的。</li>
   </ul>
   <p><small>引用：<code>ReadOnlyMemoryPacketParser.cs</code> 的 <code>InnerReadOnlyMemoryPacketParser</code>（写 address）vs <code>OuterReadOnlyMemoryPacketParser</code>（忽略 address）。</small></p>
+
+  <h3>数据流向：各自干什么的活</h3>
+  <p class="code-caption">接收方向：Channel 交付字节，Session 负责分发</p>
+  <pre><code><span class="cmt">// Channel 这边：UnPack 凿出完整包，交付出去</span>
+UnPack 凿出完整包 → <span class="type">Session</span>.<span class="type">Receive</span>(packInfo)
+                        ↓
+                      <span class="cmt">// Session 这边：更新心跳 + 交给调度器分发</span>
+                      NetworkMessageScheduler.<span class="type">Scheduler</span>(<span class="kw">this</span>, packInfo) → Handler
+
+<span class="cmt">// 发送方向：Session 配 rpcId，Channel 负责发字节</span>
+session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// Session 用 _rpcId + RequestCallback 配对 RPC</span>
+      → channel.<span class="type">Send</span>(rpcId, address, ...)  <span class="cmt">// Channel 只管把字节发出去</span></code></pre>
+  <p><small>引用：<code>Session.cs:42</code>（<code>Channel</code> 属性，internal）、<code>:210</code>（<code>Call</code>）、<code>:224</code>（<code>Receive</code>）；<code>INetworkChannel.cs</code>（13 行全文，<code>Session</code> 属性 public）。</small></p>
 
   <div class="callout tip">
     <span class="callout-title">「5 种发送」对应「5 种业务语义」</span>
@@ -222,6 +165,21 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
     • 发 RPC 要回包 → <code>Call&lt;T&gt;</code><br>
     • 服务端转发收到的消息（不重新序列化）→ Send 1/2/3（带 memoryStream/packInfo）<br>
     客户端只会用到前两种，后三种是服务端框架内部的转发优化。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">可见性不对称不是偶然</span>
+    <code>Session.Channel</code> 是 <code>internal</code>（外部碰不到），<code>INetworkChannel.Session</code> 是 public。
+    这个不对称说明：<b>业务代码应该只通过 Session 交互</b>，Channel 是框架内部细节，不该被业务直接操作。
+    如果你发现业务代码在想办法拿 Channel，多半是分层用错了。
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">可迁移的类比</span>
+    「Channel vs Session」和这些是同一类思路：<br>
+    • <code>HttpClient</code>（传输） vs <code>HttpRequest</code>（语义）<br>
+    • TCP 里 <code>socket</code>（传输） vs <code>connection</code>（会话）<br>
+    • 数据库 <code>DbConnection</code>（传输） vs <code>DbTransaction</code>（会话）
   </div>
 
   <details class="qa">
@@ -237,6 +195,16 @@ session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// S
   <details class="qa">
     <summary>自测：客户端代码里 address 参数为什么总是 0？</summary>
     <p>因为客户端用的是 Outer 协议（<code>NetworkTarget.Client</code>），<code>OuterReadOnlyMemoryPacketParser</code> 的包头里<b>根本没有 address 字段</b>，传进去也会被忽略。address 是 Inner 协议（服务端间通信）才用的，表示「目标 Scene/进程的地址」，用于把消息路由到正确的服务器。客户端的连接对象只有一个服务端，不需要路由，所以 address 恒为 0。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么 INetworkChannel 和 Session 要互相持有？</summary>
+    <p>接收方向需要 Channel → Session（Channel 收到字节后要回调 Session.Receive 分发）；发送方向需要 Session → Channel（Session.Send 要转调 Channel.Send 发字节）。去掉任一方向，数据流就断了。互相持有是因为<b>数据是双向流动的</b>。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：新增一个 QUIC 传输层，需要改 Session 类吗？</summary>
+    <p>不需要。只需新增 <code>QUICClientNetwork : AClientNetwork, INetworkChannel</code> 实现传输细节，Session 一行不改。<b>这正是分层抽象的价值——传输层是可插拔的。</b>需要改的只有协议选择处（如 <code>GameClient.cs</code> 里写死 <code>NetworkProtocolType</code> 的地方）。</p>
   </details>
 </section>
 
