@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTask 阶段一 · 自定义 awaitable · 学习笔记</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/toc.js" defer></script>
+</head>
+<body>
+<main>
+<a class="back-home" href="index.html">← 回到索引</a>
+<h1>FTask 阶段一 · 自定义 awaitable</h1>
+<p class="meta">
+  来源：<a href="../src/FTask阶段一讲解.html" target="_blank">FTask阶段一讲解.html</a> ／
+  命名空间：<code>Fantasy.Async</code> ／ 状态：📖 进行中
+</p>
+
+<!-- 问答回答从这里往下追加，最新的在最下方 -->
+
+<section id="fvoid-no-getawaiter">
+  <h2>讲解说「有 GetAwaiter 就能 await」，但 FVoid 里没有这个方法，为什么它也能被 await？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/FTask/Task/FVoid.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>「鸭子类型 awaitable 契约」和「awaiter 形态」是两条不同的路</li>
+    <li>FVoid 自己就是 awaiter，不是 awaitable</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    C# 让一个类型可被 await 有<b>两条路径</b>。讲解里说的「有 <code>GetAwaiter()</code> 就能 await」描述的是
+    <b>通用 awaitable 契约</b>（鸭子类型：提供 <code>GetAwaiter()</code> 返回一个具备
+    <code>IsCompleted</code>/<code>OnCompleted</code>/<code>GetResult</code> 的 awaiter）。
+    <code>FTask</code>、<code>Task</code>、<code>UniTask</code> 都走这条。
+  </p>
+  <p>
+    <code>FVoid</code> 走的是另一条：<b>它自己直接实现 awaiter 接口（<code>ICriticalNotifyCompletion</code>），
+    自己当 awaiter，省掉了 <code>GetAwaiter()</code> 这一跳</b>。它只在 <code>async FVoid</code> 方法的编译器状态机内部使用，
+    配合 <code>[AsyncMethodBuilder]</code> 由编译器直接调用它的 <code>IsCompleted</code>/<code>UnsafeOnCompleted</code>，
+    所以根本不需要 <code>GetAwaiter</code>。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">FVoid.cs —— 整个类型没有 GetAwaiter()，直接把 awaiter 三件套长在自己身上</p>
+  <pre><code>[<span class="type">AsyncMethodBuilder</span>(<span class="kw">typeof</span>(<span class="type">AsyncFVoidMethodBuilder</span>))]
+<span class="kw">internal struct</span> <span class="type">FVoid</span> : <span class="type">ICriticalNotifyCompletion</span>
+{
+    <span class="kw">public bool</span> IsCompleted => <span class="kw">true</span>;          <span class="cmt">// 恒完成，永不挂起</span>
+    <span class="kw">public void</span> <span class="type">OnCompleted</span>(<span class="type">Action</span> continuation) { }
+    <span class="kw">public void</span> <span class="type">UnsafeOnCompleted</span>(<span class="type">Action</span> continuation) { }
+}</code></pre>
+  <p><small>引用：<code>Fantasy.Unity/Runtime/Core/FTask/Task/FVoid.cs:8-28</code>。注意 FVoid 连 <code>GetResult()</code> 都没有，只有个空的 <code>Coroutine()</code>——因为 <code>IsCompleted</code> 恒为 <code>true</code>，编译器走快速路径直接跳过 <code>GetResult</code>。</small></p>
+
+  <h3>对比表</h3>
+  <table>
+    <tr><th>形态</th><th>需要 GetAwaiter()?</th><th>代表</th></tr>
+    <tr><td>awaitable（鸭子类型）</td><td>必须，返回一个 awaiter</td><td><code>FTask</code>、<code>Task</code>、<code>UniTask</code></td></tr>
+    <tr><td>awaiter 本身</td><td>不需要</td><td><code>FVoid</code>（仅编译器状态机内部用）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-title">关键区分</span>
+    讲解那句「有 GetAwaiter 就能 await」没错，但它讲的是<b>通用规则</b>。FVoid 是特例：awaitable 与 awaiter 合一、只服务于 <code>async FVoid</code> 的零开销 fire-and-forget。看到没有 <code>GetAwaiter</code> 却能 await 的类型，先查它是不是直接实现了 <code>INotifyCompletion</code>/<code>ICriticalNotifyCompletion</code>。
+  </div>
+</section>
+
+<section id="async-method-builder">
+  <h2>AsyncMethodBuilder 到底是什么？为什么 FVoid、FTask 上都要贴这个特性？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/FTask/Builder/AsyncFVoidMethodBuilder.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>async 关键字 = 编译时把方法切成状态机的语法糖</li>
+    <li>编译器不认识你造的类型，Builder 就是状态机和你类型之间的「胶水层」</li>
+    <li>7 个固定签名方法的契约</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>AsyncMethodBuilder</code> 是编译器的<b>脚手架</b>。<code>async</code> 关键字在 C# 里不是运行时魔法，是编译时把方法体改写成
+    <code>IAsyncStateMachine</code> 状态机的语法糖。但编译器只认识 <code>System.Threading.Tasks.Task</code>，
+    碰到第三方自己造的 <code>FTask</code>/<code>FVoid</code>/<code>UniTask</code>，它不知道「怎么创建这个 task、完成时怎么收尾、异常往哪抛」。
+  </p>
+  <p>
+    所以 C# 提供了一个约定：你在类型上贴 <code>[AsyncMethodBuilder(typeof(XxxBuilder))]</code>，
+    指向一个实现了 7 个固定签名方法的「建造者」，由它负责在状态机的每个关键节点跟你的类型打交道。
+    <b>Builder = 状态机和自定义 Task 类型之间的胶水层。</b>
+  </p>
+
+  <h3>证据 —— Builder 的 7 个固定方法，对应状态机的 7 个调用点</h3>
+  <p class="code-caption">AsyncFVoidMethodBuilder.cs —— 最简 builder，struct 零字段全 inline</p>
+  <pre><code><span class="kw">internal struct</span> <span class="type">AsyncFVoidMethodBuilder</span>
+{
+    <span class="kw">public</span> <span class="type">FVoid</span> Task => <span class="kw">default</span>;                       <span class="cmt">// 读 Task 属性：返回最终对象</span>
+    <span class="kw">public static</span> <span class="type">AsyncFVoidMethodBuilder</span> <span class="type">Create</span>() => <span class="kw">default</span>;  <span class="cmt">// 进 async 方法时调用</span>
+    <span class="kw">public void</span> <span class="type">Start</span>&lt;<span class="type">TSM</span>&gt;(<span class="kw">ref</span> <span class="type">TSM</span> sm) <span class="kw">where</span> <span class="type">TSM</span> : <span class="type">IAsyncStateMachine</span>
+        => sm.<span class="type">MoveNext</span>();                              <span class="cmt">// 启动状态机，同步跑第一片段</span>
+    <span class="kw">public void</span> <span class="type">SetResult</span>() { }                      <span class="cmt">// 方法正常 return 完</span>
+    <span class="kw">public void</span> <span class="type">SetException</span>(<span class="type">Exception</span> ex)                 <span class="cmt">// 方法体抛异常</span>
+        => <span class="type">ExceptionDispatchInfo</span>.<span class="type">Capture</span>(ex).<span class="type">Throw</span>();
+    <span class="kw">public void</span> <span class="type">AwaitOnCompleted</span>&lt;...&gt;(...)             <span class="cmt">// 挂起：登记续体（普通版）</span>
+        => awaiter.<span class="type">OnCompleted</span>(sm.<span class="type">MoveNext</span>);
+    <span class="kw">public void</span> <span class="type">AwaitUnsafeOnCompleted</span>&lt;...&gt;(...)         <span class="cmt">// 挂起：登记续体（跳过上下文版）</span>
+        => awaiter.<span class="type">UnsafeOnCompleted</span>(sm.<span class="type">MoveNext</span>);
+}</code></pre>
+  <p><small>引用：<code>Fantasy.Unity/Runtime/Core/FTask/Builder/AsyncFVoidMethodBuilder.cs:11-61</code></small></p>
+
+  <h3>对照：编译器把 async 方法翻成了什么</h3>
+  <pre><code><span class="cmt">// 你写的：</span>
+<span class="kw">async</span> <span class="type">FVoid</span> <span class="type">Foo</span>() { <span class="kw">await</span> <span class="type">Bar</span>(); }
+
+<span class="cmt">// 编译器翻译成（伪代码）：</span>
+<span class="type">FVoid</span> <span class="type">Foo</span>() {
+    <span class="kw">var</span> sm = <span class="kw">new</span> <span class="type">FooStateMachine</span>();
+    sm.builder = <span class="type">AsyncFVoidMethodBuilder</span>.<span class="type">Create</span>();   <span class="cmt">// ← Create()</span>
+    sm.builder.<span class="type">Start</span>(<span class="kw">ref</span> sm);                     <span class="cmt">// ← Start()，跑到第一个 await</span>
+    <span class="kw">return</span> sm.builder.Task;                      <span class="cmt">// ← Task 属性</span>
+}
+<span class="kw">void</span> <span class="type">MoveNext</span>() {
+    <span class="cmt">// ...await 一个未完成 task...</span>
+    builder.<span class="type">AwaitUnsafeOnCompleted</span>(<span class="kw">ref</span> awaiter, <span class="kw">ref this</span>);  <span class="cmt">// ← 登记续体</span>
+    <span class="kw">return</span>;
+    <span class="cmt">// ...被唤醒跑完...</span>
+    builder.<span class="type">SetResult</span>();      <span class="cmt">// ← 或 SetException(ex)</span>
+}</code></pre>
+
+  <div class="callout tip">
+    <span class="callout-title">FVoid 的 Builder 为什么这么空</span>
+    <code>Create()</code>/<code>Task</code> 都 <code>return default</code>（struct 零值就够，不分配），<code>SetResult()</code> 空实现（fire-and-forget，完成了不用通知任何人），<code>Start()</code> 同步调一次 <code>MoveNext</code>。<b>整个 builder 是 struct、零字段、全 <code>[AggressiveInlining]</code></b>，编译器内联后 <code>async FVoid</code> 几乎零开销——这正是 Fantasy 要为 fire-and-forget 单独造 FVoid 而不用 FTask 的原因。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">造自己的 awaitable 类型，两样都不能少</span>
+    除了实现 awaiter 契约（<code>IsCompleted</code>/<code>OnCompleted</code>/<code>GetResult</code>），<b>还必须配一个 Builder 并在类型上贴 <code>[AsyncMethodBuilder(typeof(...))]</code></b>。缺任何一个，<code>async YourType</code> 都编译不过。
+  </div>
+</section>
+
+</main>
+</body>
+</html>

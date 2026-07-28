@@ -1,0 +1,110 @@
+/* 学习笔记共享样式 —— 配色与 Books/src 讲解文档保持一致 */
+:root{
+  --bg:#12151a; --panel:#1a1f27; --panel2:#212832;
+  --fg:#d8dee9; --dim:#8b95a5; --line:#2c343f;
+  --accent:#7fb4ff; --warn:#ffb86b; --good:#8fd18f; --bad:#ff8b8b;
+  --kw:#c792ea; --str:#c3e88d; --cmt:#6b7688; --type:#82d2d8; --num:#f78c6c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font:16px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+}
+main{max-width:900px;margin:0 auto;padding:0 20px 80px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.back-home{
+  display:inline-block;margin:32px 0 8px;color:var(--dim);font-size:14px;
+}
+.back-home:hover{color:var(--accent);text-decoration:none}
+h1{font-size:30px;margin:16px 0 12px;letter-spacing:.5px;border-bottom:1px solid var(--line);padding-bottom:20px}
+p.meta{color:var(--dim);font-size:14px;margin-top:-4px}
+p.meta code{font-size:13px}
+section{
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:24px 28px;margin:24px 0;
+}
+section > h2{
+  font-size:21px;margin:0 0 6px;padding-left:0;border-left:none;line-height:1.35;
+}
+section > p.meta{margin:0 0 18px}
+h3{
+  font-size:13px;color:var(--accent);margin:22px 0 8px;
+  text-transform:uppercase;letter-spacing:1px;font-weight:600;
+}
+ul,ol{padding-left:22px;margin:10px 0}
+li{margin:6px 0}
+code{
+  background:var(--panel2);padding:2px 6px;border-radius:4px;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:14px;
+}
+pre{
+  background:#0f1217;border:1px solid var(--line);border-radius:8px;
+  padding:16px 18px;overflow-x:auto;margin:12px 0;
+  font-family:"Cascadia Code",Consolas,monospace;font-size:13.5px;line-height:1.65;
+}
+pre code{background:none;padding:0;font-size:inherit}
+.kw{color:var(--kw)}.str{color:var(--str)}.cmt{color:var(--cmt)}
+.type{color:var(--type)}.num{color:var(--num)}
+p.code-caption{
+  color:var(--dim);font-family:"Cascadia Code",Consolas,monospace;
+  font-size:12.5px;margin:14px 0 0;
+}
+p.code-caption + pre{margin-top:4px}
+small{color:var(--dim)}
+blockquote{
+  margin:14px 0;padding:10px 16px;border-left:3px solid var(--accent);
+  background:var(--panel2);border-radius:0 6px 6px 0;color:var(--dim);
+}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14.5px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:var(--accent);font-weight:600}
+td code{font-size:13px}
+
+/* 提示框 */
+.callout{border-radius:8px;padding:14px 18px;margin:18px 0;border-left:3px solid var(--accent);background:var(--panel2)}
+.callout.warn{border-left-color:var(--warn)}
+.callout.tip{border-left-color:var(--good)}
+.callout.danger{border-left-color:var(--bad)}
+.callout-title{display:block;margin-bottom:6px;font-size:14px;font-weight:600}
+.callout.warn .callout-title{color:var(--warn)}
+.callout.tip .callout-title{color:var(--good)}
+.callout.danger .callout-title{color:var(--bad)}
+
+/* 折叠自测 */
+details.qa{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:14px 0}
+details.qa summary{cursor:pointer;color:var(--accent);font-weight:600}
+details.qa[open] summary{margin-bottom:10px}
+
+/* ===== 索引页（index.html）专用 ===== */
+.index-header{padding:48px 0 32px;border-bottom:1px solid var(--line);margin-bottom:40px}
+.index-header h1{border:none;padding:0;margin:0 0 10px}
+.index-header .sub{color:var(--dim);font-size:15px}
+.index-last-updated{color:var(--dim);font-size:13px;margin:24px 0 0}
+.topic-block{margin:32px 0}
+.topic-block h3{
+  font-size:18px;color:var(--fg);text-transform:none;letter-spacing:0;
+  margin:0 0 14px;padding-left:12px;border-left:3px solid var(--accent);
+}
+.topic-table{width:100%;border-collapse:collapse;font-size:14.5px}
+.topic-table th,.topic-table td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+.topic-table th{background:var(--panel2);color:var(--accent)}
+.topic-table td a{font-weight:600}
+.topic-table .status{white-space:nowrap;font-size:13px;color:var(--dim)}
+
+/* ===== 章节页侧边书签（toc.js 注入） ===== */
+.toc{
+  position:fixed;left:0;top:0;bottom:0;width:220px;
+  background:var(--panel);border-right:1px solid var(--line);
+  padding:24px 16px;overflow-y:auto;font-size:13px;
+}
+.toc h4{color:var(--dim);margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:1px}
+.toc a{display:block;color:var(--dim);padding:5px 10px;border-radius:5px;line-height:1.4;margin:2px 0}
+.toc a:hover{background:var(--panel2);color:var(--accent);text-decoration:none}
+.toc a.active{background:var(--panel2);color:var(--accent)}
+main.with-toc{margin-left:220px}
+@media (max-width:900px){
+  .toc{display:none}
+  main.with-toc{margin-left:0}
+}
