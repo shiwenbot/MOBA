@@ -1,5 +1,277 @@
-[*]
+﻿# References
+# https://github.com/MicrosoftDocs/visualstudio-docs/blob/master/docs/ide/editorconfig-code-style-settings-reference.md#example-editorconfig-file
 
-# ReSharper properties
-resharper_csharp_max_line_length = 180
-resharper_place_attribute_on_same_line = false
+###############################
+# Core EditorConfig Options   #
+###############################
+
+root = true
+
+# 所有文件
+[*]
+indent_style = space # 缩进风格：使用空格
+charset = utf-8 # 文件编码：UTF-8
+trim_trailing_whitespace = false # 去除行尾多余空格
+insert_final_newline = false # 文件末尾插入新行
+end_of_line = lf # 换行符：LF (Unix-style)
+
+# 代码文件
+[*.{cs,csx,cpp,h,ts}]
+indent_size = 4 # 缩进大小：4个空格
+
+###############################
+# .NET/C# 编码约定与风格      #
+###############################
+
+[*.cs]
+# using 指令组织
+dotnet_sort_system_directives_first = true # `System` 命名空间指令优先
+dotnet_separate_import_directive_groups = false # 是否在不同的 using 组之间添加空行 (false 表示不添加)
+
+# this. 限定首选项 (推荐不使用 'this.' 限定，除非必要)
+dotnet_style_qualification_for_field = false:none # 字段访问不使用 'this.'
+dotnet_style_qualification_for_property = false:none # 属性访问不使用 'this.'
+dotnet_style_qualification_for_method = false:none # 方法调用不使用 'this.'
+dotnet_style_qualification_for_event = false:none # 事件访问不使用 'this.'
+
+# 语言关键字 vs BCL 类型首选项 (推荐使用语言关键字，如 int 而不是 Int32)
+dotnet_style_predefined_type_for_locals_parameters_members = true:none # 局部变量、参数、成员声明使用预定义类型
+dotnet_style_predefined_type_for_member_access = true:none # 成员访问时使用预定义类型
+
+# 括号首选项
+dotnet_style_parentheses_in_arithmetic_binary_operators = always_for_clarity:silent # 算术二元运算符：为清晰起见始终使用括号
+dotnet_style_parentheses_in_relational_binary_operators = always_for_clarity:silent # 关系二元运算符：为清晰起见始终使用括号
+dotnet_style_parentheses_in_other_binary_operators = always_for_clarity:silent # 其他二元运算符：为清晰起见始终使用括号
+dotnet_style_parentheses_in_other_operators = never_if_unnecessary:silent # 其他运算符：如非必要，不使用括号
+
+# 修饰符首选项
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:none # 可访问性修饰符：对于非接口成员要求显式声明 (如 public, private)
+dotnet_style_readonly_field = true:warning # 只读字段：建议将可设为只读的私有字段标记为 readonly
+
+# 表达式级别首选项
+dotnet_style_object_initializer = true:warning # 对象初始化器：建议使用对象初始化器语法 (e.g., new Person { Name = "John" })
+dotnet_style_collection_initializer = true:warning # 集合初始化器：建议使用集合初始化器语法 (e.g., new List<int> { 1, 2, 3 })
+dotnet_style_explicit_tuple_names = true:warning #显式元组名称：建议在元组类型声明中显式指定元素名称
+dotnet_style_null_propagation = true:warning # 空传播运算符：建议使用空传播运算符 ?.
+dotnet_style_coalesce_expression = true:warning # 空合并表达式：建议使用空合并运算符 ??
+dotnet_style_prefer_is_null_check_over_reference_equality_method = true:silent # is null 检查：优先使用 'is null' 而不是 'object.ReferenceEquals(x, null)'
+dotnet_style_prefer_inferred_tuple_names = true:warning # 推断元组名称：如果元组元素名称可以从投影的变量中推断出来，则建议省略显式名称
+dotnet_style_prefer_inferred_anonymous_type_member_names = true:warning # 推断匿名类型成员名称：如果匿名类型成员名称可以从投影的变量中推断出来，则建议省略显式名称
+dotnet_style_prefer_auto_properties = true:silent # 自动属性：如果属性的 get 和 set 访问器中没有额外逻辑，则建议使用自动属性
+dotnet_style_prefer_conditional_expression_over_assignment = true:silent # 条件表达式赋值：建议使用条件表达式 (三元运算符) 进行赋值，而不是 if-else 语句
+dotnet_style_prefer_conditional_expression_over_return = true:silent # 条件表达式返回：建议使用条件表达式 (三元运算符) 进行返回，而不是 if-else 语句
+
+# var 首选项 (倾向于使用 var，如果类型明显)
+csharp_style_var_for_built_in_types = true:none # 内置类型：使用 var (如 var i = 0;)
+csharp_style_var_when_type_is_apparent = true:none # 类型明显时：使用 var (如 var stream = new FileStream(...);)
+csharp_style_var_elsewhere = true:none # 其他情况：使用 var
+
+# 表达式主体成员 (Expression-bodied members)
+csharp_style_expression_bodied_methods = false:none # 方法：不使用表达式主体 (使用传统花括号体)
+csharp_style_expression_bodied_constructors = false:none # 构造函数：不使用表达式主体
+csharp_style_expression_bodied_operators = false:none # 运算符：不使用表达式主体
+csharp_style_expression_bodied_properties = true:none # 属性：使用表达式主体 (e.g., public int X => _x;)
+csharp_style_expression_bodied_indexers = true:none # 索引器：使用表达式主体
+csharp_style_expression_bodied_accessors = true:none # 访问器 (get/set)：使用表达式主体 (e.g., public int X { get => _x; set => _x = value; })
+
+# 模式匹配首选项
+csharp_style_pattern_matching_over_is_with_cast_check = true:warning # is-cast 模式匹配：建议使用模式匹配 (e.g., if (obj is Person p)) 替代 is 检查后强制转换
+csharp_style_pattern_matching_over_as_with_null_check = true:warning # as-null 模式匹配：建议使用模式匹配替代 as 操作符后进行 null 检查
+
+# 空检查首选项
+csharp_style_throw_expression = true:warning # throw 表达式：建议使用 throw 表达式 (e.g., x ?? throw new ArgumentNullException())
+csharp_style_conditional_delegate_call = true:warning # 条件委托调用：建议使用 ?.Invoke() 调用委托
+
+# 修饰符首选项 (顺序)
+csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:warning # 建议的修饰符顺序
+
+# 表达式级别首选项 (C#)
+csharp_prefer_braces = true:none # 大括号：对于 if, else, for, foreach, while 等语句，总是使用大括号，即使只有单行
+csharp_style_deconstructed_variable_declaration = true:warning # 解构变量声明：建议使用解构赋值 (e.g., (var name, var age) = GetPerson();)
+csharp_prefer_simple_default_expression = true:warning #简单默认表达式：建议使用 'default' 替代 'default(T)'
+csharp_style_pattern_local_over_anonymous_function = true:warning # 模式局部变量：当 lambda 仅用于将值传递给具有 out 参数的方法时，建议使用模式局部变量
+csharp_style_inlined_variable_declaration = true:warning # 内联变量声明：建议在 out 变量使用处直接声明 (e.g., if (int.TryParse(s, out var i)))
+
+# 命名空间与文件夹结构匹配
+dotnet_style_namespace_match_folder = false:none # 命名空间：不强制要求命名空间与文件夹结构完全匹配
+resharper_check_namespace_highlighting = none # Rider
+
+###############################
+# 命名约定 (Naming Conventions) #
+###############################
+
+# 风格定义 (Style Definitions)
+dotnet_naming_style.pascal_case_style.capitalization = pascal_case # 风格：PascalCase (首字母大写)
+dotnet_naming_style.camel_case_style.capitalization = camel_case # 风格：camelCase (首字母小写，后续单词首字母大写)
+dotnet_naming_style.camel_case_with_underscore_prefix.capitalization = camel_case # 风格：_camelCase (下划线开头，后跟 camelCase)
+dotnet_naming_style.camel_case_with_underscore_prefix.required_prefix = _ # 前缀：下划线
+dotnet_naming_style.i_pascal_case_style.capitalization = pascal_case # 风格：IPascalCase (I 开头，后跟 PascalCase)
+dotnet_naming_style.i_pascal_case_style.required_prefix = I # 前缀：I
+
+# 1. 命名空间 (Namespaces) - 使用 PascalCase
+dotnet_naming_rule.namespaces_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.namespaces_should_be_pascal_case.symbols = namespace_symbols # 应用符号：命名空间
+dotnet_naming_rule.namespaces_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.namespace_symbols.applicable_kinds = namespace # 符号种类：命名空间
+
+# 2. 类 (Classes) - 使用 PascalCase (包括 MonoBehaviour 脚本)
+dotnet_naming_rule.classes_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.classes_should_be_pascal_case.symbols = class_symbols # 应用符号：类
+dotnet_naming_rule.classes_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.class_symbols.applicable_kinds = class # 符号种类：类
+
+# 3. 结构体 (Structs) - 使用 PascalCase
+dotnet_naming_rule.structs_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.structs_should_be_pascal_case.symbols = struct_symbols # 应用符号：结构体
+dotnet_naming_rule.structs_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.struct_symbols.applicable_kinds = struct # 符号种类：结构体
+
+# 4. 接口 (Interfaces) - 使用 I + PascalCase (例如: IMyInterface)
+dotnet_naming_rule.interfaces_should_be_i_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.interfaces_should_be_i_pascal_case.symbols = interface_symbols # 应用符号：接口
+dotnet_naming_rule.interfaces_should_be_i_pascal_case.style = i_pascal_case_style # 应用风格：IPascalCase
+dotnet_naming_symbols.interface_symbols.applicable_kinds = interface # 符号种类：接口
+
+# 5. 枚举 (Enums) - 类型名和成员名均使用 PascalCase
+# 枚举类型名
+dotnet_naming_rule.enum_types_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.enum_types_should_be_pascal_case.symbols = enum_type_symbols # 应用符号：枚举类型
+dotnet_naming_rule.enum_types_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.enum_type_symbols.applicable_kinds = enum # 符号种类：枚举
+# 枚举成员名
+dotnet_naming_rule.enum_members_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.enum_members_should_be_pascal_case.symbols = enum_member_symbols # 应用符号：枚举成员
+dotnet_naming_rule.enum_members_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.enum_member_symbols.applicable_kinds = enum_member # 符号种类：枚举成员 (注意：原配置为enum，应为enum_member以区分类型和成员)
+# 对于 [Flags] 枚举，类型名通常为复数名词，成员仍为 PascalCase (2的幂值由开发者保证) - 此为约定，非强制规则
+
+# 6. 方法 (Methods)
+# 公共、保护、私有方法均使用 PascalCase
+dotnet_naming_rule.methods_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.methods_should_be_pascal_case.symbols = method_symbols # 应用符号：方法
+dotnet_naming_rule.methods_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.method_symbols.applicable_kinds = method # 符号种类：方法
+# 返回布尔值的方法名通常构造成问题 (如 IsValid, HasPermission) - 此为约定，非强制规则
+
+# 方法参数 (Method Parameters) - 使用 camelCase
+dotnet_naming_rule.parameters_should_be_camel_case.severity = warning # 严重性：警告
+dotnet_naming_rule.parameters_should_be_camel_case.symbols = parameter_symbols # 应用符号：参数
+dotnet_naming_rule.parameters_should_be_camel_case.style = camel_case_style # 应用风格：camelCase
+dotnet_naming_symbols.parameter_symbols.applicable_kinds = parameter # 符号种类：参数
+
+# 7. 属性 (Properties) - 使用 PascalCase (包括公有、私有、保护属性)
+dotnet_naming_rule.properties_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.properties_should_be_pascal_case.symbols = property_symbols # 应用符号：属性
+dotnet_naming_rule.properties_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.property_symbols.applicable_kinds = property # 符号种类：属性
+
+# 8. 变量与字段 (Variables and Fields)
+# a. 局部变量 (Local Variables) - 使用 camelCase
+dotnet_naming_rule.local_variables_should_be_camel_case.severity = warning # 严重性：警告
+dotnet_naming_rule.local_variables_should_be_camel_case.symbols = local_variable_symbols # 应用符号：局部变量
+dotnet_naming_rule.local_variables_should_be_camel_case.style = camel_case_style # 应用风格：camelCase
+dotnet_naming_symbols.local_variable_symbols.applicable_kinds = local # 符号种类：局部变量
+
+# b. 公有成员字段 (Public Member Fields) - 使用 PascalCase
+dotnet_naming_rule.public_fields_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.public_fields_should_be_pascal_case.symbols = public_field_symbols # 应用符号：公有字段
+dotnet_naming_rule.public_fields_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.public_field_symbols.applicable_kinds = field # 符号种类：字段
+dotnet_naming_symbols.public_field_symbols.applicable_accessibilities = public # 可访问性：公有
+
+# c. 私有成员字段 (Private Member Fields) - 使用 _ + camelCase (例如: _myField)
+dotnet_naming_rule.private_fields_should_be_camel_case_with_underscore_prefix.severity = warning # 严重性：警告
+dotnet_naming_rule.private_fields_should_be_camel_case_with_underscore_prefix.symbols = private_field_symbols # 应用符号：私有字段
+dotnet_naming_rule.private_fields_should_be_camel_case_with_underscore_prefix.style = camel_case_with_underscore_prefix # 应用风格：_camelCase
+dotnet_naming_symbols.private_field_symbols.applicable_kinds = field # 符号种类：字段
+dotnet_naming_symbols.private_field_symbols.applicable_accessibilities = private # 可访问性：私有
+
+# c. 保护成员字段 (Protected Member Fields) - 使用 camelCase (与 .NET Core 准则一致，不强制前缀)
+dotnet_naming_rule.protected_fields_should_be_camel_case.severity = warning # 严重性：警告
+dotnet_naming_rule.protected_fields_should_be_camel_case.symbols = protected_field_symbols # 应用符号：保护字段
+dotnet_naming_rule.protected_fields_should_be_camel_case.style = camel_case_style # 应用风格：camelCase
+dotnet_naming_symbols.protected_field_symbols.applicable_kinds = field # 符号种类：字段
+dotnet_naming_symbols.protected_field_symbols.applicable_accessibilities = protected # 可访问性：保护
+
+# d. 静态变量/字段 (Static Variables/Fields)
+# 公共静态字段 - 使用 PascalCase
+dotnet_naming_rule.public_static_fields_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.public_static_fields_should_be_pascal_case.symbols = public_static_field_symbols # 应用符号：公有静态字段
+dotnet_naming_rule.public_static_fields_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.public_static_field_symbols.applicable_kinds = field # 符号种类：字段
+dotnet_naming_symbols.public_static_field_symbols.applicable_accessibilities = public # 可访问性：公有
+dotnet_naming_symbols.public_static_field_symbols.required_modifiers = static # 修饰符：静态
+
+# 私有静态字段 - 使用 _ + camelCase (与私有实例字段保持一致，例如: _myStaticField)
+dotnet_naming_rule.private_static_fields_should_be_camel_case_with_underscore_prefix.severity = warning # 严重性：警告
+dotnet_naming_rule.private_static_fields_should_be_camel_case_with_underscore_prefix.symbols = private_static_field_symbols # 应用符号：私有静态字段
+dotnet_naming_rule.private_static_fields_should_be_camel_case_with_underscore_prefix.style = camel_case_with_underscore_prefix # 应用风格：_camelCase
+dotnet_naming_symbols.private_static_field_symbols.applicable_kinds = field # 符号种类：字段
+dotnet_naming_symbols.private_static_field_symbols.applicable_accessibilities = private # 可访问性：私有
+dotnet_naming_symbols.private_static_field_symbols.required_modifiers = static # 修饰符：静态
+
+# e. 布尔型变量/字段 - 名称前通常添加 is, has, can (此为约定，非强制规则，遵循上述 camelCase/PascalCase 规则)
+
+# 9. 常量 (Constants) - 使用 PascalCase (例如: MaxUsers)
+dotnet_naming_rule.constant_fields_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.constant_fields_should_be_pascal_case.symbols  = constant_fields_symbols # 应用符号：常量字段
+dotnet_naming_rule.constant_fields_should_be_pascal_case.style    = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.constant_fields_symbols.applicable_kinds            = field # 符号种类：字段
+dotnet_naming_symbols.constant_fields_symbols.required_modifiers          = const # 修饰符：const (也适用于 static readonly)
+
+# 10. 事件 (Events) - 使用 PascalCase
+dotnet_naming_rule.events_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.events_should_be_pascal_case.symbols = event_symbols # 应用符号：事件
+dotnet_naming_rule.events_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.event_symbols.applicable_kinds = event # 符号种类：事件
+
+# 11. 委托 (Delegates) - 自定义委托类型使用 PascalCase (优先使用 System.Action 和 System.Func)
+dotnet_naming_rule.delegates_should_be_pascal_case.severity = warning # 严重性：警告
+dotnet_naming_rule.delegates_should_be_pascal_case.symbols = delegate_symbols # 应用符号：委托
+dotnet_naming_rule.delegates_should_be_pascal_case.style = pascal_case_style # 应用风格：PascalCase
+dotnet_naming_symbols.delegate_symbols.applicable_kinds = delegate # 符号种类：委托
+
+
+###############################
+# C# 格式化规则 (C# Formatting Rules) #
+###############################
+
+# 换行首选项
+csharp_new_line_before_open_brace = all # 开大括号前换行：适用于所有情况 (类型、方法、属性等)
+csharp_new_line_before_else = true # else 关键字前换行
+csharp_new_line_before_catch = true # catch 关键字前换行
+csharp_new_line_before_finally = true # finally 关键字前换行
+csharp_new_line_before_members_in_object_initializers = true # 对象初始化器中的成员前换行
+csharp_new_line_before_members_in_anonymous_types = true # 匿名类型中的成员前换行
+csharp_new_line_between_query_expression_clauses = true # LINQ 查询表达式子句之间换行
+
+# 缩进首选项
+csharp_indent_case_contents = true # switch 语句中 case 块内容缩进
+csharp_indent_switch_labels = true # switch 语句中 case 标签缩进
+csharp_indent_labels = flush_left # 标签 (label:) 左对齐，不缩进
+
+# 空格首选项
+csharp_space_after_cast = false # 类型转换后不加空格 (e.g., (int)myValue)
+csharp_space_after_keywords_in_control_flow_statements = true # 控制流语句关键字 (if, for, while 等) 后加空格
+csharp_space_between_method_call_parameter_list_parentheses = false # 方法调用时，参数列表括号内侧不加空格
+csharp_space_between_method_declaration_parameter_list_parentheses = false # 方法声明时，参数列表括号内侧不加空格
+csharp_space_between_parentheses = false # 普通括号表达式内侧不加空格 (e.g., (a + b))
+csharp_space_before_colon_in_inheritance_clause = true # 继承子句中冒号前加空格 (e.g., class MyClass : BaseClass)
+csharp_space_after_colon_in_inheritance_clause = true # 继承子句中冒号后加空格
+csharp_space_around_binary_operators = before_and_after # 二元运算符 (e.g., +, -, ==) 前后加空格
+csharp_space_between_method_declaration_empty_parameter_list_parentheses = false # 方法声明时，空参数列表括号之间不加空格 (e.g., void Method())
+csharp_space_between_method_call_name_and_opening_parenthesis = false # 方法调用时，方法名和左括号之间不加空格
+csharp_space_between_method_call_empty_parameter_list_parentheses = false # 方法调用时，空参数列表括号之间不加空格 (e.g., Method())
+
+# 换行首选项 (保留单行)
+csharp_preserve_single_line_statements = true # 保留单行语句在同一行
+csharp_preserve_single_line_blocks = true # 保留单行代码块 (如 { get; set; }) 在同一行
+
+## Unity 特殊配置
+[*.{uxml,xml,html}]
+max_line_length = 120 # 最大行长度：120 个字符
+indent_size = 4 # 缩进大小：4个空格
+
+[*.{uss,css}]
+max_line_length = 120 # 最大行长度：120 个字符
+indent_size = 2 # 缩进大小：2个空格 

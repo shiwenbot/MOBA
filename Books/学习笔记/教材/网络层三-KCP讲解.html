@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络层（三）KCP —— 把保证造回来</title>
+<link rel="stylesheet" href="reading-notes.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="网络层一-TCP讲解.html">一 · TCP</a>
+    <a href="网络层二-UDP讲解.html">二 · UDP</a>
+    <a class="cur" href="网络层三-KCP讲解.html">三 · KCP</a>
+  </div>
+  <h1>网络层（三）KCP —— 把保证造回来</h1>
+  <div class="sub">
+    Fantasy 源码阅读 · 传输层三部曲第三篇<br>
+    <code>Network/Protocol/KCP/</code> · 算法核心 1367 行
+  </div>
+</header>
+
+<p>前两篇铺完了：TCP 把可靠有序外包给内核，UDP 把这些全丢掉换来低延迟和数据报语义。</p>
+
+<p>KCP 的定位是 <b>「用 10%~20% 的带宽浪费，换 30%~40% 的延迟降低」</b>。它不追求 TCP 那样的公平和效率，只追求「快」。手游选它是因为：卡一下比慢一点更致命。</p>
+
+<p>这一篇分两层读：</p>
+
+<ul>
+<li><b>算法层</b>（<code>Base/c/kcp.cs</code>，1367 行）：ARQ 重传、RTO 估算、快速重传、拥塞窗口。从 C 版 kcp 逐行移植，是全项目唯一有算法分量的代码。</li>
+<li><b>集成层</b>（<code>KCPClientNetwork.cs</code> 的剩余部分）：Fantasy 如何驱动这个算法 —— 时间轮、零拷贝、断线策略。</li>
+</ul>
+
+<div class="note">
+<b>读法建议</b>
+<code>Base/c/kcp.cs</code> 是 C 代码的机械翻译，充斥 <code>IQUEUEHEAD*</code> 裸指针和 <code>iqueue_add_tail</code> 这类宏改写。<b>不要试图通读</b>。<br><br>
+按本篇顺序，只读六个函数：<code>ikcp_send</code> → <code>ikcp_input</code> → <code>ikcp_parse_data</code> → <code>ikcp_recv</code> → <code>ikcp_flush</code> → <code>ikcp_update</code>。这六个撑起了整个协议，加起来约 500 行，其余是编解码和链表操作。
+</div>
+
+<h2>一、24 字节里的全部秘密</h2>
+
+<p>先看协议头。KCP 的所有能力都编码在这 24 字节里，理解它们相当于理解了一半。</p>
+
+<div class="filetag">Network/Protocol/KCP/Base/include/kcp.cs</div>
+<pre><code><span class="kw">internal unsafe struct</span> <span class="type">IKCPSEG</span>
+{
+    <span class="kw">public</span> <span class="type">IQUEUEHEAD</span> node;   <span class="cmt">// 链表节点，不上网</span>
+    <span class="kw">public uint</span> conv;         <span class="cmt">// ↓ 以下 24 字节要上网</span>
+    <span class="kw">public uint</span> cmd;
+    <span class="kw">public uint</span> frg;
+    <span class="kw">public uint</span> wnd;
+    <span class="kw">public uint</span> ts;
+    <span class="kw">public uint</span> sn;
+    <span class="kw">public uint</span> una;
+    <span class="kw">public uint</span> len;
+    <span class="kw">public uint</span> resendts;     <span class="cmt">// ↓ 以下是本地状态，不上网</span>
+    <span class="kw">public uint</span> rto;
+    <span class="kw">public uint</span> fastack;
+    <span class="kw">public uint</span> xmit;
+    <span class="kw">public fixed byte</span> data[<span class="num">1</span>];  <span class="cmt">// 柔性数组，实际长度 = len</span>
+}</code></pre>
+
+<p>上网的部分由 <code>ikcp_encode_seg</code> 按序写出：</p>
+
+<div class="flow"><b>KCP 头 24 字节布局</b>
+
+  偏移 0        4    5    6      8          12         16         20        24
+       ├────────┼────┼────┼──────┼──────────┼──────────┼──────────┼─────────┤
+       │ <b>conv</b>   │<b>cmd</b> │<b>frg</b> │ <b>wnd</b>  │ <b>ts</b>       │ <b>sn</b>       │ <b>una</b>      │ <b>len</b>     │ data…
+       │ u32    │ u8 │ u8 │ u16  │ u32      │ u32      │ u32      │ u32     │
+       └────────┴────┴────┴──────┴──────────┴──────────┴──────────┴─────────┘
+</div>
+
+<table>
+<tr><th>字段</th><th>含义</th><th>支撑的能力</th></tr>
+<tr><td><code>conv</code></td><td>会话号，Fantasy 传的是 ChannelId</td><td>校验归属：<code>if (conv != kcp-&gt;conv) return -1;</code></td></tr>
+<tr><td><code>cmd</code></td><td>81=PUSH 82=ACK 83=WASK 84=WINS</td><td>四种报文类型</td></tr>
+<tr><td><code>frg</code></td><td>分片倒序号，0 表示末片</td><td><b>分片重组</b></td></tr>
+<tr><td><code>wnd</code></td><td>发送方剩余接收窗口</td><td><b>流量控制</b></td></tr>
+<tr><td><code>ts</code></td><td>发送时刻</td><td><b>RTT 测量</b>（ACK 带回原 ts）</td></tr>
+<tr><td><code>sn</code></td><td>包序号</td><td><b>有序、去重、选择性重传</b></td></tr>
+<tr><td><code>una</code></td><td>「我已连续收到 una 之前的全部」</td><td><b>累积确认</b>，一次清一批</td></tr>
+<tr><td><code>len</code></td><td>data 长度</td><td>一个 UDP 包里塞多个 seg</td></tr>
+</table>
+
+<p><b><code>sn</code> + <code>una</code> 的组合是 KCP 效率的关键。</b><code>una</code> 是累积确认（像 TCP 的 ACK），一个字段就能确认一大批；<code>sn</code> 配合 ACK 报文是选择性确认，能精确确认乱序到达的单个包。两者并用，既省带宽又能精确重传。</p>
+
+<h2>二、发送侧：ikcp_send 只做分片</h2>
+
+<p>第一个反直觉的点：<b><code>ikcp_send</code> 不发送任何数据。</b>它只做一件事 —— 把用户 buffer 切成 MSS 大小的段，挂进 <code>snd_queue</code> 链表。</p>
+
+<pre><code><span class="kw">if</span> (len &lt;= (<span class="kw">int</span>)kcp-&gt;mss) count = <span class="num">1</span>;
+<span class="kw">else</span> count = (<span class="kw">int</span>)((len + kcp-&gt;mss - <span class="num">1</span>) / kcp-&gt;mss);   <span class="cmt">// 向上取整</span>
+
+<span class="kw">if</span> (kcp-&gt;stream == <span class="num">0</span> &amp;&amp; count &gt; <span class="num">255</span>) <span class="kw">return</span> -<span class="num">2</span>;      <span class="cmt">// frg 是 u8，最多 255 片</span>
+<span class="kw">if</span> (count &gt;= (<span class="kw">int</span>)kcp-&gt;rcv_wnd) <span class="kw">return</span> -<span class="num">2</span>;         <span class="cmt">// 超过对端窗口，拒绝</span>
+
+<span class="kw">for</span> (i = <span class="num">0</span>; i &lt; count; i++)
+{
+    <span class="kw">int</span> size = len &gt; (<span class="kw">int</span>)kcp-&gt;mss ? (<span class="kw">int</span>)kcp-&gt;mss : len;
+    seg = <span class="type">ikcp_segment_new</span>(kcp, size);
+    <span class="type">memcpy</span>(seg-&gt;data, buffer, (<span class="kw">nuint</span>)size);
+
+    seg-&gt;len = (<span class="kw">uint</span>)size;
+    seg-&gt;frg = (<span class="kw">uint</span>)((kcp-&gt;stream == <span class="num">0</span>) ? (count - i - <span class="num">1</span>) : <span class="num">0</span>);   <span class="cmt">// ← 倒序</span>
+
+    <span class="type">iqueue_add_tail</span>(&amp;seg-&gt;node, &amp;kcp-&gt;snd_queue);
+    kcp-&gt;nsnd_que++;
+    buffer += size;  len -= size;
+}</code></pre>
+
+<h3>2.1 frg 为什么是倒序</h3>
+
+<p><code>seg->frg = count - i - 1</code>。发 3 片时 frg 依次是 <b>2, 1, 0</b>。</p>
+
+<p>好处是<b>接收侧不需要知道总片数就能判断完整性</b> —— 看到 <code>frg == 0</code> 就知道到末片了。对比正序方案（0,1,2）：接收侧必须额外传一个「总数」字段，或者等超时才敢断定收完。</p>
+
+<p>这个技巧在 <code>ikcp_peeksize</code> 里直接兑现：</p>
+
+<pre><code><span class="kw">public static int</span> <span class="type">ikcp_peeksize</span>(<span class="type">IKCPCB</span>* kcp)
+{
+    <span class="kw">if</span> (<span class="type">iqueue_is_empty</span>(&amp;kcp-&gt;rcv_queue)) <span class="kw">return</span> -<span class="num">1</span>;
+
+    seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(kcp-&gt;rcv_queue.next);
+    <span class="kw">if</span> (seg-&gt;frg == <span class="num">0</span>) <span class="kw">return</span> (<span class="kw">int</span>)seg-&gt;len;        <span class="cmt">// 单片，直接返回</span>
+
+    <span class="kw">if</span> (kcp-&gt;nrcv_que &lt; seg-&gt;frg + <span class="num">1</span>) <span class="kw">return</span> -<span class="num">1</span>;      <span class="cmt">// 队列里凑不够片数，还没齐</span>
+
+    <span class="kw">for</span> (p = kcp-&gt;rcv_queue.next; p != &amp;kcp-&gt;rcv_queue; p = p-&gt;next)
+    {
+        seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(p);
+        length += (<span class="kw">int</span>)seg-&gt;len;
+        <span class="kw">if</span> (seg-&gt;frg == <span class="num">0</span>) <span class="kw">break</span>;                      <span class="cmt">// 走到末片，收工</span>
+    }
+    <span class="kw">return</span> length;
+}</code></pre>
+
+<p><code>nrcv_que < seg->frg + 1</code> 这行是一次<b>廉价预检</b>：首片说自己后面还有 frg 片，那队列里至少要有 frg+1 个才可能完整。不够就直接返回 -1，省掉整个遍历。</p>
+
+<div class="tip">
+<b>这是 Fantasy 集成层的直接依赖</b>
+<code>KCPClientNetwork.Input()</code> 里 <code>peekSize = _kcp.PeekSize()</code> 返回 &lt; 0 就退出循环，正是靠这个「-1 表示还没齐」的约定。<b>「先问长度、再按长度取」</b>这套 API 设计让调用方能精确分配 buffer，不用猜。
+</div>
+
+<h3>2.2 stream 模式：Fantasy 没开</h3>
+
+<p><code>ikcp_send</code> 前半段有一大块 <code>if (kcp->stream != 0)</code> 的逻辑，做的是「把新数据追加到上一个未满的 segment 里」—— 也就是让 KCP 退化成字节流，像 TCP 一样。</p>
+
+<p><b>Fantasy 没有调用 <code>SetStreamMode</code>，所以 stream 恒为 0，这段代码是死路。</b>可以跳过。</p>
+
+<p>但要理解这个选择的含义：<b>Fantasy 走的是「消息模式」</b>—— 一次 <code>Send</code> 对应一次完整交付，边界由 frg 维护。这正是第二篇里 <code>BufferPacketParser</code> 能省掉分包粘包状态机的根本原因。<b>如果哪天有人开了 stream 模式，那个解析器会立刻出错。</b></p>
+
+<h2>三、接收侧：三个队列的流水线</h2>
+
+<p>KCP 内部有四个链表，理解它们的分工是读懂算法的前提：</p>
+
+<div class="flow"><b>四个队列</b>
+
+  发送方向
+  ┌─────────────┐   flush 时按窗口搬运   ┌────────────┐
+  │ <b>snd_queue</b>    │ ────────────────────→ │ <b>snd_buf</b>    │ ──→ 网络
+  │ 待发，无序号  │   <i>受 cwnd/rmt_wnd 限制</i>  │ 已发，等 ACK │
+  └─────────────┘                       └────────────┘
+                                              ↑ ACK 到达后删除
+
+  接收方向
+  ┌─────────────┐   sn 连续时搬运        ┌────────────┐
+  │ <b>rcv_buf</b>      │ ────────────────────→ │ <b>rcv_queue</b>  │ ──→ 用户
+  │ 已收，<i>可乱序</i> │   <i>按 rcv_nxt 顺序</i>      │ 有序，可交付 │
+  └─────────────┘                       └────────────┘
+</div>
+
+<p><b>「buf 存乱序，queue 存有序」</b>是这套设计的核心。乱序到达的包先在 <code>rcv_buf</code> 里按 sn 插入排好，只有当 <code>sn == rcv_nxt</code>（正好是下一个期待的）时才搬进 <code>rcv_queue</code>。这就是「有序交付」的实现。</p>
+
+<h3>3.1 ikcp_input：拆包 + 分发</h3>
+
+<p>一个 UDP 数据报里可能塞了多个 segment，所以是 <code>while (true)</code> 循环拆：</p>
+
+<pre><code><span class="kw">while</span> (<span class="kw">true</span>)
+{
+    <span class="kw">if</span> (size &lt; (<span class="kw">int</span>)IKCP_OVERHEAD) <span class="kw">break</span>;         <span class="cmt">// 不足 24 字节，收工</span>
+
+    data = <span class="type">ikcp_decode32u</span>(data, &amp;conv);
+    <span class="kw">if</span> (conv != kcp-&gt;conv) <span class="kw">return</span> -<span class="num">1</span>;            <span class="cmt">// ← 会话校验</span>
+
+    <span class="cmt">// …依次解出 cmd/frg/wnd/ts/sn/una/len</span>
+
+    <span class="kw">if</span> (cmd != IKCP_CMD_PUSH &amp;&amp; cmd != IKCP_CMD_ACK &amp;&amp;
+        cmd != IKCP_CMD_WASK &amp;&amp; cmd != IKCP_CMD_WINS)
+        <span class="kw">return</span> -<span class="num">3</span>;                                 <span class="cmt">// 未知命令，整包丢弃</span>
+
+    kcp-&gt;rmt_wnd = wnd;              <span class="cmt">// ① 无论什么包，都更新对端窗口</span>
+    <span class="type">ikcp_parse_una</span>(kcp, una);        <span class="cmt">// ② 累积确认，批量清 snd_buf</span>
+    <span class="type">ikcp_shrink_buf</span>(kcp);            <span class="cmt">// ③ 重算 snd_una</span>
+
+    <span class="cmt">// ④ 按 cmd 分头处理…</span>
+}</code></pre>
+
+<p><b>①②③ 三步对所有报文类型无条件执行</b>，这是 KCP 的一个效率设计：每个包都携带 <code>wnd</code> 和 <code>una</code>，所以哪怕收到的是一个纯数据包，也能顺带更新窗口和清理已确认的发送缓冲。<b>控制信息搭数据包的车，不额外占带宽。</b></p>
+
+<p>三个「清理」函数分工：</p>
+
+<table>
+<tr><th>函数</th><th>做什么</th><th>依据</th></tr>
+<tr><td><code>ikcp_parse_una</code></td><td>删除 <code>snd_buf</code> 里所有 <code>sn &lt; una</code> 的段</td><td>累积确认，<b>批量</b></td></tr>
+<tr><td><code>ikcp_parse_ack</code></td><td>删除 <code>snd_buf</code> 里 <code>sn == 指定值</code> 的<b>单个</b>段</td><td>选择性确认</td></tr>
+<tr><td><code>ikcp_shrink_buf</code></td><td>把 <code>snd_una</code> 更新为 buf 里最小的 sn</td><td>删完后重算水位</td></tr>
+</table>
+
+<h3>3.2 序号比较：必须用 _itimediff</h3>
+
+<pre><code><span class="kw">public static long</span> <span class="type">_itimediff</span>(<span class="kw">uint</span> later, <span class="kw">uint</span> earlier)
+    =&gt; (<span class="kw">int</span>)(later - earlier);   <span class="cmt">// 关键：uint 相减，转 int</span></code></pre>
+
+<p><b>全文所有序号和时间戳比较都走这个函数，一处都没有直接用 <code>&lt;</code> / <code>&gt;</code>。</b></p>
+
+<p>原因是回绕（wraparound）。<code>sn</code> 和 <code>ts</code> 都是 <code>uint</code>，会溢出归零。假设 <code>later = 5</code>（刚回绕），<code>earlier = 0xFFFFFFF0</code>：</p>
+
+<ul>
+<li>直接比较：<code>5 &lt; 0xFFFFFFF0</code> → 「5 更早」 → <b>错</b></li>
+<li><code>_itimediff</code>：<code>5 - 0xFFFFFFF0 = 21</code>（uint 环绕），转 <code>int</code> 为 <code>21 &gt; 0</code> → 「5 更晚」 → <b>对</b></li>
+</ul>
+
+<p>成立条件是<b>两个值的真实差距小于 2³¹</b>。对序号和毫秒时间戳都远远满足。</p>
+
+<div class="warn">
+<b>这是所有滑动窗口协议的必备工具</b>
+自己实现任何带序号的协议（帧同步的帧号、状态同步的版本号、消息去重的 ID），只要用了定长无符号整数就必须这么比。<b>写 <code>if (seq &gt; lastSeq)</code> 的那一刻，就埋了一个平均 49 天后爆发的 bug</b>（uint 毫秒时间戳的回绕周期）。<br><br>
+Fantasy 集成层的 <code>IsTimeGreaterThan</code> 是同一思路的另一种写法，见 §6.2。
+</div>
+
+<h3>3.3 ikcp_parse_data：乱序插入 + 顺序搬运</h3>
+
+<pre><code><span class="kw">public static void</span> <span class="type">ikcp_parse_data</span>(<span class="type">IKCPCB</span>* kcp, <span class="type">IKCPSEG</span>* newseg)
+{
+    <span class="kw">uint</span> sn = newseg-&gt;sn;
+
+    <span class="cmt">// 窗口外 或 已经交付过的 → 丢弃</span>
+    <span class="kw">if</span> (<span class="type">_itimediff</span>(sn, kcp-&gt;rcv_nxt + kcp-&gt;rcv_wnd) &gt;= <span class="num">0</span> ||
+        <span class="type">_itimediff</span>(sn, kcp-&gt;rcv_nxt) &lt; <span class="num">0</span>)
+    {
+        <span class="type">ikcp_segment_delete</span>(kcp, newseg);
+        <span class="kw">return</span>;
+    }
+
+    <span class="cmt">// 从尾往头找插入点（新包通常序号大，尾部命中快）</span>
+    <span class="kw">for</span> (p = kcp-&gt;rcv_buf.prev; p != &amp;kcp-&gt;rcv_buf; p = prev)
+    {
+        <span class="type">IKCPSEG</span>* seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(p);
+        prev = p-&gt;prev;
+        <span class="kw">if</span> (seg-&gt;sn == sn) { repeat = <span class="num">1</span>; <span class="kw">break</span>; }     <span class="cmt">// ← 去重</span>
+        <span class="kw">if</span> (<span class="type">_itimediff</span>(sn, seg-&gt;sn) &gt; <span class="num">0</span>) <span class="kw">break</span>;        <span class="cmt">// 找到位置</span>
+    }
+
+    <span class="kw">if</span> (repeat == <span class="num">0</span>) { <span class="type">iqueue_add</span>(&amp;newseg-&gt;node, p); kcp-&gt;nrcv_buf++; }
+    <span class="kw">else</span>              { <span class="type">ikcp_segment_delete</span>(kcp, newseg); }
+
+    <span class="cmt">// rcv_buf → rcv_queue：只搬连续的</span>
+    <span class="kw">while</span> (!<span class="type">iqueue_is_empty</span>(&amp;kcp-&gt;rcv_buf))
+    {
+        <span class="type">IKCPSEG</span>* seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(kcp-&gt;rcv_buf.next);
+        <span class="kw">if</span> (seg-&gt;sn == kcp-&gt;rcv_nxt &amp;&amp; kcp-&gt;nrcv_que &lt; kcp-&gt;rcv_wnd)
+        {
+            <span class="type">iqueue_del</span>(&amp;seg-&gt;node);          kcp-&gt;nrcv_buf--;
+            <span class="type">iqueue_add_tail</span>(&amp;seg-&gt;node, &amp;kcp-&gt;rcv_queue);  kcp-&gt;nrcv_que++;
+            kcp-&gt;rcv_nxt++;                  <span class="cmt">// 期待值前进</span>
+        }
+        <span class="kw">else break</span>;                           <span class="cmt">// 断档了，停</span>
+    }
+}</code></pre>
+
+<p><b>去重、有序、窗口限制三件事全在这一个函数里。</b>三十行代码解决了 UDP 丢掉的三个保证中的两个（有序、去重）。</p>
+
+<p>两个细节：</p>
+
+<ul>
+<li><b>从尾部反向查找。</b>正常情况新包序号最大，插尾部，第一次比较就命中，<b>O(1)</b>。只有乱序时才往前找。这是针对「大多数包按序到达」这个事实的优化。</li>
+<li><b><code>nrcv_que &lt; rcv_wnd</code> 是搬运条件之一。</b>接收队列满了就不再搬，让包积压在 <code>rcv_buf</code>。这个背压最终通过 <code>wnd</code> 字段告知对端 —— 见 <code>ikcp_wnd_unused</code>。</li>
+</ul>
+
+<h3>3.4 ikcp_recv：合并分片 + 二次搬运</h3>
+
+<pre><code><span class="cmt">// merge fragment</span>
+<span class="kw">for</span> (len = <span class="num">0</span>, p = kcp-&gt;rcv_queue.next; p != &amp;kcp-&gt;rcv_queue;)
+{
+    seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(p);  p = p-&gt;next;
+
+    <span class="type">memcpy</span>(buffer, seg-&gt;data, (<span class="kw">nuint</span>)seg-&gt;len);   <span class="cmt">// 拼进用户 buffer</span>
+    buffer += seg-&gt;len;   len += (<span class="kw">int</span>)seg-&gt;len;
+    fragment = (<span class="kw">int</span>)seg-&gt;frg;
+
+    <span class="type">iqueue_del</span>(&amp;seg-&gt;node);  <span class="type">ikcp_segment_delete</span>(kcp, seg);  kcp-&gt;nrcv_que--;
+
+    <span class="kw">if</span> (fragment == <span class="num">0</span>) <span class="kw">break</span>;                       <span class="cmt">// 末片，一条消息完整了</span>
+}
+
+<span class="cmt">// 又搬一次 rcv_buf → rcv_queue（因为刚腾出了空位）</span>
+<span class="kw">while</span> (!<span class="type">iqueue_is_empty</span>(&amp;kcp-&gt;rcv_buf)) { <span class="cmt">/* 同 parse_data */</span> }
+
+<span class="cmt">// fast recover</span>
+<span class="kw">if</span> (kcp-&gt;nrcv_que &lt; kcp-&gt;rcv_wnd &amp;&amp; recover != <span class="num">0</span>)
+{
+    kcp-&gt;probe |= IKCP_ASK_TELL;      <span class="cmt">// 主动告知对端"我腾出空间了"</span>
+}</code></pre>
+
+<p><b>最后那个 fast recover 是个漂亮的优化。</b><code>recover</code> 在函数开头被置位（<code>if (kcp->nrcv_que >= kcp->rcv_wnd) recover = 1;</code>），表示「进来时窗口是满的」。</p>
+
+<p>场景：接收窗口满了 → 上报 <code>wnd = 0</code> → 对端停止发送 → 用户 <code>Receive</code> 腾出空间。此时若不主动通知，对端要等到 <code>IKCP_PROBE_INIT = 7000</code>ms 后才会来探测窗口。<b>7 秒的静默</b>。</p>
+
+<p>所以这里立刻标记 <code>IKCP_ASK_TELL</code>，下次 flush 会发一个 <code>IKCP_CMD_WINS</code> 主动告知新窗口。<b>把 7 秒缩短到一个 interval（5ms）。</b></p>
+
+<h2>四、可靠的核心：ikcp_flush</h2>
+
+<p>239 行，KCP 最长也最重要的函数。<b>所有实际的网络发送都发生在这里</b>，其余函数只是在改状态。</p>
+
+<p>它按顺序做六件事：</p>
+
+<div class="flow"><b>ikcp_flush 的六个阶段</b>
+
+  ① 发 ACK 列表        acklist → IKCP_CMD_ACK
+  ② 窗口探测           rmt_wnd == 0 时发 WASK / 收到 WASK 则发 WINS
+  ③ 计算发送窗口        cwnd = min(snd_wnd, rmt_wnd, cwnd)
+  ④ snd_queue → snd_buf  按窗口搬运，分配 sn
+  ⑤ <b>遍历 snd_buf 决定谁要发</b>   ← 重传逻辑全在这里
+  ⑥ 拥塞控制调整        根据 lost / change 调 cwnd 和 ssthresh
+</div>
+
+<p>第一行就有个前提：</p>
+
+<pre><code><span class="kw">if</span> (kcp-&gt;updated == <span class="num">0</span>) <span class="kw">return</span>;   <span class="cmt">// 'ikcp_update' haven't been called.</span></code></pre>
+
+<p><b>没调过 <code>ikcp_update</code> 就什么都不做。</b>因为 <code>kcp->current</code>（当前时间）还没被设置过，所有基于时间的判断都会算错。这是「时间由外部注入」这个设计的必然约束 —— 见 §5。</p>
+
+<h3>4.1 阶段⑤：三种发送触发条件</h3>
+
+<p>整个 KCP 的可靠性就在这个循环里：</p>
+
+<pre><code><span class="kw">for</span> (p = kcp-&gt;snd_buf.next; p != &amp;kcp-&gt;snd_buf; p = p-&gt;next)
+{
+    <span class="type">IKCPSEG</span>* segment = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(p);
+    <span class="kw">int</span> needsend = <span class="num">0</span>;
+
+    <span class="kw">if</span> (segment-&gt;xmit == <span class="num">0</span>)
+    {
+        <span class="cmt">// ═══ 情况 A：首次发送 ═══</span>
+        needsend = <span class="num">1</span>;
+        segment-&gt;xmit++;
+        segment-&gt;rto = (<span class="kw">uint</span>)kcp-&gt;rx_rto;
+        segment-&gt;resendts = current + segment-&gt;rto + rtomin;
+    }
+    <span class="kw">else if</span> (<span class="type">_itimediff</span>(current, segment-&gt;resendts) &gt;= <span class="num">0</span>)
+    {
+        <span class="cmt">// ═══ 情况 B：超时重传 ═══</span>
+        needsend = <span class="num">1</span>;
+        segment-&gt;xmit++;   kcp-&gt;xmit++;
+
+        <span class="kw">if</span> (kcp-&gt;nodelay == <span class="num">0</span>)
+            segment-&gt;rto += <span class="type">_imax_</span>(segment-&gt;rto, (<span class="kw">uint</span>)kcp-&gt;rx_rto);   <span class="cmt">// ×2 退避</span>
+        <span class="kw">else</span>
+        {
+            <span class="kw">int</span> step = (kcp-&gt;nodelay &lt; <span class="num">2</span>) ? ((<span class="kw">int</span>)(segment-&gt;rto)) : kcp-&gt;rx_rto;
+            segment-&gt;rto += (<span class="kw">uint</span>)(step / <span class="num">2</span>);                        <span class="cmt">// ×1.5 退避</span>
+        }
+
+        segment-&gt;resendts = current + segment-&gt;rto;
+        lost = <span class="num">1</span>;        <span class="cmt">// ← 标记丢包，阶段⑥要用</span>
+    }
+    <span class="kw">else if</span> (segment-&gt;fastack &gt;= resent)
+    {
+        <span class="cmt">// ═══ 情况 C：快速重传 ═══</span>
+        <span class="kw">if</span> ((<span class="kw">int</span>)segment-&gt;xmit &lt;= kcp-&gt;fastlimit || kcp-&gt;fastlimit &lt;= <span class="num">0</span>)
+        {
+            needsend = <span class="num">1</span>;
+            segment-&gt;xmit++;
+            segment-&gt;fastack = <span class="num">0</span>;
+            segment-&gt;resendts = current + segment-&gt;rto;
+            change++;      <span class="cmt">// ← 标记快重传，阶段⑥要用</span>
+        }
+    }
+    <span class="cmt">// …needsend 则编码进 buffer，满 MTU 就 output 一次</span>
+}</code></pre>
+
+<h4>A 首次发送 —— rtomin 的作用</h4>
+
+<pre><code>rtomin = (<span class="kw">uint</span>)((kcp-&gt;nodelay == <span class="num">0</span>) ? (kcp-&gt;rx_rto &gt;&gt; <span class="num">3</span>) : <span class="num">0</span>);</code></pre>
+
+<p>普通模式下首包的超时时间额外加 <code>rto/8</code> 的余量；<b>nodelay 模式下这个余量是 0</b>，超时判定更激进 —— 宁可多重传也不多等。Fantasy 开了 nodelay，所以走后者。</p>
+
+<h4>B 超时重传 —— 退避策略的差异</h4>
+
+<table>
+<tr><th>nodelay</th><th>退避公式</th><th>倍率</th><th>含义</th></tr>
+<tr><td><code>0</code></td><td><code>rto += max(rto, rx_rto)</code></td><td>约 ×2</td><td>TCP 式指数退避，对网络友好</td></tr>
+<tr><td><code>1</code></td><td><code>rto += rto / 2</code></td><td>×1.5</td><td>缓和退避，重传更积极</td></tr>
+<tr><td><code>2</code></td><td><code>rto += rx_rto / 2</code></td><td>线性</td><td>最激进，几乎不退避</td></tr>
+</table>
+
+<p>Fantasy 传的是 <code>nodelay = 1</code>，取 ×1.5。<b>退避越缓，丢包时恢复越快，但重复发送越多。</b>这就是「用带宽换延迟」的具体兑现点之一。</p>
+
+<h4>C 快速重传 —— 不等超时</h4>
+
+<p>这是 KCP 相比朴素 ARQ 的关键提升。<code>segment->fastack</code> 的累加发生在 <code>ikcp_parse_fastack</code>：</p>
+
+<pre><code><span class="kw">for</span> (p = kcp-&gt;snd_buf.next; p != &amp;kcp-&gt;snd_buf; p = next)
+{
+    <span class="type">IKCPSEG</span>* seg = <span class="type">iqueue_entry</span>&lt;<span class="type">IKCPSEG</span>&gt;(p);
+    <span class="kw">if</span> (<span class="type">_itimediff</span>(sn, seg-&gt;sn) &lt; <span class="num">0</span>) <span class="kw">break</span>;
+    <span class="kw">else if</span> (sn != seg-&gt;sn) seg-&gt;fastack++;   <span class="cmt">// 比我序号大的被确认了</span>
+}</code></pre>
+
+<p>逻辑：收到 <code>sn=10</code> 的 ACK，说明 10 已经到达对端。那 <code>snd_buf</code> 里所有 <code>sn &lt; 10</code> 还没被确认的段（比如 7），就<b>被跳过了一次</b> —— <code>seg[7].fastack++</code>。</p>
+
+<p>攒够 <code>resent = fastresend = 2</code> 次跳过，就认定 7 是丢了（而不是慢了），立刻重传。</p>
+
+<div class="flow"><b>快速重传示例</b>（fastresend = 2）
+
+  发送: 6 7 8 9 10 11
+  7 丢了 ↓
+  收到 ACK: 6 ... 8 ... 9 ... 10
+                 │     │     │
+                 ↓     ↓     ↓
+  seg[7].fastack: 1 →  2  → <i>触发！</i>
+
+  <b>此时不等 RTO 超时（可能 100ms+），直接重传 7</b>
+  vs 纯超时重传：要等 resendts 到点
+</div>
+
+<p><code>fastlimit</code>（默认 5）限制同一个段最多被快重传几次，防止在极差网络下无限快重传把带宽打满。</p>
+
+<h3>4.2 阶段⑥：拥塞控制</h3>
+
+<pre><code><span class="kw">if</span> (change != <span class="num">0</span>)          <span class="cmt">// 发生过快速重传</span>
+{
+    <span class="kw">uint</span> inflight = kcp-&gt;snd_nxt - kcp-&gt;snd_una;   <span class="cmt">// 在途包数</span>
+    kcp-&gt;ssthresh = inflight / <span class="num">2</span>;
+    <span class="kw">if</span> (kcp-&gt;ssthresh &lt; IKCP_THRESH_MIN) kcp-&gt;ssthresh = IKCP_THRESH_MIN;
+    kcp-&gt;cwnd = kcp-&gt;ssthresh + resent;            <span class="cmt">// 温和下调</span>
+    kcp-&gt;incr = kcp-&gt;cwnd * kcp-&gt;mss;
+}
+
+<span class="kw">if</span> (lost != <span class="num">0</span>)            <span class="cmt">// 发生过超时重传</span>
+{
+    kcp-&gt;ssthresh = cwnd / <span class="num">2</span>;
+    <span class="kw">if</span> (kcp-&gt;ssthresh &lt; IKCP_THRESH_MIN) kcp-&gt;ssthresh = IKCP_THRESH_MIN;
+    kcp-&gt;cwnd = <span class="num">1</span>;                                <span class="cmt">// ← 直接砸到 1！</span>
+    kcp-&gt;incr = kcp-&gt;mss;
+}</code></pre>
+
+<p><b>两种丢包信号的惩罚力度差了一个数量级</b>，这个区分很讲究：</p>
+
+<table>
+<tr><th>信号</th><th>推断</th><th>惩罚</th></tr>
+<tr><td><code>change</code>（快重传）</td><td>个别包丢了，但链路还通（因为后续包的 ACK 回来了）</td><td>cwnd 降到 ssthresh + resent</td></tr>
+<tr><td><code>lost</code>（超时）</td><td>可能整条路断了 / 严重拥塞（连 ACK 都没有）</td><td><b>cwnd = 1</b>，退回慢启动</td></tr>
+</table>
+
+<p>增长侧在 <code>ikcp_input</code> 末尾，是标准的慢启动 + 拥塞避免：</p>
+
+<pre><code><span class="kw">if</span> (<span class="type">_itimediff</span>(kcp-&gt;snd_una, prev_una) &gt; <span class="num">0</span>)   <span class="cmt">// 本次 input 有新数据被确认</span>
+{
+    <span class="kw">if</span> (kcp-&gt;cwnd &lt; kcp-&gt;rmt_wnd)
+    {
+        <span class="kw">uint</span> mss = kcp-&gt;mss;
+        <span class="kw">if</span> (kcp-&gt;cwnd &lt; kcp-&gt;ssthresh)
+        {
+            kcp-&gt;cwnd++;                    <span class="cmt">// 慢启动：每 RTT 翻倍</span>
+            kcp-&gt;incr += mss;
+        }
+        <span class="kw">else</span>
+        {
+            <span class="kw">if</span> (kcp-&gt;incr &lt; mss) kcp-&gt;incr = mss;
+            kcp-&gt;incr += (mss * mss) / kcp-&gt;incr + (mss / <span class="num">16</span>);   <span class="cmt">// 拥塞避免：每 RTT +1</span>
+            <span class="kw">if</span> ((kcp-&gt;cwnd + <span class="num">1</span>) * mss &lt;= kcp-&gt;incr)
+                kcp-&gt;cwnd = (kcp-&gt;incr + mss - <span class="num">1</span>) / mss;
+        }
+        <span class="kw">if</span> (kcp-&gt;cwnd &gt; kcp-&gt;rmt_wnd) { <span class="cmt">/* 夹到对端窗口 */</span> }
+    }
+}</code></pre>
+
+<p><code>incr</code> 是字节级的小数累加器 —— 拥塞避免阶段每个 RTT 只该涨 1 个 MSS，但 ACK 是一个个来的，直接 <code>cwnd++</code> 会涨太快。用 <code>incr</code> 攒够一个 MSS 才把 <code>cwnd</code> 加 1，实现「平滑增长」。</p>
+
+<div class="warn">
+<b>但 Fantasy 把这一整套关掉了</b>
+<code>SetNoDelay(1, 5, 2, <b>1</b>)</code> 第四个参数 <code>nc = 1</code> 即 <code>nocwnd = 1</code>。看阶段③：<br><br>
+<code>cwnd = _imin_(snd_wnd, rmt_wnd);</code><br>
+<code>if (kcp-&gt;nocwnd == 0) cwnd = _imin_(kcp-&gt;cwnd, cwnd);  // ← 被跳过</code><br><br>
+<b>拥塞窗口 <code>kcp-&gt;cwnd</code> 仍在计算，但不参与发送决策。</b>实际窗口只受配置的 <code>snd_wnd</code>（客户端 2048）和对端 <code>rmt_wnd</code> 限制。<br><br>
+这是「无视网络拥塞，全速发」。对小流量的游戏消息可以接受，但如果哪天要传大文件或高频状态同步，这个配置需要重新评估 —— 它可能在弱网下把链路打爆，反而加剧丢包。
+</div>
+
+<h3>4.3 RTO 估算</h3>
+
+<pre><code><span class="kw">public static void</span> <span class="type">ikcp_update_ack</span>(<span class="type">IKCPCB</span>* kcp, <span class="kw">int</span> rtt)
+{
+    <span class="kw">if</span> (kcp-&gt;rx_srtt == <span class="num">0</span>)
+    {
+        kcp-&gt;rx_srtt = rtt;
+        kcp-&gt;rx_rttval = rtt / <span class="num">2</span>;
+    }
+    <span class="kw">else</span>
+    {
+        <span class="kw">long</span> delta = rtt - kcp-&gt;rx_srtt;
+        <span class="kw">if</span> (delta &lt; <span class="num">0</span>) delta = -delta;
+        kcp-&gt;rx_rttval = (<span class="kw">int</span>)((<span class="num">3</span> * kcp-&gt;rx_rttval + delta) / <span class="num">4</span>);   <span class="cmt">// 抖动，α=1/4</span>
+        kcp-&gt;rx_srtt = (<span class="num">7</span> * kcp-&gt;rx_srtt + rtt) / <span class="num">8</span>;              <span class="cmt">// 平滑，α=1/8</span>
+        <span class="kw">if</span> (kcp-&gt;rx_srtt &lt; <span class="num">1</span>) kcp-&gt;rx_srtt = <span class="num">1</span>;
+    }
+
+    rto = (<span class="kw">int</span>)(kcp-&gt;rx_srtt + <span class="type">_imax_</span>(kcp-&gt;interval, (<span class="kw">uint</span>)(<span class="num">4</span> * kcp-&gt;rx_rttval)));
+    kcp-&gt;rx_rto = (<span class="kw">int</span>)<span class="type">_ibound_</span>((<span class="kw">uint</span>)kcp-&gt;rx_minrto, (<span class="kw">uint</span>)rto, IKCP_RTO_MAX);
+}</code></pre>
+
+<p>这是 <b>Jacobson/Karels 算法</b>，和 TCP 用的同一套：</p>
+
+<ul>
+<li><code>rx_srtt</code>：平滑 RTT，指数移动平均，权重 7/8 旧 + 1/8 新</li>
+<li><code>rx_rttval</code>：RTT 抖动的移动平均</li>
+<li><code>rto = srtt + max(interval, 4 × rttval)</code> —— <b>抖动越大，安全余量越大</b>。这是精髓：稳定网络下 RTO 贴近 RTT（重传快），抖动网络下自动放宽（避免误判）</li>
+<li>最后夹在 <code>[rx_minrto, 60000]</code></li>
+</ul>
+
+<p>RTT 的测量来源是 <code>ts</code> 字段的往返：</p>
+
+<pre><code><span class="kw">if</span> (cmd == IKCP_CMD_ACK)
+{
+    <span class="kw">if</span> (<span class="type">_itimediff</span>(kcp-&gt;current, ts) &gt;= <span class="num">0</span>)
+        <span class="type">ikcp_update_ack</span>(kcp, (<span class="kw">int</span>)<span class="type">_itimediff</span>(kcp-&gt;current, ts));
+}</code></pre>
+
+<p>发数据时写入 <code>ts = current</code>，对端 ACK 时原样带回，收到 ACK 用 <code>current - ts</code> 就是 RTT。<b>不需要维护任何发送时间表</b> —— 时间戳跟着包走。这个技巧值得记住。</p>
+
+<h2>五、Fantasy 的配置：四个数字的取舍</h2>
+
+<div class="filetag">Network/Protocol/KCP/KCPSettings.cs</div>
+<pre><code><span class="kw">internal static class</span> <span class="type">KCPFactory</span>
+{
+    <span class="kw">public const int</span> FANTASY_KCP_RESERVED_HEAD = <span class="num">5</span>;   <span class="cmt">// ← 见 §6.3</span>
+
+    <span class="kw">public static</span> <span class="type">Kcp</span> <span class="type">Create</span>(<span class="type">NetworkTarget</span> networkTarget, <span class="kw">uint</span> conv,
+                             <span class="type">KcpCallback</span> output, <span class="kw">out</span> <span class="type">KCPSettings</span> kcpSettings)
+    {
+        <span class="kw">var</span> kcp = <span class="kw">new</span> <span class="type">Kcp</span>(conv, output, FANTASY_KCP_RESERVED_HEAD);
+        kcpSettings = <span class="type">KCPSettings</span>.<span class="type">Create</span>(networkTarget);
+
+        kcp.<span class="type">SetNoDelay</span>(<span class="num">1</span>, <span class="num">5</span>, <span class="num">2</span>, <span class="num">1</span>);   <span class="cmt">// ← 这一行是全部性能取向</span>
+        kcp.<span class="type">SetWindowSize</span>(kcpSettings.SendWindowSize, kcpSettings.ReceiveWindowSize);
+        kcp.<span class="type">SetMtu</span>(kcpSettings.Mtu);
+        kcp.<span class="type">SetMinrto</span>(<span class="num">30</span>);
+        <span class="kw">return</span> kcp;
+    }
+}</code></pre>
+
+<h3>5.1 SetNoDelay(1, 5, 2, 1) 逐个拆</h3>
+
+<table>
+<tr><th>参数</th><th>值</th><th>默认</th><th>作用</th><th>代价</th></tr>
+<tr><td><code>nodelay</code></td><td><b>1</b></td><td>0</td><td>RTO 退避 ×1.5 而非 ×2；首包 rtomin = 0</td><td>重传更频繁</td></tr>
+<tr><td><code>interval</code></td><td><b>5</b> ms</td><td>100</td><td>flush 间隔，决定<b>响应粒度</b></td><td>CPU 与调度开销 ×20</td></tr>
+<tr><td><code>resend</code></td><td><b>2</b></td><td>0（关）</td><td>被跳过 2 次即快速重传</td><td>误判时白发一个包</td></tr>
+<tr><td><code>nc</code></td><td><b>1</b></td><td>0</td><td><b>关闭拥塞控制</b></td><td>弱网下可能加剧拥塞</td></tr>
+</table>
+
+<p><code>interval = 5</code> 是四个里影响最大的。它同时决定：</p>
+
+<ul>
+<li>ACK 最快多久发出（影响对端 RTT 测量和快重传触发）</li>
+<li><code>ikcp_update</code> 内部 <code>ts_flush</code> 的推进步长</li>
+<li>RTO 公式里的下限项：<code>rto = srtt + max(interval, 4 × rttval)</code></li>
+</ul>
+
+<p>再配合 <code>SetMinrto(30)</code>（默认 nodelay 下是 <code>IKCP_RTO_NDL = 30</code>，普通是 100），最快 30ms 就会触发一次超时重传。</p>
+
+<div class="tip">
+<b>这套配置的取向很明确</b>
+<code>(1, 5, 2, 1)</code> 是 kcp 作者文档里推荐的「极速模式」。四个参数全部指向同一个方向：<b>牺牲带宽效率和网络友好度，换取最低延迟</b>。<br><br>
+适合：实时对战、动作游戏、帧同步。<br>
+不适合：文件传输、大量玩家共享带宽的场景、需要与其他 TCP 流公平竞争的环境。<br><br>
+如果你的项目将来做大规模同屏或者要在弱网下稳定运行，<code>nc</code> 这个参数是第一个该重新评估的。
+</div>
+
+<h3>5.2 MTU = 470 的理由</h3>
+
+<pre><code><span class="kw">case</span> NetworkTarget.Outer:
+{
+    <span class="cmt">// 外网设置470的原因:</span>
+    <span class="cmt">// 1、mtu设置过大有可能路由器过滤掉</span>
+    <span class="cmt">// 2、降低 mtu 到 470，同样数据虽然会发更多的包，</span>
+    <span class="cmt">//    但是小包在路由层优先级更高</span>
+    settings.Mtu = <span class="num">470</span>;
+    settings.SendWindowSize    = <span class="num">2048</span>;   <span class="cmt">// Unity 客户端</span>
+    settings.ReceiveWindowSize = <span class="num">2048</span>;
+    settings.MaxSendWindowSize = <span class="num">2048</span> * <span class="num">2048</span> * <span class="num">7</span>;
+}
+<span class="kw">case</span> NetworkTarget.Inner:
+{
+    <span class="cmt">// 内网设置1400的原因</span>
+    <span class="cmt">// 1、一般都是同一台服务器来运行多个进程来处理</span>
+    <span class="cmt">// 2、内网每个进程跟其他进程只有一个通道进行发送、所以发送的数量会比较大</span>
+    <span class="cmt">// 3、如果不把窗口设置大点、会出现消息滞后。</span>
+    settings.Mtu = <span class="num">1200</span>;
+    settings.SendWindowSize = <span class="num">8192</span>;
+    <span class="cmt">// …</span>
+}</code></pre>
+
+<p>470 远低于以太网 MTU 1500，也低于 kcp 默认的 1400。作者给的两条理由都是经验性的：小包更不容易被中间设备丢弃或降级。代价是<b>头部开销占比升高</b> —— 24 字节 KCP 头 + 5 字节 Fantasy 头 + 8 字节 UDP 头 + 20 字节 IP 头 = 57 字节，在 470 的载荷里占约 12%。</p>
+
+<p>注意注释写 1400 但代码是 1200 —— 又一处注释没跟上代码，不影响功能。</p>
+
+<h2>六、集成层：Fantasy 怎么驱动这个算法</h2>
+
+<p>算法本身是被动的：它不认识 socket，不知道时间，只在你调 <code>Update</code> 时干活。集成层要解决三个问题。</p>
+
+<h3>6.1 谁来调 Update</h3>
+
+<pre><code><span class="kw">internal sealed class</span> <span class="type">KCPClientNetworkUpdateSystem</span> : <span class="type">UpdateSystem</span>&lt;<span class="type">KCPClientNetwork</span>&gt;
+{
+    <span class="kw">protected override void</span> <span class="type">Update</span>(<span class="type">KCPClientNetwork</span> self)
+    {
+        self.<span class="type">CheckUpdate</span>();
+    }
+}</code></pre>
+
+<p>这就是为什么 <code>NetworkProtocolFactory.CreateClient</code> 里 KCP 那支写的是 <code>Entity.Create&lt;KCPClientNetwork&gt;(scene, false, <b>true</b>)</code> 而 TCP 是 <code>false</code> —— 最后那个参数是「是否注册 Update 系统」。<b>TCP 全靠 socket 事件驱动，KCP 必须有心跳驱动</b>，因为重传和 flush 是时间触发的。</p>
+
+<p>这个 <code>UpdateSystem&lt;T&gt;</code> 就是索引里阶段二 Entitas 部分的东西，在这里闭环了。</p>
+
+<h3>6.2 定时器：不要每帧都 flush</h3>
+
+<p>朴素做法是每帧调 <code>_kcp.Update(now)</code>。但 <code>ikcp_check</code> 存在的意义就是告诉你「下次真正需要 flush 的时刻」，可以跳过大量空转。Fantasy 用一个 <code>SortedSet&lt;uint&gt;</code> 实现：</p>
+
+<pre><code><span class="kw">private void</span> <span class="type">KcpUpdate</span>()
+{
+    <span class="kw">var</span> nowTime = TimeNow;
+    _kcp.<span class="type">Update</span>(nowTime);
+    <span class="type">AddToUpdate</span>(_kcp.<span class="type">Check</span>(nowTime));   <span class="cmt">// 把下次时刻登记进去</span>
+}
+
+<span class="kw">private void</span> <span class="type">AddToUpdate</span>(<span class="kw">uint</span> tillTime)
+{
+    <span class="kw">if</span> (tillTime == <span class="num">0</span>) { <span class="type">KcpUpdate</span>(); <span class="kw">return</span>; }   <span class="cmt">// 0 = 立刻</span>
+
+    <span class="kw">if</span> (<span class="type">IsTimeGreaterThan</span>(_updateMinTime, tillTime) || _updateMinTime == <span class="num">0</span>)
+        _updateMinTime = tillTime;                    <span class="cmt">// 维护最小值，快速跳过</span>
+
+    _updateTimer.<span class="type">Add</span>(tillTime);
+}</code></pre>
+
+<p><code>_updateMinTime</code> 是个<b>短路优化</b>：<code>CheckUpdate</code> 每帧先比一次它，没到就整个跳过，不用遍历 SortedSet。</p>
+
+<p>另外 <code>AddToUpdate(0)</code> 在三处被调用 —— <code>Input()</code> 收到数据后、<code>SendMemoryStream()</code> 发送后。<b>意思是「有事件发生，别等定时器，立刻 flush」</b>。这是低延迟的另一半：定时器保证兜底，事件驱动保证即时。</p>
+
+<h4>回绕处理的另一种写法</h4>
+
+<pre><code><span class="kw">public void</span> <span class="type">CheckUpdate</span>()
+{
+    <span class="kw">var</span> nowTime = TimeNow;
+    _allowWraparound = nowTime &lt; _updateMinTime;   <span class="cmt">// ← 关键</span>
+    <span class="cmt">// …遍历 _updateTimer</span>
+    _allowWraparound = <span class="kw">true</span>;
+}
+
+<span class="kw">private bool</span> <span class="type">IsTimeGreaterThan</span>(<span class="kw">uint</span> timeId, <span class="kw">uint</span> nowTime)
+{
+    <span class="kw">if</span> (!_allowWraparound) <span class="kw">return</span> timeId &gt; nowTime;   <span class="cmt">// 普通比较</span>
+
+    <span class="kw">var</span> diff = timeId - nowTime;
+    <span class="cmt">// 如果 diff 的值在 [0, HalfMaxUint] 范围内，说明 timeId 是在 nowTime 之后或相等。</span>
+    <span class="cmt">// 如果 diff 的值在 (HalfMaxUint, uint.MaxValue] 范围内，说明 timeId 是在 nowTime 之前（时间回绕）。</span>
+    <span class="kw">return</span> diff &lt; HalfMaxUint || diff == HalfMaxUint;
+}</code></pre>
+
+<p>和 <code>_itimediff</code> 同样的原理（用差值落在哪半区间来判断先后），但多了一个 <code>_allowWraparound</code> 开关。</p>
+
+<p><span class="unverified">这个开关的必要性我没有完全推演清楚 —— <code>nowTime &lt; _updateMinTime</code> 为 false 时（即已经到点了）切换成普通比较，看起来是在处理某个特定的边界情况。这里留给你自己对着调试器验证。</span></p>
+
+<p>值得注意的是 <code>TimeNow</code> 的定义：</p>
+
+<pre><code><span class="kw">private uint</span> TimeNow =&gt; (<span class="kw">uint</span>)(TimeHelper.Now - _startTime);</code></pre>
+
+<p><b>相对时间，不是绝对时间戳。</b><code>_startTime</code> 在 <code>Connect()</code> 里设为当时的 <code>TimeHelper.Now</code>。这样 <code>uint</code> 从 0 开始计，要跑满 2³² 毫秒（约 49.7 天）才回绕 —— 一个连接活不了这么久。<b>用相对时间把回绕问题从「必然发生」降级为「几乎不可能」</b>，再加上 <code>_itimediff</code> 兜底。</p>
+
+<h3>6.3 预留 5 字节：零拷贝的小技巧</h3>
+
+<p>这是我认为整个集成层最巧的一处。</p>
+
+<p>回顾第二篇：每个 UDP 包前面要加 5 字节的 Fantasy 头（1 字节 header + 4 字节 channelId）。朴素做法是 KCP 输出一个 buffer，再申请一个大 5 字节的新 buffer，拷过去，前面填头。<b>每个包一次分配 + 一次拷贝。</b></p>
+
+<p>Fantasy 的做法是让 KCP 从一开始就把数据写在偏移 5 的位置：</p>
+
+<pre><code><span class="kw">public const int</span> FANTASY_KCP_RESERVED_HEAD = <span class="num">5</span>;
+<span class="kw">var</span> kcp = <span class="kw">new</span> <span class="type">Kcp</span>(conv, output, FANTASY_KCP_RESERVED_HEAD);</code></pre>
+
+<p><code>Kcp.Update()</code> 里可以看到 reserved 怎么生效：</p>
+
+<div class="filetag">Network/Protocol/KCP/Base/Kcp.cs</div>
+<pre><code><span class="kw">public void</span> <span class="type">Update</span>(<span class="kw">uint</span> current)
+{
+    <span class="kw">fixed</span> (<span class="kw">byte</span>* ptr = &amp;_buffer[_reserved])      <span class="cmt">// ← 从第 5 字节开始写</span>
+    {
+        <span class="type">ikcp_update</span>(_kcp, current, ptr, _buffer, _output);
+    }
+}</code></pre>
+
+<p>注意传给 <code>ikcp_update</code> 的是两个东西：<code>ptr</code>（偏移 5 的写入位置）和 <code>_buffer</code>（完整数组）。算法在 <code>ptr</code> 上写，回调时把<b>完整数组</b>交给你。于是回调里可以原地填头：</p>
+
+<pre><code><span class="kw">private unsafe void</span> <span class="type">KcpSpanCallback</span>(<span class="kw">byte</span>[] buffer, <span class="kw">int</span> count)
+{
+    <span class="kw">if</span> (IsDisposed) <span class="kw">return</span>;
+    <span class="kw">if</span> (count == <span class="num">0</span>) <span class="kw">throw new</span> <span class="type">Exception</span>(<span class="str">"KcpOutput count 0"</span>);
+
+    <span class="kw">fixed</span> (<span class="kw">byte</span>* p = buffer)
+    {
+        p[<span class="num">0</span>] = KcpHeaderReceiveData;      <span class="cmt">// 原地写第 0 字节</span>
+        *(<span class="kw">uint</span>*)(p + <span class="num">1</span>) = ChannelId;       <span class="cmt">// 原地写第 1~4 字节</span>
+    }
+
+    <span class="type">SendAsync</span>(buffer, <span class="num">0</span>, count + <span class="num">5</span>);        <span class="cmt">// 从 0 发 count+5 字节</span>
+}</code></pre>
+
+<div class="flow"><b>预留头的内存布局</b>
+
+  _buffer:
+  ┌───┬────────────┬─────────────────────────────────────┐
+  │ 0 │  1  2  3 4 │ 5 ...                               │
+  ├───┼────────────┼─────────────────────────────────────┤
+  │hdr│ channelId  │ ← KCP 算法从这里开始写（ptr）           │
+  └───┴────────────┴─────────────────────────────────────┘
+    ↑   ↑            ↑
+    └───┴────────────┘ 回调里原地填这 5 字节
+        <b>零分配、零拷贝</b>
+
+  SendAsync(buffer, 0, count + 5)
+</div>
+
+<div class="tip">
+<b>「预留头部空间」是网络库的标准做法</b>
+Netty 的 <code>ByteBuf</code> 有 writerIndex 前的预留区，Linux 的 skb 有 headroom，都是同一个思路：<b>在最内层分配内存时就为外层协议头留出空间</b>，让每一层协议都能原地填头而不是层层拷贝。<br><br>
+自己写协议栈时值得照抄。判断标准很简单：如果你在某一层写了 <code>Array.Copy</code> 只为了腾出前缀空间，那就该用预留了。
+</div>
+
+<h3>6.4 断线策略：WaitSendCount 超限</h3>
+
+<pre><code><span class="kw">private void</span> <span class="type">SendMemoryStream</span>(<span class="type">MemoryStreamBuffer</span> memoryStream)
+{
+    <span class="kw">if</span> (_kcp.WaitSendCount &gt; _maxSndWnd)
+    {
+        <span class="cmt">// 检查等待发送的消息，如果超出两倍窗口大小，KCP作者给的建议是要断开连接</span>
+        Log.<span class="type">Warning</span>($<span class="str">"ERR_KcpWaitSendSizeTooLarge {_kcp.WaitSendCount} &gt; {_maxSndWnd}"</span>);
+        <span class="type">Dispose</span>();
+        <span class="kw">return</span>;
+    }
+
+    <span class="kw">try</span>
+    {
+        _kcp.<span class="type">Send</span>(memoryStream.<span class="type">GetBuffer</span>().<span class="type">AsSpan</span>(<span class="num">0</span>, (<span class="kw">int</span>)memoryStream.Position));
+        <span class="type">AddToUpdate</span>(<span class="num">0</span>);      <span class="cmt">// 立刻 flush</span>
+    }
+    <span class="kw">finally</span>
+    {
+        <span class="kw">if</span> (memoryStream.MemoryStreamBufferSource == MemoryStreamBufferSource.Pack)
+            MemoryStreamBufferPool.<span class="type">ReturnMemoryStream</span>(memoryStream);
+    }
+}</code></pre>
+
+<p><code>WaitSendCount = nsnd_buf + nsnd_que</code>，即「已发未确认 + 排队待发」的总包数。<code>_maxSndWnd</code> 客户端是 <code>2048 × 2048 × 7</code>。</p>
+
+<p><b>为什么积压要断线而不是等？</b>因为 KCP 的重传是无限的 —— 只要不 <code>Dispose</code>，它会一直重传下去。积压持续增长说明链路已经<b>实质不可用</b>，继续等只会：内存持续增长、每次 flush 遍历越来越长的 <code>snd_buf</code>、玩家看到的画面早已不可玩。</p>
+
+<p><b>快速失败比慢性死亡好。</b>断开后走重连流程，比让玩家盯着一个卡死的界面强。</p>
+
+<p>注意 <code>finally</code> 里的还池 —— 无论 <code>_kcp.Send</code> 成功还是抛异常都归还。这里可以还池是因为 <code>_kcp.Send</code> 内部把数据 <code>memcpy</code> 进了自己的 segment，不再引用外部 buffer。<b>这是「拷贝换所有权清晰」的取舍</b>，和 §6.3 的零拷贝并不矛盾：那边省的是输出路径的拷贝，这边花的是输入路径的拷贝，后者换来了内存池能立刻回收。</p>
+
+<h3>6.5 Input：收到数据后的完整链路</h3>
+
+<pre><code><span class="kw">private void</span> <span class="type">Input</span>(<span class="type">ReadOnlyMemory</span>&lt;<span class="kw">byte</span>&gt; buffer)
+{
+    _kcp.<span class="type">Input</span>(buffer.Span);      <span class="cmt">// ① 喂给算法</span>
+    <span class="type">AddToUpdate</span>(<span class="num">0</span>);               <span class="cmt">// ② 立刻 flush（把 ACK 发出去）</span>
+
+    <span class="kw">while</span> (!_cancellationTokenSource.IsCancellationRequested)
+    {
+        <span class="kw">var</span> peekSize = _kcp.<span class="type">PeekSize</span>();
+        <span class="kw">if</span> (peekSize &lt; <span class="num">0</span>) <span class="kw">return</span>;                    <span class="cmt">// ③ 没有完整消息，收工</span>
+
+        <span class="kw">var</span> receiveCount = _kcp.<span class="type">Receive</span>(_receiveBuffer.<span class="type">AsSpan</span>(<span class="num">0</span>, peekSize));
+        <span class="kw">if</span> (receiveCount != peekSize) <span class="kw">return</span>;         <span class="cmt">// 防御</span>
+
+        <span class="kw">if</span> (!_packetParser.<span class="type">UnPack</span>(_receiveBuffer, <span class="kw">ref</span> receiveCount, <span class="kw">out var</span> packInfo))
+            <span class="kw">continue</span>;
+
+        Session.<span class="type">Receive</span>(packInfo);                    <span class="cmt">// ④ 交给上层</span>
+    }
+}</code></pre>
+
+<p>三个点：</p>
+
+<ul>
+<li><b><code>AddToUpdate(0)</code> 紧跟 <code>Input</code>。</b>收到数据要尽快把 ACK 发回去 —— ACK 延迟直接影响对端的 RTT 测量和快重传判断。不能等下一个 5ms 定时器。</li>
+<li><b><code>while</code> 循环榨干。</b>一次 <code>Input</code> 可能让多条消息同时变为可交付（之前乱序积压的一下子连上了）。必须循环取到 <code>PeekSize() &lt; 0</code>。</li>
+<li><b><code>_receiveBuffer</code> 是预分配的固定数组</b>（<code>MaxMessageSize + 20</code>）。整个接收路径零分配。</li>
+</ul>
+
+<h2>七、三种协议横向对照</h2>
+
+<table>
+<tr><th></th><th>TCP</th><th>KCP over UDP</th><th>WebSocket</th></tr>
+<tr><td>可靠有序</td><td>内核</td><td><b>算法层 1367 行</b></td><td>内核（底层 TCP）</td></tr>
+<tr><td>消息边界</td><td>✗ 要自己切</td><td>✓ frg 维护</td><td>✓ 帧协议维护</td></tr>
+<tr><td>解析器</td><td><code>ReadOnlyMemoryPacketParser</code><br><i>6 个跨调用状态字段</i></td><td><code>BufferPacketParser</code><br><i>无状态</i></td><td><code>OuterWebglBufferPacketParser</code></td></tr>
+<tr><td>握手</td><td>内核三次握手</td><td><b>自己实现四步</b></td><td>HTTP Upgrade</td></tr>
+<tr><td>连接标识</td><td>socket 本身</td><td><b>ChannelId</b></td><td>socket 本身</td></tr>
+<tr><td>驱动方式</td><td>纯事件（socket 回调）</td><td><b>事件 + 5ms 定时器</b></td><td>纯事件</td></tr>
+<tr><td>Update 系统</td><td>不需要</td><td><b>必须</b>（<code>Entity.Create(..., true)</code>）</td><td>不需要</td></tr>
+<tr><td>拥塞控制</td><td>内核，无法关</td><td><b>可关，Fantasy 关了</b></td><td>内核</td></tr>
+<tr><td>延迟表现</td><td>基准</td><td><b>丢包时明显更优</b></td><td>≈ TCP</td></tr>
+<tr><td>带宽效率</td><td>基准</td><td>差 10%~20%</td><td>≈ TCP</td></tr>
+<tr><td>WebGL</td><td>✗</td><td>✗</td><td><b>✓ 唯一选择</b></td></tr>
+</table>
+
+<p>三份实现共用 <code>ANetwork</code> / <code>INetworkChannel</code> / <code>Session</code> / 20 字节包头 / <code>MessageScheduler</code>。<b>业务代码切换协议只需改 <code>GameClient.cs:57</code> 一个枚举。</b>这是第一篇讲的接口抽象兑现的地方 —— 也是这三篇一起读的价值：同一套抽象下的三种填法。</p>
+
+<h2>八、阅读清单</h2>
+
+<h3>集成层（先读，好懂）</h3>
+
+<ul class="checklist">
+<li><span class="n">1</span><span>KCP/KCPSettings.cs —— 配置与四个参数，全文</span><span class="ln">91 行</span></li>
+<li><span class="n">2</span><span>KCP/Base/Kcp.cs —— C# 封装层，重点看 Update / Flush 里 _reserved 的用法</span><span class="ln">451 行</span></li>
+<li><span class="n">3</span><span>KCPClientNetwork.cs · Update 区块 —— CheckUpdate / AddToUpdate / KcpUpdate / IsTimeGreaterThan</span><span class="ln">485~560</span></li>
+<li><span class="n">4</span><span>KCPClientNetwork.cs · Input() —— 与 PeekSize 的配合</span><span class="ln">439~479</span></li>
+<li><span class="n">5</span><span>KCPClientNetwork.cs · KcpSpanCallback —— 零拷贝填头</span><span class="ln">698~717</span></li>
+<li><span class="n">6</span><span>KCPClientNetwork.cs · SendMemoryStream —— 断线策略</span><span class="ln">589~611</span></li>
+</ul>
+
+<h3>算法层（六个函数，按此顺序）</h3>
+
+<ul class="checklist">
+<li><span class="n">7</span><span>Base/include/kcp.cs —— IKCPSEG / IKCPCB 结构定义，字段字典</span><span class="ln">127 行</span></li>
+<li><span class="n">8</span><span>c/kcp.cs · _itimediff + 常量表 —— 先看这个，后面全靠它</span><span class="ln">24~45, 163</span></li>
+<li><span class="n">9</span><span>c/kcp.cs · ikcp_send —— 分片，跳过 stream 分支</span><span class="ln">451~545</span></li>
+<li><span class="n">10</span><span>c/kcp.cs · ikcp_input —— 拆包与分发</span><span class="ln">773~924</span></li>
+<li><span class="n">11</span><span>c/kcp.cs · ikcp_parse_data —— 去重 + 有序，30 行精华</span><span class="ln">711~768</span></li>
+<li><span class="n">12</span><span>c/kcp.cs · ikcp_peeksize + ikcp_recv —— 分片重组</span><span class="ln">337~446</span></li>
+<li><span class="n">13</span><span>c/kcp.cs · ikcp_flush —— 最重要，239 行，重点在阶段⑤</span><span class="ln">955~1193</span></li>
+<li><span class="n">14</span><span>c/kcp.cs · ikcp_update + ikcp_check —— 时间驱动</span><span class="ln">1195~1279</span></li>
+<li><span class="n">15</span><span>c/kcp.cs · ikcp_update_ack —— RTO 估算，20 行</span><span class="ln">550~569</span></li>
+</ul>
+
+<h3>可跳过</h3>
+
+<p><code>ikcp_encode8u/16u/32u</code> 及 decode（编解码，机械）、<code>iqueue_*</code>（侵入式双向链表，看一眼 <code>iqueue_add_tail</code> 就懂）、<code>ikcp_ack_push</code> / <code>ikcp_ack_get</code>（ACK 列表的动态数组管理，注意 <code>_iceilpow2_</code> 扩容）、<code>define/system.cs</code>（5 行，memcpy/assert 的 C# 等价物）。</p>
+
+<p>服务端 <code>KCPServerNetworkByArrayPool.cs</code>（575 行）与 <code>ByPipe.cs</code>（623 行）是同一逻辑的两种缓冲策略。客户端不涉及，但<b>对照读这两个文件是学「同一功能的两种内存管理方案」的好材料</b> —— 一个用 <code>ArrayPool</code> 手动租还，一个用 <code>Pipe</code> 自动管理。</p>
+
+<div class="note">
+<b>命名空间提示</b>
+算法层在 <code>namespace kcp</code>（小写）和 <code>namespace KCP</code>（大写）—— <b>两个不同的命名空间</b>。小写的是 C 移植层（<code>static class KCP</code> 里全是 <code>ikcp_*</code> 静态函数），大写的是 C# 封装（<code>sealed class Kcp</code>）。<code>Kcp.cs</code> 顶部那两行 <code>using kcp; using static kcp.KCP;</code> 就是在跨这个边界。<br><br>
+集成层在 <code>Fantasy.Network.KCP</code>。三个 KCP 相关的命名空间，按类名跳转很容易落错文件。
+</div>
+
+<h2>九、读完后自测</h2>
+
+<div class="q"><b>Q1</b> <code>ikcp_send</code> 为什么不发送数据？真正发送在哪个函数？这样拆分带来什么好处？</div>
+<div class="q"><b>Q2</b> <code>frg</code> 为什么倒序编号？如果改成正序，接收侧需要多做什么？</div>
+<div class="q"><b>Q3</b> 为什么所有序号比较都要用 <code>_itimediff</code>？举一个直接用 <code>&gt;</code> 会出错的具体数值。</div>
+<div class="q"><b>Q4</b> <code>rcv_buf</code> 和 <code>rcv_queue</code> 的分工是什么？为什么不能只用一个？</div>
+<div class="q"><b>Q5</b> 快速重传和超时重传的触发条件分别是什么？为什么前者的拥塞惩罚轻得多？</div>
+<div class="q"><b>Q6</b> <code>ikcp_flush</code> 开头 <code>if (kcp-&gt;updated == 0) return;</code> 是在防什么？</div>
+<div class="q"><b>Q7</b> Fantasy 传的 <code>nc = 1</code> 具体关掉了哪一行代码的效果？在什么场景下这个配置会变成问题？</div>
+<div class="q"><b>Q8</b> RTO 公式 <code>srtt + max(interval, 4 × rttval)</code> 里，为什么用 rttval（抖动）而不是常数做安全余量？</div>
+<div class="q"><b>Q9</b> 预留 5 字节省掉了什么开销？如果不用预留，<code>KcpSpanCallback</code> 要怎么写？</div>
+<div class="q"><b>Q10</b> 为什么 <code>Input()</code> 里 <code>_kcp.Input()</code> 之后立刻 <code>AddToUpdate(0)</code>，而不是等下一个 5ms 定时器？</div>
+<div class="q"><b>Q11</b> <code>WaitSendCount</code> 超限为什么选择断开而不是阻塞等待？</div>
+<div class="q"><b>Q12</b> 为什么 KCP 的 <code>Entity.Create</code> 第三个参数传 <code>true</code>，TCP 传 <code>false</code>？</div>
+<div class="q"><b>Q13</b> <code>ikcp_recv</code> 末尾的 fast recover 解决了什么问题？不做的话最坏情况要等多久？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>KCPClientNetwork.cs</code>（745 行）全文、<code>Base/Kcp.cs</code>（451 行）全文、<code>Base/include/kcp.cs</code>（127 行）全文、<code>KCPSettings.cs</code>（91 行）全文；<code>c/kcp.cs</code> 的 <code>ikcp_recv</code> / <code>ikcp_peeksize</code> / <code>ikcp_send</code> / <code>ikcp_update_ack</code> / <code>ikcp_parse_ack</code> / <code>ikcp_parse_una</code> / <code>ikcp_parse_fastack</code> / <code>ikcp_parse_data</code> / <code>ikcp_input</code> / <code>ikcp_encode_seg</code> / <code>ikcp_flush</code> / <code>ikcp_update</code> 及常量表。文中所有引用的代码片段与行号均来自实际读取。</p>
+<p><span class="unverified">⚠ 未核实</span>：<code>ikcp_check</code> 仅读到前段；<code>ikcp_create</code> / <code>ikcp_ack_push</code> / <code>ikcp_setmtu</code> 未读取；<code>_allowWraparound</code> 开关的必要性未推演完整；服务端两个实现（<code>ByArrayPool</code> / <code>ByPipe</code>）仅读取了 <code>ReceiveData</code> 与 <code>Update</code> 片段。「10%~20% 带宽换 30%~40% 延迟」引自 kcp 项目公开说明，非本仓库实测。</p>
+<p>上一篇：<a href="网络层二-UDP讲解.html" style="color:var(--accent)">网络层（二）UDP</a>　｜　<a href="网络层一-TCP讲解.html" style="color:var(--accent)">回到第一篇</a></p>
+<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+</footer>
+
+</div>
+</body>
+</html>

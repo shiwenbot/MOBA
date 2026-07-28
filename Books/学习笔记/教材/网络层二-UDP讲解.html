@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络层（二）UDP —— 拿掉保证之后</title>
+<link rel="stylesheet" href="reading-notes.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="网络层一-TCP讲解.html">一 · TCP</a>
+    <a class="cur" href="网络层二-UDP讲解.html">二 · UDP</a>
+    <a href="网络层三-KCP讲解.html">三 · KCP</a>
+  </div>
+  <h1>网络层（二）UDP —— 拿掉保证之后</h1>
+  <div class="sub">
+    Fantasy 源码阅读 · 传输层三部曲第二篇<br>
+    <code>Network/Protocol/KCP/</code> 的非算法部分
+  </div>
+</header>
+
+<p>这一篇是<b>过渡篇</b>，也是三篇里最短的。</p>
+
+<p>Fantasy 里没有「纯 UDP 协议实现」这个文件 —— UDP 只作为 KCP 的载体存在。但如果直接跳到 KCP，你会把两类代码混为一谈：<b>哪些是在处理「UDP 是数据报」，哪些是在处理「UDP 不可靠」</b>。前者是几十行的琐碎适配，后者是 1367 行的算法。分清这两者，第三篇才读得动。</p>
+
+<p>所以这一篇只干一件事：把 <code>KCPClientNetwork.cs</code> 里<b>与 KCP 算法无关</b>的部分挑出来单独看。读完你会发现，Fantasy 为了「用 UDP」这个决定，付出了握手协议、通道 ID、平台补丁三笔额外成本 —— 而这些成本和可靠传输完全无关，纯粹是 UDP 的语义差异带来的。</p>
+
+<h2>一、拿掉 TCP 的保证，剩下什么</h2>
+
+<p>第一篇那张表现在可以填完整了：</p>
+
+<table>
+<tr><th>特性</th><th>TCP</th><th>UDP</th><th>后果</th></tr>
+<tr><td>可靠</td><td>✓</td><td>✗</td><td>丢了就没了，没人告诉你</td></tr>
+<tr><td>有序</td><td>✓</td><td>✗</td><td>后发的可能先到</td></tr>
+<tr><td>去重</td><td>✓</td><td>✗</td><td>同一个包可能收两次</td></tr>
+<tr><td>拥塞控制</td><td>✓</td><td>✗</td><td>你可以轻易打满上行把自己搞死</td></tr>
+<tr><td><b>连接</b></td><td>✓ 三次握手</td><td>✗ 无连接</td><td><b>没有「连上了」这个状态</b></td></tr>
+<tr><td><b>消息边界</b></td><td>✗ 字节流</td><td>✓ <b>数据报</b></td><td><b>反而不用处理分包粘包</b></td></tr>
+</table>
+
+<p>前四行是 KCP 要补的（第三篇）。这一篇关心后两行 —— 一个是纯亏，一个是纯赚。</p>
+
+<h3>1.1 赚的那个：消息边界白送</h3>
+
+<p>UDP 是<b>数据报</b>协议。<code>SendTo</code> 一次 = <code>ReceiveFrom</code> 一次，边界由 IP 层保留。既不会两个包粘在一起，也不会半个包先到（IP 分片由内核重组，重组失败则整个包丢弃，绝不会给你半个）。</p>
+
+<p>这个差异在代码里立刻体现出来。对比两个解析器基类：</p>
+
+<table>
+<tr><th></th><th>ReadOnlyMemoryPacketParser（TCP）</th><th>BufferPacketParser（KCP）</th></tr>
+<tr><td>签名</td><td><code>UnPack(ref ReadOnlyMemory&lt;byte&gt;, out APackInfo)</code></td><td><code>UnPack(byte[], ref int count, out APackInfo)</code></td></tr>
+<tr><td>跨调用状态</td><td><b>6 个字段</b>（Offset / HeadOffset / BodyOffset / ...）</td><td><b>无</b>（4 个字段只是临时中转）</td></tr>
+<tr><td>返回 false 的含义</td><td>「数据不够，下次接着攒」</td><td>「这个包有问题，丢掉」</td></tr>
+<tr><td>行数占比</td><td>状态机占大半</td><td>几乎全是 Pack 逻辑</td></tr>
+</table>
+
+<p>作者在 <code>BufferPacketParser</code> 的类注释里把理由写得很直白：</p>
+
+<div class="filetag">Network/Message/PacketParser/Handler/BufferPacketParser.cs</div>
+<pre><code><span class="cmt">/// BufferPacketParser消息格式化器抽象类</span>
+<span class="cmt">/// 这个不会用在TCP协议中、因此不用考虑分包和粘包的问题。</span>
+<span class="cmt">/// 目前这个只会用在KCP协议中、因为KCP出来的就是一个完整的包、</span>
+<span class="cmt">/// 所以可以一次性全部解析出来。</span>
+<span class="cmt">/// 如果是用在其他协议上可能会出现问题。</span></code></pre>
+
+<p>于是 <code>OuterBufferPacketParser.UnPack</code> 变成了直白的一次性解析：</p>
+
+<pre><code><span class="kw">if</span> (count &lt; Packet.OuterPacketHeadLength)
+{
+    <span class="kw">return false</span>;   <span class="cmt">// 连头都不够 → 这个包坏了，丢弃（不是"等更多数据"）</span>
+}
+
+MessagePacketLength = <span class="type">Unsafe</span>.<span class="type">ReadUnaligned</span>&lt;<span class="kw">int</span>&gt;(<span class="kw">ref</span> bufferRef);
+
+<span class="kw">if</span> (MessagePacketLength &gt; ProgramDefine.MaxMessageSize || count &lt; MessagePacketLength)
+{
+    <span class="kw">throw new</span> <span class="type">ScanException</span>(...);
+}
+
+ProtocolCode = ...;  RpcId = ...;
+
+packInfo = <span class="type">OuterPackInfo</span>.<span class="type">Create</span>(Network);
+packInfo.<span class="type">RentMemoryStream</span>(MemoryStreamBufferSource.UnPack, count)
+        .<span class="type">Write</span>(buffer, <span class="num">0</span>, count);   <span class="cmt">// 一次写完</span>
+<span class="kw">return true</span>;</code></pre>
+
+<p><b>没有 <code>Math.Min</code>、没有 <code>IsUnPackHead</code>、没有 Offset 累加。</b>同样的 20 字节包头协议，解析代码短了一大截。</p>
+
+<div class="note">
+<b>包头协议为什么不变</b>
+既然 KCP 保留边界，那 20 字节包头里的「长度」字段其实是冗余的？<br><br>
+不是。<b>包头是应用层协议，跨传输层复用。</b>TCP / KCP / WebSocket 三个分支共用同一套 <code>Packet</code> 常量和同一套 <code>PackInfo</code>，上层的 <code>MessageScheduler</code>、<code>MessageDispatcherComponent</code> 因此完全不需要知道底下是谁。多花 4 字节换来整个上层零改动，这笔账很划算。<br><br>
+而且长度字段在 KCP 侧仍有校验价值 —— <code>count &lt; MessagePacketLength</code> 这个判断能识别出被截断或伪造的包。
+</div>
+
+<h3>1.2 亏的那个：没有「连接」</h3>
+
+<p>这是 UDP 带来的<b>最大工程成本</b>，比不可靠更麻烦。</p>
+
+<p>TCP 的 <code>ConnectAsync</code> 成功回调，含义是「三次握手完成，对端确认了」。UDP 的 <code>ConnectAsync</code> 完全不是这个意思：</p>
+
+<div class="filetag">Network/Protocol/KCP/Client/KCPClientNetwork.cs</div>
+<pre><code>_socket = <span class="kw">new</span> <span class="type">Socket</span>(_remoteAddress.AddressFamily,
+                     SocketType.Dgram, ProtocolType.Udp);
+_socket.Blocking = <span class="kw">false</span>;
+_socket.<span class="type">SetSocketBufferToOsLimit</span>();
+_socket.<span class="type">SetSioUdpConnReset</span>();          <span class="cmt">// ← Windows 专属，见 §3</span>
+_socket.<span class="type">Bind</span>(<span class="kw">new</span> <span class="type">IPEndPoint</span>(... IPAddress.Any, <span class="num">0</span>));
+
+<span class="kw">if</span> (!_socket.<span class="type">ConnectAsync</span>(_connectEventArgs))
+{
+    <span class="type">OnReceiveSocketComplete</span>();
+}</code></pre>
+
+<p>UDP socket 上的 <code>Connect</code> 只是<b>本地行为</b>：记下默认远端地址，之后可以用 <code>Send</code>/<code>Receive</code> 而不必每次带 endpoint，并且内核会过滤掉非该地址的来包。<b>一个字节都没发出去，对端根本不知道你存在。</b></p>
+
+<p>所以 <code>OnReceiveSocketComplete</code> 在两个分支里做的事完全不同：</p>
+
+<table>
+<tr><th></th><th>TCP</th><th>KCP/UDP</th></tr>
+<tr><td rowspan="3"><code>OnReceive<br>SocketComplete</code></td><td><code>ClearConnectTimeout()</code> ← 连接已成，撤超时</td><td><code>SendRequestConnection()</code> ← <b>握手才刚开始</b></td></tr>
+<tr><td><code>_onConnectComplete?.Invoke()</code> ← 立刻通知业务</td><td>—（要等服务端回应）</td></tr>
+<tr><td>启动收发循环</td><td>启动收发循环</td></tr>
+</table>
+
+<p>KCP 分支里，<code>ClearConnectTimeout()</code> 和 <code>OnConnectComplete?.Invoke()</code> 被推迟到<b>收到服务端确认之后</b>。这就引出了下一节：Fantasy 必须自己实现一套握手。</p>
+
+<h2>二、自建握手：5 字节头 + 四步交换</h2>
+
+<h3>2.1 应用层再加一层头</h3>
+
+<p>UDP 之上、KCP 之下，Fantasy 插了 5 个字节：</p>
+
+<div class="flow"><b>KCP 分支的完整分层</b>
+
+  ┌──────────────────────────────────────────────┐
+  │  业务消息（Protobuf / MemoryPack 序列化）        │
+  ├──────────────────────────────────────────────┤
+  │  <b>20 字节 应用包头</b>  长度│opcode│rpcId│address   │ ← 三协议共用
+  ├──────────────────────────────────────────────┤
+  │  <b>24 字节 KCP 头</b>    conv│cmd│frg│wnd│ts│sn│una│len│ ← 第三篇
+  ├──────────────────────────────────────────────┤
+  │  <b>5 字节 Fantasy 头</b>  <i>header(1) + channelId(4)</i>    │ ← 本节
+  ├──────────────────────────────────────────────┤
+  │  UDP 数据报                                    │
+  └──────────────────────────────────────────────┘
+</div>
+
+<div class="filetag">Network/Protocol/KCP/KcpHeader.cs（13 行，全文）</div>
+<pre><code><span class="kw">internal enum</span> <span class="type">KcpHeader</span> : <span class="kw">byte</span>
+{
+    None                  = <span class="num">0x00</span>,
+    RequestConnection     = <span class="num">0x01</span>,   <span class="cmt">// C→S 我要连</span>
+    WaitConfirmConnection = <span class="num">0x02</span>,   <span class="cmt">// S→C 可以，你确认下</span>
+    ConfirmConnection     = <span class="num">0x03</span>,   <span class="cmt">// C→S 确认</span>
+    RepeatChannelId       = <span class="num">0x04</span>,   <span class="cmt">// S→C 换个 ID 重来</span>
+    ReceiveData           = <span class="num">0x06</span>,   <span class="cmt">// 双向 这是 KCP 数据</span>
+    Disconnect            = <span class="num">0x07</span>    <span class="cmt">// 双向 断开</span>
+}</code></pre>
+
+<p>13 行的文件，是理解 KCP 分支的钥匙。<b>注意 <code>0x05</code> 被跳过了</b> —— 大概是历史上删掉的某个类型，留个空位不复用，避免和旧版本客户端撞语义。这个细节说明作者考虑过协议兼容。</p>
+
+<h3>2.2 四步握手</h3>
+
+<div class="flow"><b>握手时序（客户端左，服务端右）</b>
+
+  Connect()
+  ChannelId = CreateChannelId()
+      │
+      ├──── <b>0x01 RequestConnection</b> + channelId ────→  查 _pendingConnection / _connectionChannel
+      │                                                 │
+      │                                    ┌────────────┴─────────────┐
+      │                                 ID 冲突                    ID 可用
+      │                                    │                          │
+      │←──── <b>0x04 RepeatChannelId</b> ───────┘             AddPendingConnection
+      │      重新 CreateChannelId()                                  │
+      │      回到第一步                                               │
+      │                                                              │
+      │←──────────── <b>0x02 WaitConfirmConnection</b> ──────────────────┘
+      │
+      ├── ClearConnectTimeout()          <i>← 撤销超时定时器</i>
+      ├── SendConfirmConnection()
+      ├── OnConnectComplete?.Invoke()    <i>← 此刻才通知业务"连上了"</i>
+      ├── _isConnected = true
+      └── 冲刷 _messageCache             <i>← 见 §2.4</i>
+      │
+      ├──── <b>0x03 ConfirmConnection</b> ────→  ConfirmPendingConnection → AddConnection
+      │                                     <i>创建 KCPServerNetworkChannel</i>
+      │
+      ├──── <b>0x06 ReceiveData</b> + KCP 数据 ←──→  正式通信
+      │
+      └──── <b>0x07 Disconnect</b> ──────────→  RemoveChannel
+</div>
+
+<p><b>为什么要四步而不是两步？</b>因为需要双向确认。两步（请求 + 应答）只能证明「客户端能到服务端」和「服务端的回包能到客户端」；第三步 <code>ConfirmConnection</code> 才让服务端确认「客户端确实收到了我的应答」。只有到这一步，服务端才真正创建 channel 分配资源。</p>
+
+<p>这和 TCP 三次握手是同一个道理，也顺带防了一类<b>反射放大攻击</b>：伪造源 IP 发 <code>RequestConnection</code>，服务端只会挂一个轻量 pending 记录并回一个 5 字节包，不会分配 channel。收不到第三步，pending 会被 <code>PendingTimerOut</code> 清掉。</p>
+
+<h3>2.3 ChannelId：UDP 没有连接，那用什么区分</h3>
+
+<p>TCP 服务端靠「一个 accept 出来的 socket」天然区分客户端。UDP 服务端只有<b>一个</b> socket 收所有人的包，必须靠数据内容区分。这就是 ChannelId 的职责。</p>
+
+<pre><code>[<span class="type">MethodImpl</span>(MethodImplOptions.AggressiveInlining)]
+<span class="kw">private static unsafe uint</span> <span class="type">CreateChannelId</span>()
+{
+    <span class="kw">uint</span> value;
+    <span class="type">RandomNumberGenerator</span>.<span class="type">Fill</span>(
+        <span class="type">MemoryMarshal</span>.<span class="type">CreateSpan</span>(<span class="kw">ref</span> *(<span class="kw">byte</span>*)&amp;value, <span class="num">4</span>));
+    <span class="kw">return</span> <span class="num">0xC0000000</span> | (value &amp; <span class="kw">int</span>.MaxValue);
+}</code></pre>
+
+<p>三个设计点，都值得学：</p>
+
+<ol>
+<li><b>用 <code>RandomNumberGenerator</code>（密码学随机）而不是 <code>Random</code>。</b>ChannelId 是这条连接的<b>唯一凭据</b> —— 后面所有包只靠 <code>channelId == ChannelId</code> 来判定归属。如果可预测，第三方就能伪造包注入到别人的会话里。这里选强随机是安全考量，不是洁癖。</li>
+<li><b><code>0xC0000000 |</code> 强制置高两位。</b>这是给 ID 分段：<code>0xC0000000</code> 段标记「客户端主动发起的外网连接」。服务端可以据此区分不同来源的 channel（内网连接、Roaming 迁移过来的等）用不同 ID 段，一眼看出类型。</li>
+<li><b><code>& int.MaxValue</code> 清掉最高位后再或。</b>保证结果落在确定区间，避免与其他段重叠。</li>
+</ol>
+
+<p>然后是<b>冲突处理</b>。随机 32 位（实际熵 30 位）撞车概率极低但非零，服务端的处理是：</p>
+
+<pre><code><span class="kw">case</span> KcpHeader.RequestConnection:
+{
+    _endPoint.<span class="type">TryDequeue</span>(<span class="kw">out var</span> ipEndPoint);
+
+    <span class="kw">if</span> (_pendingConnection.<span class="type">TryGetValue</span>(channelId, <span class="kw">out var</span> pendingConnection))
+    {
+        <span class="kw">if</span> (!ipEndPoint.<span class="type">IPEndPointEquals</span>(pendingConnection.RemoteEndPoint))
+        {
+            <span class="type">SendRepeatChannelId</span>(<span class="kw">ref</span> channelId, ipEndPoint);   <span class="cmt">// 不同来源撞 ID</span>
+        }
+        <span class="kw">break</span>;   <span class="cmt">// 同一来源重发 → 幂等忽略</span>
+    }
+
+    <span class="kw">if</span> (_connectionChannel.<span class="type">ContainsKey</span>(channelId))
+    {
+        <span class="type">SendRepeatChannelId</span>(<span class="kw">ref</span> channelId, ipEndPoint);
+        <span class="kw">break</span>;
+    }
+
+    <span class="type">AddPendingConnection</span>(<span class="kw">ref</span> channelId, ipEndPoint);
+}</code></pre>
+
+<p><b>注意 <code>break</code> 那一行 —— 同一个 endpoint 重发 RequestConnection 被静默忽略。</b>这是必须的：UDP 下客户端的第一个握手包可能丢了在重发，也可能服务端的应答丢了导致客户端重试。<b>UDP 协议的每个消息处理都必须考虑幂等</b>，这是和 TCP 编程最大的思维差异。</p>
+
+<h3>2.4 连接前发的消息去哪了</h3>
+
+<p>因为「连上」这个状态被推迟到握手第二步之后，中间这段窗口期业务层可能已经在发消息了：</p>
+
+<pre><code><span class="kw">public override void</span> <span class="type">Send</span>(...)
+{
+    <span class="kw">var</span> buffer = _packetParser.<span class="type">Pack</span>(...);
+
+    <span class="kw">if</span> (!_isConnected)
+    {
+        _messageCache.<span class="type">Enqueue</span>(buffer);   <span class="cmt">// 先攒着</span>
+        <span class="kw">return</span>;
+    }
+
+    <span class="type">SendMemoryStream</span>(buffer);
+}</code></pre>
+
+<p>握手完成时一次性冲刷：</p>
+
+<pre><code><span class="kw">case</span> KcpHeader.WaitConfirmConnection:
+{
+    <span class="kw">if</span> (channelId != ChannelId) <span class="kw">break</span>;
+
+    <span class="type">ClearConnectTimeout</span>();
+    <span class="type">SendConfirmConnection</span>();
+    OnConnectComplete?.<span class="type">Invoke</span>();
+    _isConnected = <span class="kw">true</span>;
+
+    <span class="kw">while</span> (_messageCache.<span class="type">TryDequeue</span>(<span class="kw">out var</span> memoryStream))
+    {
+        <span class="type">SendMemoryStream</span>(memoryStream);   <span class="cmt">// 补发</span>
+    }
+    <span class="kw">break</span>;
+}</code></pre>
+
+<p>TCP 分支<b>没有这个队列</b>，因为 TCP 的 <code>onConnectComplete</code> 一响就真的能发了。这个 <code>_messageCache</code> 是「握手推迟」直接导致的额外机制。</p>
+
+<div class="warn">
+<b>这个队列没有上限</b>
+<code>_messageCache</code> 是裸 <code>Queue&lt;MemoryStreamBuffer&gt;</code>，没有容量检查。如果握手一直不成功而业务层持续发消息，它会一直涨。<br><br>
+实际影响有限 —— 5 秒后连接超时会 <code>Dispose()</code> 并 <code>_messageCache.Clear()</code>。但如果你的业务层在连接建立前有高频发送（比如每帧上报），这 5 秒足够攒出可观内存。<span class="unverified">这是我基于代码结构的判断，未做压测验证。</span>
+</div>
+
+<p>注意 <code>if (channelId != ChannelId) break;</code> 这个校验在 <code>WaitConfirmConnection</code> / <code>ReceiveData</code> / <code>Disconnect</code> 三处都有。UDP 下任何人都能往你的端口发包，<b>每个包都必须验 ChannelId</b>。这是 UDP 编程的基本纪律，TCP 分支完全不需要考虑。</p>
+
+<h2>三、平台补丁：UDP 在真实世界里的麻脸</h2>
+
+<p>这一节的代码没有任何设计美感，纯粹是踩坑记录。但它们恰恰是「UDP 比 TCP 难用」的最真实体现 —— 读一遍能省你以后几天的调试时间。</p>
+
+<h3>3.1 SetSioUdpConnReset —— Windows 的 ICMP 陷阱</h3>
+
+<pre><code>_socket.<span class="type">SetSioUdpConnReset</span>();</code></pre>
+
+<p><span class="unverified">这个扩展方法本身我没有读到实现</span>，但它对应的是一个非常经典的 Windows UDP 问题：</p>
+
+<p>UDP 往一个<b>没有程序监听</b>的端口发包，对端主机会回一个 ICMP Port Unreachable。Windows 的默认行为是把这个 ICMP 转成 socket 错误 —— 于是你下一次 <code>ReceiveFrom</code> 会抛 <code>SocketException(ConnectionReset)</code>，即使你的 socket 从未「连接」过任何东西。</p>
+
+<p>后果：服务端在收包循环里，只要有一个客户端进程被杀掉，服务端的接收循环就会被一个异常打断。<code>SIO_UDP_CONNRESET</code> 这个 IOControl 就是关掉这个行为。</p>
+
+<div class="tip">
+<b>凡是写 Windows 上的 UDP 服务，这一行是必须的</b>
+Linux 没有这个行为（除非 socket 做了 connect）。这是最典型的「Windows 上跑得挂、Linux 上跑得好」的网络 bug，而且现象诡异 —— 服务端因为客户端崩溃而报连接重置。
+</div>
+
+<h3>3.2 Unity 的 ReceiveAsync 坑</h3>
+
+<p>接收循环里有一段平台分叉：</p>
+
+<pre><code><span class="kw">private async</span> <span class="type">FTask</span> <span class="type">ReceiveSocketAsync</span>()
+{
+    <span class="kw">while</span> (!_cancellationTokenSource.IsCancellationRequested)
+    {
+        <span class="kw">var</span> memory = _pipe.Writer.<span class="type">GetMemory</span>(<span class="num">8192</span>);
+<span class="cmt">#if FANTASY_UNITY</span>
+        <span class="type">MemoryMarshal</span>.<span class="type">TryGetArray</span>(memory, <span class="kw">out</span> <span class="type">ArraySegment</span>&lt;<span class="kw">byte</span>&gt; arraySegment);
+        <span class="kw">var</span> result = <span class="kw">await</span> _socket.<span class="type">ReceiveFromAsync</span>(
+                          arraySegment, SocketFlags.None, _ipEndPoint);
+        _pipe.Writer.<span class="type">Advance</span>(result.ReceivedBytes);
+        <span class="type">DrainReceiveBacklog</span>();                     <span class="cmt">// ← Unity 专属</span>
+        <span class="kw">await</span> _pipe.Writer.<span class="type">FlushAsync</span>();
+<span class="cmt">#else</span>
+        <span class="kw">var</span> result = <span class="kw">await</span> _socket.<span class="type">ReceiveAsync</span>(
+                          memory, SocketFlags.None, token);
+        _pipe.Writer.<span class="type">Advance</span>(result);
+        <span class="kw">await</span> _pipe.Writer.<span class="type">FlushAsync</span>();
+<span class="cmt">#endif</span>
+    }
+}</code></pre>
+
+<p>TCP 分支里有一条同样的分叉，注释写得更明白：</p>
+
+<div class="filetag">TCPClientNetwork.cs:201</div>
+<pre><code><span class="cmt">#if UNITY_2021</span>
+    <span class="cmt">// Unity2021.3.14f有个恶心的问题，使用ReceiveAsync会导致memory不能正确写入</span>
+    <span class="cmt">// 所有只能使用ReceiveFromAsync来接收消息，</span>
+    <span class="cmt">// 但ReceiveFromAsync只有一个接受ArraySegment的接口。</span></code></pre>
+
+<p>Unity 用的 Mono / 老版 .NET 运行时，<code>Socket.ReceiveAsync(Memory&lt;byte&gt;)</code> 这个基于 <code>Memory&lt;T&gt;</code> 的重载有 bug —— 数据没写进你给的内存。只能退回到 <code>ArraySegment</code> 版本的 <code>ReceiveFromAsync</code>。</p>
+
+<p><code>MemoryMarshal.TryGetArray</code> 就是把 <code>Memory&lt;byte&gt;</code> 拆回底层的 <code>ArraySegment&lt;byte&gt;</code>。<b>能拆成功的前提是这块 Memory 底层真的由数组支撑</b> —— Pipe 的默认实现满足，所以可行。</p>
+
+<h3>3.3 DrainReceiveBacklog —— 补偿单包读取</h3>
+
+<pre><code><span class="cmt">#if FANTASY_UNITY</span>
+<span class="kw">private void</span> <span class="type">DrainReceiveBacklog</span>()
+{
+    <span class="kw">while</span> (_socket.Available &gt; <span class="num">0</span>)          <span class="cmt">// 内核缓冲还有包</span>
+    {
+        <span class="kw">var</span> memory = _pipe.Writer.<span class="type">GetMemory</span>(<span class="num">8192</span>);
+        <span class="kw">if</span> (!<span class="type">MemoryMarshal</span>.<span class="type">TryGetArray</span>(memory, <span class="kw">out var</span> arraySegment)) <span class="kw">break</span>;
+
+        <span class="kw">int</span> receivedBytes;
+        <span class="kw">try</span>
+        {
+            receivedBytes = _socket.<span class="type">ReceiveFrom</span>(...);   <span class="cmt">// 同步读，socket 是非阻塞的</span>
+        }
+        <span class="kw">catch</span> (<span class="type">SocketException</span> e) <span class="kw">when</span> (e.SocketErrorCode == SocketError.WouldBlock)
+        {
+            <span class="kw">break</span>;   <span class="cmt">// 没了，正常退出</span>
+        }
+
+        <span class="kw">if</span> (receivedBytes &lt;= <span class="num">0</span>) <span class="kw">break</span>;
+        _pipe.Writer.<span class="type">Advance</span>(receivedBytes);
+    }
+}
+<span class="cmt">#endif</span></code></pre>
+
+<p>这段是这一篇最能说明「UDP 与 TCP 编程模型差异」的代码。</p>
+
+<p><b>问题</b>：UDP 的一次 <code>ReceiveFrom</code> 只能拿<b>一个</b>数据报，哪怕内核缓冲里排了 100 个。而 TCP 的一次 <code>Receive</code> 会把缓冲里的字节尽量一次读满。</p>
+
+<p>结果是：在 Unity 上走 <code>await ReceiveFromAsync</code> 的路径，每收一个包就要过一次异步调度（回到 Unity 主循环，等下一帧或下一个调度点）。<b>高频小包场景下，接收速率被调度频率钉死了</b> —— 每帧只能处理一个包。KCP 的 MTU 是 470 字节，一次业务消息就可能拆成好几个包，这个瓶颈会直接变成延迟。</p>
+
+<p><b>解法</b>：异步收到一个包后，用 <code>_socket.Available</code> 探测内核里还有没有，有就<b>同步</b>连续榨干。因为 <code>_socket.Blocking = false</code>，同步 <code>ReceiveFrom</code> 在无数据时立刻抛 <code>WouldBlock</code> 而不是卡住，所以这个循环是安全的。</p>
+
+<div class="tip">
+<b>「异步等第一个，同步榨干后续」是 UDP 高吞吐的通用模式</b>
+异步调用负责「有数据了叫我」，同步循环负责「一次处理干净」。两者结合既不空转 CPU（不像纯轮询），又不受调度频率限制（不像纯异步）。<br><br>
+非 Unity 平台没写这段 —— <span class="unverified">推测是 .NET 的 <code>ReceiveAsync</code> 在 socket 有数据时会走同步完成路径，不产生真正的线程调度，所以瓶颈不明显。这是我的推断，未验证。</span>
+</div>
+
+<h3>3.4 三处平台差异汇总</h3>
+
+<table>
+<tr><th>补丁</th><th>针对</th><th>不做的后果</th></tr>
+<tr><td><code>SetSioUdpConnReset()</code></td><td>Windows ICMP</td><td>客户端崩溃导致服务端收包循环抛异常</td></tr>
+<tr><td><code>ReceiveFromAsync</code> + <code>TryGetArray</code></td><td>Unity 老运行时</td><td>数据收不进 buffer，静默丢包</td></tr>
+<tr><td><code>DrainReceiveBacklog()</code></td><td>UDP 单包语义 + Unity 调度</td><td>吞吐被帧率限制，高频包场景延迟飙升</td></tr>
+</table>
+
+<h2>四、这一篇的收获清单</h2>
+
+<p>UDP 相比 TCP，<b>省了</b>一件事、<b>多了</b>四件事：</p>
+
+<div class="flow"><b>省的</b>
+  ✓ 分包粘包状态机 → BufferPacketParser 无跨调用状态
+
+<b>多的</b>
+  ✗ 握手协议         → KcpHeader 六种类型 + 四步交换
+  ✗ 连接标识         → ChannelId（强随机 + 高位分段 + 冲突重试）
+  ✗ 幂等处理         → 每条消息都要能安全重复；每个包都要验 ChannelId
+  ✗ 平台补丁         → ICMP / Unity 运行时 / 单包读取
+
+<b>还没解决的（第三篇）</b>
+  ? 可靠、有序、去重、拥塞控制
+</div>
+
+<h2>五、阅读清单</h2>
+
+<p>这一篇不需要读新文件，只需要用「UDP 视角」重看两个已读过的文件的特定片段。</p>
+
+<ul class="checklist">
+<li><span class="n">1</span><span>KCP/KcpHeader.cs —— 全文，握手协议的字典</span><span class="ln">13 行</span></li>
+<li><span class="n">2</span><span>BufferPacketParser.cs —— 只读类注释 + OuterBufferPacketParser.UnPack，与 TCP 版对比</span><span class="ln">389 行</span></li>
+<li><span class="n">3</span><span>KCPClientNetwork.cs · Connect() —— socket 创建的四个设置</span><span class="ln">135~181</span></li>
+<li><span class="n">4</span><span>KCPClientNetwork.cs · ReceiveData() —— 握手状态机，客户端侧</span><span class="ln">377~437</span></li>
+<li><span class="n">5</span><span>KCPClientNetwork.cs · CreateChannelId() —— 三行代码三个考量</span><span class="ln">736~742</span></li>
+<li><span class="n">6</span><span>KCPClientNetwork.cs · DrainReceiveBacklog() —— UDP 吞吐模式</span><span class="ln">267~297</span></li>
+<li><span class="n">7</span><span>KCPServerNetworkByPipe.cs · ReceiveData() —— 握手状态机，服务端侧，重点看冲突处理</span><span class="ln">267~333</span></li>
+</ul>
+
+<h2>六、读完后自测</h2>
+
+<div class="q"><b>Q1</b> UDP 的 <code>ConnectAsync</code> 成功，能说明什么？<b>不能</b>说明什么？</div>
+<div class="q"><b>Q2</b> 为什么 <code>BufferPacketParser</code> 不需要 <code>Offset</code> / <code>IsUnPackHead</code> 这些跨调用状态？换成 TCP 用会出什么问题？</div>
+<div class="q"><b>Q3</b> 既然 KCP 保留了消息边界，20 字节包头里的「长度」字段还有什么用？</div>
+<div class="q"><b>Q4</b> 握手为什么要四步（含冲突重试）而不是两步？第三步 <code>ConfirmConnection</code> 少了会怎样？</div>
+<div class="q"><b>Q5</b> <code>CreateChannelId</code> 为什么用 <code>RandomNumberGenerator</code> 而不是 <code>Random</code>？可预测的 ChannelId 能被怎么利用？</div>
+<div class="q"><b>Q6</b> 服务端收到同一 endpoint 的重复 <code>RequestConnection</code> 时静默忽略 —— 为什么必须这样，而不是报错？</div>
+<div class="q"><b>Q7</b> 去掉 <code>DrainReceiveBacklog()</code>，在什么场景下会观察到明显退化？为什么 TCP 分支不需要它？</div>
+<div class="q"><b>Q8</b> <code>_messageCache</code> 存在的根本原因是什么？TCP 分支为什么没有？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>KcpHeader.cs</code> 全文、<code>KCPClientNetwork.cs</code>（745 行）全文、<code>BufferPacketParser.cs</code>（389 行）全文、<code>KCPServerNetworkByPipe.cs</code> 的 <code>ReceiveData</code> 段与 <code>KcpHeader</code> 使用点、<code>TCPClientNetwork.cs:201</code> 的 Unity 注释。</p>
+<p><span class="unverified">⚠ 未核实</span>：<code>SetSioUdpConnReset()</code> / <code>SetSocketBufferToOsLimit()</code> 扩展方法的实现未读取，文中对其作用的说明基于方法名与 Windows <code>SIO_UDP_CONNRESET</code> 的通行含义；「非 Unity 平台不需要 Drain」的原因为推断；<code>_messageCache</code> 无上限的实际影响未压测。</p>
+<p>上一篇：<a href="网络层一-TCP讲解.html" style="color:var(--accent)">网络层（一）TCP</a>　下一篇：<a href="网络层三-KCP讲解.html" style="color:var(--accent)">网络层（三）KCP —— 把保证造回来</a></p>
+<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+</footer>
+
+</div>
+</body>
+</html>

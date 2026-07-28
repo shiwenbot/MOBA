@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络层（一）TCP —— 字节流与分包粘包</title>
+<link rel="stylesheet" href="reading-notes.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a class="cur" href="网络层一-TCP讲解.html">一 · TCP</a>
+    <a href="网络层二-UDP讲解.html">二 · UDP</a>
+    <a href="网络层三-KCP讲解.html">三 · KCP</a>
+  </div>
+  <h1>网络层（一）TCP —— 字节流与分包粘包</h1>
+  <div class="sub">
+    Fantasy 源码阅读 · 传输层三部曲第一篇<br>
+    <code>Fantasy.Unity/Runtime/Core/Network/</code>
+  </div>
+</header>
+
+<p>这三篇的顺序不是按「项目实际用哪个」排的，是按<b>理解成本</b>排的。</p>
+
+<p>你的项目实际走 KCP（<code>GameClient.cs:57</code> 写死了 <code>NetworkProtocolType.KCP</code>）。但直接读 KCP 会同时撞上三件事：可靠传输算法、UDP 的无连接语义、Fantasy 自己的握手协议。三者纠缠在一起，很难分清哪个问题是谁造成的。</p>
+
+<p>所以先读 TCP。它是<b>唯一一个「传输保证由操作系统提供」</b>的分支，代码里剩下的东西才是 Fantasy 自己的框架逻辑 —— 接口抽象、Pipe 缓冲、消息头解析、生命周期管理。这套东西 KCP 分支也要用，而且在 TCP 分支里看最干净。</p>
+
+<div class="note">
+<b>三篇的分工</b>
+第一篇：把「框架层」看透 —— 接口抽象、Pipe、包头协议、发送队列。TCP 只是载体。<br>
+第二篇：把 TCP 的保证一条条<b>拿掉</b>，看 UDP 剩下什么，以及 Fantasy 为此补了哪些代码。<br>
+第三篇：看 KCP 如何用算法把拿掉的东西重新造回来。
+</div>
+
+<h2>一、先明确 TCP 到底给了你什么</h2>
+
+<p>做游戏网络时，「用 TCP」这个决定其实是在向内核外包四件事：</p>
+
+<table>
+<tr><th>保证</th><th>含义</th><th>后面读 UDP 时会失去</th></tr>
+<tr><td><b>可靠</b></td><td>丢了会重传，直到对方确认</td><td>✗ 全丢</td></tr>
+<tr><td><b>有序</b></td><td>按发送顺序交付</td><td>✗ 全丢</td></tr>
+<tr><td><b>去重</b></td><td>重复包被丢弃</td><td>✗ 全丢</td></tr>
+<tr><td><b>流量/拥塞控制</b></td><td>不会压垮对方和链路</td><td>✗ 全丢</td></tr>
+<tr><td colspan="3" style="color:var(--warn)">—— 以下是 TCP <b>没有</b>给你的，所以 TCP 分支也要自己处理 ——</td></tr>
+<tr><td><b>消息边界</b></td><td>TCP 是<b>字节流</b>，不保留你 <code>Send</code> 的切分</td><td>UDP 反而<b>有</b>（后面详述）</td></tr>
+</table>
+
+<p>最后一行是这一篇的主线。<b>TCP 的可靠有序是免费的，消息边界是要自己付钱的。</b>这就是「分包粘包」问题的本质，也是 <code>ReadOnlyMemoryPacketParser</code> 那 374 行存在的全部理由。</p>
+
+<h2>二、接口抽象：三种协议如何共用一套上层</h2>
+
+<p>先读这四个文件，一共 252 行，读完你就知道 Session 之上的代码为什么完全不关心底下跑的是 TCP 还是 KCP。</p>
+
+<h3>2.1 INetworkChannel —— 最小契约（13 行）</h3>
+
+<div class="filetag">Network/Protocol/Interface/INetworkChannel.cs</div>
+<pre><code><span class="kw">public interface</span> <span class="type">INetworkChannel</span> : <span class="type">IDisposable</span>
+{
+    <span class="kw">public</span> <span class="type">Session</span> Session { <span class="kw">get</span>; }
+    <span class="kw">public bool</span> IsDisposed { <span class="kw">get</span>; }
+    <span class="kw">public void</span> <span class="type">Send</span>(<span class="kw">uint</span> rpcId, <span class="kw">long</span> address,
+                     <span class="type">MemoryStreamBuffer</span> memoryStream,
+                     <span class="type">IMessage</span> message, <span class="type">Type</span> messageType);
+}</code></pre>
+
+<p>13 行定义了「一条通道」：能发消息、能销毁、关联一个 Session。<b>注意 <code>Send</code> 里没有任何协议痕迹</b> —— 没有 socket、没有 endpoint、没有序号。这是抽象成功的标志。</p>
+
+<p>参数里那个 <code>memoryStream</code> 和 <code>message</code> 二选一的设计要留意：传 <code>message</code> 表示「还没序列化，你帮我打包」；传 <code>memoryStream</code> 表示「已经打包好了，你只需要改写包头里的 rpcId」。后者用于消息转发，避免反复序列化。<code>OuterBufferPacketParser.Pack</code> 里那两个重载正好对应这两条路。</p>
+
+<h3>2.2 ANetwork —— 共享设施（149 行）</h3>
+
+<p>所有协议实现的基类。它<b>不管收发</b>，只提供三样东西：</p>
+
+<ul>
+<li><b>三个身份标识</b>：<code>NetworkType</code>（Client/Server）、<code>NetworkTarget</code>（Outer 外网 / Inner 内网）、<code>NetworkProtocolType</code>（TCP/KCP/WebSocket/HTTP）。后面很多分支逻辑靠它们决策，尤其 <code>NetworkTarget</code> —— 内外网的包头长度、MTU、窗口大小全都不同。</li>
+<li><b>消息调度器</b>：<code>Initialize</code> 里按 <code>networkType</code> 选 <code>ClientMessageScheduler</code> 或 <code>OuterMessageScheduler</code>。收到的包最终交给它分发。</li>
+<li><b>PackInfo 对象池</b>：<code>RentOuterPackInfo()</code> / <code>ReturnOuterPackInfo()</code>。</li>
+</ul>
+
+<p>PackInfo 池那段有个细节值得看：</p>
+
+<pre><code><span class="kw">public void</span> <span class="type">ReturnOuterPackInfo</span>(<span class="type">OuterPackInfo</span> outerPackInfo)
+{
+    <span class="kw">if</span> (_outerPackInfoPool.Count &gt; <span class="num">512</span>)
+    {
+        <span class="cmt">// 池子里最多缓存256个、其实这样设置有点多了…</span>
+        <span class="cmt">// 反而设置越大内存会占用越多。</span>
+        <span class="kw">return</span>;   <span class="cmt">// ← 超了就直接丢弃，不入池</span>
+    }
+    _outerPackInfoPool.Enqueue(outerPackInfo);
+}</code></pre>
+
+<p><b>对象池必须有上限。</b>没上限的池在流量尖峰后会永久占住峰值内存 —— 池子本身成了内存泄漏。这里的做法是超限直接丢给 GC，用一次短暂的分配换掉长期驻留。注释里那句「设置越大内存占用越多」说的就是这个权衡。（注释写 256、代码写 512，属于注释没跟上，无功能影响。）</p>
+
+<p>另外注意每次 <code>Rent</code> 都会 <code>++_outerPackInfoId</code>。这个自增 Id 是<b>复用检测</b>用的 —— 异步回调拿着一个 PackInfo，回来时先比对 Id，不一致说明对象已被回收复用，这一路结果必须丢弃。这是池化对象的通用防御手法，和第一篇 FTask 里 <code>isPool: false</code> 的坑是同一类问题的两种解法：FTask 选择关掉池化，PackInfo 选择加版本号。</p>
+
+<h3>2.3 AClientNetwork —— 客户端专属（37 行）</h3>
+
+<div class="filetag">Network/Protocol/Interface/AClientNetwork.cs</div>
+<pre><code><span class="kw">public abstract class</span> <span class="type">AClientNetwork</span> : <span class="type">ANetwork</span>, <span class="type">INetworkChannel</span>
+{
+    <span class="kw">protected bool</span> IsInit;
+    <span class="kw">public</span> <span class="type">Session</span> Session { <span class="kw">get</span>; <span class="kw">protected set</span>; }
+
+    <span class="kw">public abstract</span> <span class="type">Session</span> <span class="type">Connect</span>(
+        <span class="kw">string</span> remoteAddress,
+        <span class="type">Action</span> onConnectComplete, <span class="type">Action</span> onConnectFail, <span class="type">Action</span> onConnectDisconnect,
+        <span class="kw">bool</span> isHttps, <span class="kw">int</span> connectTimeout = <span class="num">5000</span>);
+}</code></pre>
+
+<p>两个设计点：</p>
+
+<ol>
+<li><b>客户端的 Network 自己就是 Channel。</b>它同时继承 <code>ANetwork</code> 和实现 <code>INetworkChannel</code> —— 因为客户端只有一条连接，没必要再分层。服务端则相反：一个 <code>ANetwork</code> 管 N 个 <code>ANetworkServerChannel</code>（55 行，看一眼即可）。这个不对称是刻意的。</li>
+<li><b>三个回调而不是一个 Task。</b><code>Connect</code> 同步返回 Session，连接结果通过 <code>onConnectComplete</code> / <code>onConnectFail</code> / <code>onConnectDisconnect</code> 异步通知。这正是你项目 <code>GameClient.cs</code> 里要手动搓一个 <code>FTask&lt;bool&gt;</code> 把回调转成 await 的原因 —— 框架给的是回调风格，业务层想要 await 风格，中间那层胶水得自己写。</li>
+</ol>
+
+<div class="note">
+<b>把第一篇的知识接上</b>
+<code>m_connectTask = FTask&lt;bool&gt;.Create(isPool: false)</code> 加上「三个回调分别 <code>SetResult</code> 后立刻置 null」，本质就是在实现一个<b>只允许完成一次</b>的 promise。框架这边有三条独立路径可能触发完成（成功/失败/断开），业务那边只能被 await 一次，所以必须防重。
+</div>
+
+<h2>三、TCPClientNetwork 的四条执行流</h2>
+
+<p><code>TCP/Client/TCPClientNetwork.cs</code>（427 行）是这一篇的正餐。它有四条独立运行的流程，<b>不要顺着行号读，按流程读</b>：</p>
+
+<div class="flow"><b>四条流</b>
+
+  ① 连接流   Connect() → ConnectAsync → OnConnectSocketCompleted → OnReceiveSocketComplete
+                                                                            │
+                                                          ┌─────────────────┴────────────┐
+                                                          ↓                              ↓
+  ② 收流    ReceiveSocketAsync()  ── socket → Pipe.Writer     ③ 解流  ReadPipeDataAsync()
+                <i>（生产者，独立循环）</i>                                    <i>（消费者，独立循环）</i>
+                                                                              ↓
+                                                                        UnPack → Session.Receive
+
+  ④ 发流    Send() → _sendBuffers 队列 → SendAsync → OnSendCompleted → 继续下一个
+</div>
+
+<h3>3.1 连接流：三个回调 + 一个超时定时器</h3>
+
+<p><code>Connect()</code> 做的事按顺序是：防重入检查 → 存三个回调 → 挂超时定时器 → 造 socket → 发起异步连接 → 创建 Session 并<b>立即返回</b>。</p>
+
+<pre><code><span class="kw">if</span> (IsInit)
+{
+    <span class="kw">throw new</span> <span class="type">NotSupportedException</span>(
+        <span class="str">"TCPClientNetwork Has already been initialized. "</span> +
+        <span class="str">"If you want to call Connect again, please re instantiate it."</span>);
+}</code></pre>
+
+<p><b>一个实例只能 Connect 一次。</b>重连必须新建实例。这个约束贯穿 TCP / KCP / WebSocket 三份实现，理由是内部有太多一次性状态（<code>_cancellationTokenSource</code>、<code>Pipe</code>、<code>_packetParser</code> 的解析进度），逐个重置比重建更容易出错。这也解释了为什么你项目里 <code>ClientConnectWatcher</code> 走的是「Dispose 旧的 → 造新的」而不是「复用同一个」。</p>
+
+<h4>超时定时器与「断开事件抑制」</h4>
+
+<pre><code>_connectTimeoutId = Scene.TimerComponent.Net.<span class="type">OnceTimer</span>(connectTimeout, () =&gt;
+{
+    _connectDisconnectEvent = <span class="kw">false</span>;   <span class="cmt">// ← 关键</span>
+    _onConnectFail?.<span class="type">Invoke</span>();
+    <span class="type">Dispose</span>();
+});</code></pre>
+
+<p><code>_connectDisconnectEvent</code> 这个 bool 是全文件最容易忽略、又最值得学的设计。看 <code>Dispose()</code> 里的用法：</p>
+
+<pre><code><span class="kw">if</span> (_connectDisconnectEvent)
+{
+    _onConnectDisconnect?.<span class="type">Invoke</span>();
+}</code></pre>
+
+<p>问题是这样的：<code>Dispose()</code> 默认要通知业务层「连接断了」。但<b>连接失败</b>和<b>连接断开</b>是两种语义 —— 连都没连上，不该报「断开」。而失败路径又必须调 <code>Dispose()</code> 清理资源。</p>
+
+<p>所以用一个标志位在调 <code>Dispose()</code> <b>之前</b>把断开通知关掉。三处失败路径（超时、connect 返回错误、connect 抛异常）全都是同一个模式：</p>
+
+<div class="flow"><b>失败路径统一写法</b>
+
+  _connectDisconnectEvent = <b>false</b>;   ← 先抑制
+  _onConnectFail?.Invoke();            ← 报"失败"
+  Dispose();                           ← 清理时不会再报"断开"
+</div>
+
+<div class="tip">
+<b>可迁移的经验</b>
+当一个清理方法（Dispose/Close）自带副作用通知，而某些调用方需要「静默清理」时，标志位是最省事的解法。替代方案是 <code>Dispose(bool notify)</code> 重载，但那会让 <code>IDisposable</code> 的契约变脏。KCP 分支里有一模一样的字段和一模一样的用法 —— 第三篇会再遇到它。
+</div>
+
+<h4>连接完成的两条路</h4>
+
+<pre><code><span class="kw">if</span> (!_socket.<span class="type">ConnectAsync</span>(outArgs))
+{
+    <span class="type">OnReceiveSocketComplete</span>();   <span class="cmt">// 同步就完成了，直接走</span>
+}</code></pre>
+
+<p><code>ConnectAsync</code> 返回 <code>false</code> 表示「操作已同步完成，不会触发 Completed 事件」。这是 <code>SocketAsyncEventArgs</code> 系列 API 的统一约定，<b>忘了处理这条同步路径是这套 API 最常见的 bug</b>。本地连接、地址已缓存等情况下真的会走到。</p>
+
+<p>另一条路是 <code>OnConnectSocketCompleted</code>，它在 IO 完成线程上被调用，所以要 Post 回来：</p>
+
+<pre><code>Scene.ThreadSynchronizationContext.<span class="type">Post</span>(OnReceiveSocketComplete);</code></pre>
+
+<p>Fantasy 的 Scene 是单线程模型（配合 <code>Scene/Scheduler/</code> 下那几个十几行的调度器）。所有业务逻辑必须回到 Scene 线程执行，socket 回调是<b>唯一</b>需要跨线程的地方，所以这里的 <code>Post</code> 是整个网络层的线程边界。<span class="unverified">注意上面那条同步路径没有 Post —— 因为 <code>Connect()</code> 本身就在 Scene 线程上调用，同步完成时线程没变。</span></p>
+
+<h3>3.2 收流与解流：为什么中间要插一个 Pipe</h3>
+
+<p>连接成功后启动两个<b>互不等待</b>的循环：</p>
+
+<pre><code><span class="kw">private void</span> <span class="type">OnReceiveSocketComplete</span>()
+{
+    <span class="type">ClearConnectTimeout</span>();
+    _onConnectComplete?.<span class="type">Invoke</span>();
+    <span class="type">ReadPipeDataAsync</span>().<span class="type">Coroutine</span>();      <span class="cmt">// 消费者</span>
+    <span class="type">ReceiveSocketAsync</span>().<span class="type">Coroutine</span>();    <span class="cmt">// 生产者</span>
+}</code></pre>
+
+<p><code>.Coroutine()</code> 就是第一篇里的 fire-and-forget。这两个 <code>async FTask</code> 方法会一直循环到 <code>_cancellationTokenSource</code> 被取消。</p>
+
+<h4>生产者：socket → Pipe</h4>
+
+<pre><code><span class="kw">while</span> (!_cancellationTokenSource.IsCancellationRequested)
+{
+    <span class="kw">var</span> memory = _pipe.Writer.<span class="type">GetMemory</span>(<span class="num">8192</span>);   <span class="cmt">// 借一块写入区</span>
+    count = <span class="kw">await</span> _socket.<span class="type">ReceiveAsync</span>(memory, SocketFlags.None, token);
+
+    <span class="kw">if</span> (count == <span class="num">0</span>)
+    {
+        <span class="type">Dispose</span>();   <span class="cmt">// 对端正常关闭</span>
+        <span class="kw">return</span>;
+    }
+
+    _pipe.Writer.<span class="type">Advance</span>(count);       <span class="cmt">// 告知实际写了多少</span>
+    <span class="kw">await</span> _pipe.Writer.<span class="type">FlushAsync</span>();   <span class="cmt">// 唤醒消费者</span>
+}</code></pre>
+
+<p><code>count == 0</code> 是 TCP 的 <b>FIN 信号</b> —— 对端调用了 close/shutdown。这是唯一的「优雅关闭」判据，不能靠异常。</p>
+
+<p><code>GetMemory</code> / <code>Advance</code> / <code>FlushAsync</code> 是 <code>System.IO.Pipelines</code> 的写入三部曲。它比「自己 new byte[8192] 然后 Array.Copy」好在两点：内存由 Pipe 池化管理，且 <code>FlushAsync</code> 在缓冲超过阈值时会<b>异步阻塞</b>，天然形成背压（backpressure）—— 解析跟不上时，接收会自动降速，而不是无限堆积内存。</p>
+
+<h4>消费者：Pipe → UnPack → Session</h4>
+
+<pre><code><span class="kw">var</span> result = <span class="kw">await</span> pipeReader.<span class="type">ReadAsync</span>(token);
+<span class="kw">var</span> buffer   = result.Buffer;
+<span class="kw">var</span> consumed = buffer.Start;
+<span class="kw">var</span> examined = buffer.End;
+
+<span class="kw">while</span> (<span class="type">TryReadMessage</span>(<span class="kw">ref</span> buffer, <span class="kw">out var</span> message))
+{
+    <span class="type">ReceiveData</span>(<span class="kw">ref</span> message);
+    consumed = buffer.Start;
+}
+
+pipeReader.<span class="type">AdvanceTo</span>(consumed, examined);</code></pre>
+
+<p><code>AdvanceTo(consumed, examined)</code> 的双参数是 Pipelines 的核心概念，值得停一下：</p>
+
+<table>
+<tr><th>参数</th><th>含义</th><th>说错的后果</th></tr>
+<tr><td><code>consumed</code></td><td>「这些我处理完了，可以回收」</td><td>报大了 → 数据丢失；报小了 → 重复处理</td></tr>
+<tr><td><code>examined</code></td><td>「这些我看过了，都不够凑成一个包」</td><td>报小了 → <b>ReadAsync 立刻返回同样的数据，死循环空转</b></td></tr>
+</table>
+
+<p><code>examined = buffer.End</code> 的意思是「整段我都看过了，别再拿同样的数据来烦我，等有新数据再唤醒」。这两个位置能不同，正是 Pipelines 为「消息可能跨多次读取才完整」这个场景设计的。</p>
+
+<div class="warn">
+<b>这里的 TryReadMessage 名字有误导性</b>
+它<b>不</b>做消息切分，只是把 <code>ReadOnlySequence</code> 的第一个连续段（<code>buffer.First</code>）取出来。真正的切分在下游 <code>_packetParser.UnPack</code>。<br><br>
+换句话说：<code>TryReadMessage</code> 是「取一块连续内存」，<code>UnPack</code> 是「从连续内存里凿出完整消息」。<code>ReadOnlySequence</code> 可能由多个不连续段组成，逐段喂给解析器，解析器自己维护跨段状态。
+</div>
+
+<h3>3.3 分包粘包：ReadOnlyMemoryPacketParser 的状态机</h3>
+
+<p>这是 TCP 分支<b>最核心的一段</b>，也是整篇最值得精读的代码。</p>
+
+<h4>先看包头长什么样</h4>
+
+<div class="filetag">Network/Message/PacketParser/Packet.cs</div>
+<pre><code><span class="kw">public const int</span> PacketLength        = <span class="kw">sizeof</span>(<span class="kw">int</span>);    <span class="cmt">// 4 消息体长度</span>
+<span class="kw">public const int</span> ProtocolCodeLength  = <span class="kw">sizeof</span>(<span class="kw">uint</span>);   <span class="cmt">// 4 协议号</span>
+<span class="kw">public const int</span> RpcIdLength         = <span class="kw">sizeof</span>(<span class="kw">uint</span>);   <span class="cmt">// 4 RPC 序号</span>
+<span class="kw">public const int</span> PacketAddressLength = <span class="kw">sizeof</span>(<span class="kw">long</span>);   <span class="cmt">// 8 路由地址</span>
+
+<span class="cmt">// 外网包头 = 4 + 4 + 4 + 8 = 20 字节</span>
+<span class="kw">public const int</span> OuterPacketHeadLength = PacketLength + ProtocolCodeLength
+                                        + RpcIdLength + PacketAddressLength;</code></pre>
+
+<div class="flow"><b>20 字节包头布局</b>
+
+  偏移  0        4              8          12                  20
+        ├────────┼──────────────┼──────────┼───────────────────┤
+        │ <b>长度</b>   │ <b>ProtocolCode</b> │ <b>RpcId</b>    │ <b>Address</b>           │  消息体…
+        │ int32  │ uint32       │ uint32   │ int64             │
+        ├────────┴──────────────┴──────────┴───────────────────┤
+        │        <i>「长度」= 消息体字节数，不含这 20 字节</i>          │
+</div>
+
+<p>这是「<b>长度前缀</b>」方案 —— 解决分包粘包的三种通用做法（长度前缀 / 分隔符 / 定长）里唯一适合二进制协议的那个。<span class="unverified">外网与内网包头长度在当前代码里都是 20，但常量分开定义，字段语义也不同（内网的 Address 用于进程路由）。</span></p>
+
+<h4>状态机的五个字段</h4>
+
+<pre><code><span class="kw">protected int</span>  Offset;               <span class="cmt">// 当前 buffer 的读取位置</span>
+<span class="kw">protected int</span>  MessageHeadOffset;    <span class="cmt">// 包头已攒了几个字节</span>
+<span class="kw">protected int</span>  MessageBodyOffset;    <span class="cmt">// 包体已攒了几个字节</span>
+<span class="kw">protected int</span>  MessagePacketLength;  <span class="cmt">// 从包头解出的包体总长</span>
+<span class="kw">protected bool</span> IsUnPackHead = <span class="kw">true</span>;  <span class="cmt">// 当前在攒头还是攒体</span>
+<span class="kw">protected readonly byte</span>[] MessageHead = <span class="kw">new byte</span>[<span class="num">20</span>];  <span class="cmt">// 包头暂存区</span></code></pre>
+
+<p><b>这些字段是跨 UnPack 调用存活的</b>，这是整个设计的关键。一次 <code>UnPack</code> 可能只攒到半个包头就返回 <code>false</code>，下次调用接着攒。解析器是有记忆的。</p>
+
+<h4>攒包头</h4>
+
+<pre><code><span class="kw">if</span> (IsUnPackHead)
+{
+    <span class="kw">var</span> outerPacketHeadLength = Packet.OuterPacketHeadLength - MessageHeadOffset;
+    <span class="kw">var</span> copyLength = <span class="type">Math</span>.<span class="type">Min</span>(bufferLength, outerPacketHeadLength);   <span class="cmt">// ← 能拿多少拿多少</span>
+
+    readOnlySpan.<span class="type">Slice</span>(Offset, copyLength)
+                .<span class="type">CopyTo</span>(MessageHead.<span class="type">AsSpan</span>(MessageHeadOffset, copyLength));
+
+    Offset            += copyLength;
+    MessageHeadOffset += copyLength;
+
+    <span class="kw">if</span> (MessageHeadOffset == Packet.OuterPacketHeadLength)
+    {
+        <span class="cmt">// 头齐了，解字段</span>
+        MessagePacketLength = <span class="type">Unsafe</span>.<span class="type">ReadUnaligned</span>&lt;<span class="kw">int</span>&gt;(<span class="kw">ref</span> messageRef);
+
+        <span class="kw">if</span> (MessagePacketLength &gt; ProgramDefine.MaxMessageSize)
+        {
+            <span class="kw">throw new</span> <span class="type">ScanException</span>(...);   <span class="cmt">// ← 安全边界，见下文</span>
+        }
+
+        PackInfo = <span class="type">OuterPackInfo</span>.<span class="type">Create</span>(Network);
+        <span class="cmt">// …读 ProtocolCode / RpcId，按总长一次性租好 stream</span>
+        <span class="kw">var</span> memoryStream = PackInfo.<span class="type">RentMemoryStream</span>(
+            MemoryStreamBufferSource.UnPack,
+            Packet.OuterPacketHeadLength + MessagePacketLength);
+        memoryStream.<span class="type">Write</span>(MessageHead);   <span class="cmt">// 包头也写进去</span>
+
+        IsUnPackHead      = <span class="kw">false</span>;   <span class="cmt">// 切换到攒包体</span>
+        bufferLength     -= copyLength;
+        MessageHeadOffset = <span class="num">0</span>;
+    }
+    <span class="kw">else</span>
+    {
+        Offset = <span class="num">0</span>;
+        <span class="kw">return false</span>;   <span class="cmt">// 头没齐，下次继续</span>
+    }
+}</code></pre>
+
+<p>三个值得学的点：</p>
+
+<ol>
+<li><b><code>Math.Min</code> 那行是整段的灵魂。</b>「需要 20 字节，现有 7 字节，那就先拿 7 字节存着」。不做任何假设、不要求一次到位 —— 这就是流式解析的正确姿势。</li>
+<li><b>长度校验必须在分配之前。</b><code>MessagePacketLength</code> 来自网络，是完全不可信的。如果不校验就拿去 <code>RentMemoryStream</code>，一个伪造的 <code>0x7FFFFFFF</code> 就是一次 OOM 攻击。抛 <code>ScanException</code> 后上层 <code>ReceiveData</code> 会 <code>Log.Warning</code> + <code>Dispose()</code> —— <b>降级为断开连接，而不是崩进程</b>。这是网络代码处理恶意输入的标准姿势。</li>
+<li><b>按最终总长一次性租 stream。</b><code>OuterPacketHeadLength + MessagePacketLength</code> 让 stream 一次分配到位，后续写包体不再扩容。包头也一并写入，是为了下游反序列化时能拿到完整原始字节。</li>
+</ol>
+
+<h4>攒包体</h4>
+
+<pre><code><span class="kw">var</span> outerPacketBodyLength = MessagePacketLength - MessageBodyOffset;
+<span class="kw">var</span> copyBodyLength = <span class="type">Math</span>.<span class="type">Min</span>(bufferLength, outerPacketBodyLength);   <span class="cmt">// 同样的 Min</span>
+
+PackInfo.MemoryStream.<span class="type">Write</span>(readOnlySpan.<span class="type">Slice</span>(Offset, copyBodyLength));
+Offset            += copyBodyLength;
+MessageBodyOffset += copyBodyLength;
+
+<span class="kw">if</span> (MessageBodyOffset == MessagePacketLength)
+{
+    packInfo          = PackInfo;    <span class="cmt">// 交付</span>
+    PackInfo          = <span class="kw">null</span>;
+    IsUnPackHead      = <span class="kw">true</span>;      <span class="cmt">// 重置，准备下一个包</span>
+    MessageBodyOffset = <span class="num">0</span>;
+    <span class="kw">return true</span>;
+}
+
+Offset = <span class="num">0</span>;
+<span class="kw">return false</span>;</code></pre>
+
+<p>逻辑和攒包头对称。注意成功交付时把 <code>PackInfo</code> 置 null 再返回 —— 和第一篇 <code>SetResult</code> 里「先清字段再 Invoke」是同一条纪律：<b>所有权转移后立即断开自己的引用</b>。</p>
+
+<h4>那个 -1 的特例</h4>
+
+<pre><code><span class="kw">if</span> (MessagePacketLength == -<span class="num">1</span>)
+{
+    <span class="cmt">// protoBuf做了一个优化、就是当序列化的对象里的属性和字段都为默认值的时候</span>
+    <span class="cmt">// 就不会序列化任何东西。</span>
+    <span class="cmt">// 为了TCP的分包和粘包、需要判定下是当前包数据不完整还是本应该如此、</span>
+    <span class="cmt">// 所以用-1代表。</span>
+    packInfo     = PackInfo;
+    PackInfo     = <span class="kw">null</span>;
+    IsUnPackHead = <span class="kw">true</span>;
+    <span class="kw">return true</span>;   <span class="cmt">// 直接交付，不用等包体</span>
+}</code></pre>
+
+<p>这个特例很能说明「协议设计要留出不可能值」的价值。</p>
+
+<p>问题：Protobuf 序列化一个全默认值的消息，结果是<b>零字节</b>。于是包体长度 = 0。但在流式解析里，「长度 0」和「我还没读到长度」难以区分，容易走进等待更多数据的死路。</p>
+
+<p>解法：打包时把 0 改写成 -1（<code>packetBodyCount = -1</code>），解包时 -1 走单独分支立即交付。<b>-1 在「长度」这个语义下是不可能出现的合法值，所以可以安全地征用为哨兵。</b></p>
+
+<p>作者在注释里还留了一句「其实可以不用设置-1、解包的时候判断如果是0也可以、但我仔细想了下，还是用-1代表更加清晰」—— 这是可读性优先于最小改动的取舍，值得赞同：<code>-1</code> 一眼就知道是特殊标记，<code>0</code> 需要读者自己推断。</p>
+
+<h3>3.4 发流：单飞 + 队列</h3>
+
+<pre><code><span class="kw">public override void</span> <span class="type">Send</span>(...)
+{
+    _sendBuffers.<span class="type">Enqueue</span>(_packetParser.<span class="type">Pack</span>(...));   <span class="cmt">// 先打包入队</span>
+
+    <span class="kw">if</span> (!_isSending)
+    {
+        <span class="type">Send</span>();   <span class="cmt">// 没在发就启动</span>
+    }
+}</code></pre>
+
+<p><code>_isSending</code> 是「单飞标志」（single-flight）。TCP socket 上<b>不能并发发起多个 SendAsync</b> —— 会乱序或异常。所以模式固定为：入队 + 一个驱动者。</p>
+
+<pre><code><span class="kw">private void</span> <span class="type">Send</span>()
+{
+    <span class="kw">if</span> (_isSending || IsDisposed) <span class="kw">return</span>;
+    _isSending = <span class="kw">true</span>;
+
+    <span class="kw">while</span> (_sendBuffers.Count &gt; <span class="num">0</span>)
+    {
+        <span class="kw">var</span> buf = _sendBuffers.<span class="type">Dequeue</span>();
+        _sendArgs.UserToken = buf;             <span class="cmt">// 挂上，回调里要还池</span>
+        _sendArgs.<span class="type">SetBuffer</span>(...);
+
+        <span class="kw">if</span> (_socket.<span class="type">SendAsync</span>(_sendArgs))
+        {
+            <span class="kw">return</span>;   <span class="cmt">// 异步了，交给 OnSendCompleted 接着跑（注意 _isSending 仍为 true）</span>
+        }
+
+        <span class="type">ReturnMemoryStream</span>(buf);   <span class="cmt">// 同步完成，立刻还池，继续循环</span>
+    }
+
+    _isSending = <span class="kw">false</span>;   <span class="cmt">// 队列空了才放锁</span>
+}</code></pre>
+
+<p><b>这个方法有两个出口，含义完全不同</b>，是最容易读错的地方：</p>
+
+<table>
+<tr><th>出口</th><th>_isSending</th><th>谁接着跑</th></tr>
+<tr><td><code>return</code>（异步挂起）</td><td>保持 <code>true</code></td><td><code>OnSendCompleted</code> 回调</td></tr>
+<tr><td>循环结束</td><td>置 <code>false</code></td><td>没人，等下次 <code>Send()</code> 唤醒</td></tr>
+</table>
+
+<p>异步出口<b>故意不清标志</b> —— 发送仍在进行中，此时若有新 <code>Send()</code> 进来，只入队不启动，避免并发。接力棒在回调里：</p>
+
+<pre><code><span class="kw">private void</span> <span class="type">OnSendCompleted</span>(<span class="kw">object</span> sender, <span class="type">SocketAsyncEventArgs</span> args)
+{
+    <span class="kw">if</span> (args.SocketError != SocketError.Success || args.BytesTransferred == <span class="num">0</span>)
+    {
+        _isSending = <span class="kw">false</span>;
+        <span class="kw">return</span>;
+    }
+
+    <span class="kw">var</span> buf = (<span class="type">MemoryStreamBuffer</span>)args.UserToken;
+    Scene.ThreadSynchronizationContext.<span class="type">Post</span>(() =&gt;
+    {
+        <span class="type">ReturnMemoryStream</span>(buf);
+
+        <span class="kw">if</span> (_sendBuffers.Count &gt; <span class="num">0</span>)
+        {
+            <span class="type">Send</span>();          <span class="cmt">// 注意：此时 _isSending 还是 true</span>
+        }
+        <span class="kw">else</span>
+        {
+            _isSending = <span class="kw">false</span>;
+        }
+    });
+}</code></pre>
+
+<div class="warn">
+<b>这里有个矛盾，读的时候会卡住</b>
+回调里 <code>_isSending</code> 仍为 <code>true</code>，却调用了 <code>Send()</code>；而 <code>Send()</code> 开头写着 <code>if (_isSending) return;</code>。<b>看起来这次调用会被自己的守卫挡掉。</b><br><br>
+<span class="unverified">按代码字面推演，这条路径确实会直接 return，队列靠下一次 <code>Send(...)</code> 外部调用（此时 <code>_isSending</code> 已被某处置 false）来驱动。我没有实机验证这是否会造成发送延迟，但这是全文件我认为最可疑的一处。</span><br><br>
+把它当成一道题：读到这里时对照 KCP 分支的发送逻辑（第三篇），看看那边是怎么处理接力的。<b>读源码时遇到自己推不通的地方，标记出来比强行自洽更诚实。</b>
+</div>
+
+<h4>还池的条件</h4>
+
+<pre><code><span class="kw">private void</span> <span class="type">ReturnMemoryStream</span>(<span class="type">MemoryStreamBuffer</span> memoryStream)
+{
+    <span class="kw">if</span> (memoryStream.MemoryStreamBufferSource == MemoryStreamBufferSource.Pack)
+    {
+        MemoryStreamBufferPool.<span class="type">ReturnMemoryStream</span>(memoryStream);
+    }
+}</code></pre>
+
+<p><code>MemoryStreamBufferSource</code> 记录了这块内存<b>是谁创建的</b>。只有 <code>Pack</code>（本层为发送而打包）才归本层还池；如果是上层传进来的（转发场景），所有权不在这里，不能还。</p>
+
+<div class="tip">
+<b>这是解决「共享缓冲所有权」的轻量方案</b>
+不引入引用计数，只在对象上记一个来源标签，各层只回收自己创建的。适用于所有权清晰、层次不深的场景。比 <code>IMemoryOwner&lt;T&gt;</code> 简单，比裸 <code>byte[]</code> 安全。
+</div>
+
+<h2>四、TCP 分支的完整数据流</h2>
+
+<div class="flow"><b>发送</b>
+
+  业务 Send(message)
+      ↓
+  <b>Pack</b>  ─ 租 stream → Seek(20) → 序列化 → 回填包头(长度/opcode/rpcId)
+      ↓
+  _sendBuffers.Enqueue
+      ↓
+  socket.SendAsync  ── OS 负责可靠、有序、拥塞控制 ──→ 网络
+      ↓
+  OnSendCompleted → 还池
+
+<b>接收</b>
+
+  网络 ──→ socket.ReceiveAsync   <i>（字节流，边界已丢失）</i>
+      ↓
+  Pipe.Writer.Advance + FlushAsync        <s>背压在此生效</s>
+      ↓
+  Pipe.Reader.ReadAsync
+      ↓
+  <b>UnPack</b> ─ 攒头(20B) → 校验长度 → 攒体 → 凑齐一个包
+      ↓                        <i>状态跨调用保留</i>
+  Session.Receive(packInfo)
+      ↓
+  NetworkMessageScheduler 分发到 Handler
+</div>
+
+<h2>五、阅读清单</h2>
+
+<p>按顺序勾掉，行数为实测值。</p>
+
+<ul class="checklist">
+<li><span class="n">1</span><span>Protocol/Interface/INetworkChannel.cs —— 最小契约</span><span class="ln">13 行</span></li>
+<li><span class="n">2</span><span>Protocol/Interface/ANetwork.cs —— 共享设施与对象池</span><span class="ln">149 行</span></li>
+<li><span class="n">3</span><span>Protocol/Interface/AClientNetwork.cs —— 客户端形态</span><span class="ln">37 行</span></li>
+<li><span class="n">4</span><span>Protocol/Interface/ANetworkServerChannel.cs —— 对照服务端形态</span><span class="ln">55 行</span></li>
+<li><span class="n">5</span><span>Message/PacketParser/Packet.cs —— 包头布局，必读</span><span class="ln">45 行</span></li>
+<li><span class="n">6</span><span>Message/PacketParser/Handler/ReadOnlyMemoryPacketParser.cs —— 分包粘包状态机，精读 Outer 那半</span><span class="ln">374 行</span></li>
+<li><span class="n">7</span><span>Protocol/TCP/Client/TCPClientNetwork.cs —— 按四条流读，不按行号</span><span class="ln">427 行</span></li>
+<li><span class="n">8</span><span>Protocol/TCP/Server/TCPServerNetwork.cs —— 只看 Accept 循环</span><span class="ln">172 行</span></li>
+<li><span class="n">9</span><span>Protocol/TCP/Server/TCPServerNetworkChannel.cs —— 与客户端对称，可速览</span><span class="ln">297 行</span></li>
+</ul>
+
+<div class="note">
+<b>命名空间提示</b>
+TCP 实现在 <code>Fantasy.Network.TCP</code>，接口在 <code>Fantasy.Network.Interface</code>，解析器在 <code>Fantasy.PacketParser</code>。<br>
+整个 TCP/KCP 分支被 <code>#if !FANTASY_WEBGL</code> 包着 —— WebGL 平台只有 WebSocket。你项目若要出 WebGL 包，网络层会自动换成 <code>WebSocketClientNetwork</code>，包头协议不变（见 <code>OuterWebglBufferPacketParser</code>）。
+</div>
+
+<h2>六、读完后自测</h2>
+
+<div class="q"><b>Q1</b> TCP 保证了可靠有序，为什么还需要 374 行的 <code>ReadOnlyMemoryPacketParser</code>？它解决的是 TCP 的哪个「不保证」？</div>
+<div class="q"><b>Q2</b> 包头里那个 <code>-1</code> 是为什么存在的？如果改成用 <code>0</code> 表示，需要在解包侧多做什么判断？</div>
+<div class="q"><b>Q3</b> <code>AdvanceTo(consumed, examined)</code> 两个参数如果都传 <code>buffer.Start</code>，会发生什么？</div>
+<div class="q"><b>Q4</b> <code>_connectDisconnectEvent</code> 这个 bool 解决了什么语义冲突？如果去掉它，业务层会收到什么错误的通知？</div>
+<div class="q"><b>Q5</b> <code>Send()</code> 有两个出口，为什么异步那个出口<b>不</b>把 <code>_isSending</code> 置回 false？</div>
+<div class="q"><b>Q6</b> 长度校验为什么必须放在 <code>RentMemoryStream</code> 之前？攻击者能构造出什么后果？</div>
+<div class="q"><b>Q7</b> 为什么一个 <code>TCPClientNetwork</code> 实例只能 <code>Connect</code> 一次？列出至少两个「重置比重建更容易出错」的内部状态。</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>TCPClientNetwork.cs</code>（427 行）全文、<code>ReadOnlyMemoryPacketParser.cs</code>（374 行）全文、<code>Packet.cs</code>、<code>ANetwork.cs</code>、<code>AClientNetwork.cs</code>、<code>INetworkChannel.cs</code>、<code>NetworkProtocolFactory.cs</code>，以及 <code>GameClient.cs:57</code> 的协议选择。</p>
+<p><span class="unverified">⚠ 未核实</span>：<code>TCPServerNetwork.cs</code> / <code>TCPServerNetworkChannel.cs</code> 未逐行读取，清单中的定位仅供参考；<code>Send()</code> / <code>OnSendCompleted</code> 的 <code>_isSending</code> 接力问题为静态推演，未实机验证。</p>
+<p>下一篇：<a href="网络层二-UDP讲解.html" style="color:var(--accent)">网络层（二）UDP —— 拿掉保证之后</a></p>
+<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+</footer>
+
+</div>
+</body>
+</html>

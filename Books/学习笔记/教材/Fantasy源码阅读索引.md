@@ -20,11 +20,11 @@
 
 ### 配套讲解文档
 
-- [阶段一：FTask](src/FTask阶段一讲解.html)
-- [网络层（一）TCP —— 字节流与分包粘包](src/网络层一-TCP讲解.html)
-- [网络层（二）UDP —— 拿掉保证之后](src/网络层二-UDP讲解.html)
-- [网络层（三）KCP —— 把保证造回来](src/网络层三-KCP讲解.html)
-- [网络层 · Channel 与 Session 的区别](src/网络层-Channel与Session.html)
+- [阶段一：FTask](FTask阶段一讲解.html)
+- [网络层（一）TCP —— 字节流与分包粘包](网络层一-TCP讲解.html)
+- [网络层（二）UDP —— 拿掉保证之后](网络层二-UDP讲解.html)
+- [网络层（三）KCP —— 把保证造回来](网络层三-KCP讲解.html)
+- [网络层 · Channel 与 Session 的区别](网络层-Channel与Session.html)
 
 网络层三篇按理解成本排序，不按项目实际使用排序。项目走 KCP，但先读 TCP 才能把「框架逻辑」和「协议逻辑」分开。
 
