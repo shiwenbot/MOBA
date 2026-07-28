@@ -666,6 +666,218 @@ pipeReader.<span class="type">CompleteAsync</span>()                  <span clas
   </details>
 </section>
 
+<section id="unpack-state-machine">
+  <h2>3.3 UnPack 状态机到底怎么把字节切成消息？3.2 里的 UnPack 是什么</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Message/PacketParser/Packet.cs</code>、<code>Message/PacketParser/Handler/ReadOnlyMemoryPacketParser.cs:210-306</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>一句话：UnPack 是「按包头规则把字节流切成一条条完整消息」的状态机</li>
+    <li>核心结构：每条消息 = 20 字节包头 + N 字节包体，包头里有「包体多长」</li>
+    <li>鸡生蛋：想知道包多长得先读包头，但读完整个 20 字节包头才知道 → 分两阶段「攒头 → 攒体」</li>
+    <li><b>状态机有记忆</b>：跨 UnPack 调用保留进度，半包下次接着攒</li>
+    <li><code>Math.Min</code> 是灵魂：「需要 20 字节现有 7 字节就拿 7 字节」，不假设一次到位</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    UnPack 内部用一个布尔标志 <code>IsUnPackHead</code> 记住「现在在攒包头还是攒包体」。流程是：攒齐 20 字节包头 →
+    从包头读出「包体多长」→ 切到攒包体 → 攒够那么多字节 → 交付一条完整消息 → 切回攒包头。<b>整个状态机的关键是「跨调用保留状态」</b>——
+    一次调用可能只读到半个包头，解析器记下进度返回 false，下次调用接着上次的位置继续攒。这就是流式解析的本质：
+    不假设「一次读到一条完整消息」，而是「来多少攒多少，攒齐才交付」。
+  </p>
+
+  <h3>证据 1 —— 一条消息长什么样（Packet.cs）</h3>
+  <p class="code-caption">20 字节包头 + 包体，外网/内网包头结构相同但 address 语义不同</p>
+  <pre><code><span class="cmt">// Packet.cs —— 包头各字段长度</span>
+<span class="kw">public const int</span> PacketLength        = <span class="kw">sizeof</span>(<span class="kw">int</span>);    <span class="cmt">// 4  消息体长度</span>
+<span class="kw">public const int</span> ProtocolCodeLength  = <span class="kw">sizeof</span>(<span class="kw">uint</span>);   <span class="cmt">// 4  协议号</span>
+<span class="kw">public const int</span> RpcIdLength         = <span class="kw">sizeof</span>(<span class="kw">uint</span>);   <span class="cmt">// 4  RPC 序号</span>
+<span class="kw">public const int</span> PacketAddressLength = <span class="kw">sizeof</span>(<span class="kw">long</span>);   <span class="cmt">// 8  路由地址</span>
+
+<span class="cmt">// 外网/内网包头都 = 4+4+4+8 = 20 字节</span>
+<span class="kw">public const int</span> OuterPacketHeadLength = PacketLength + ProtocolCodeLength + RpcIdLength + PacketAddressLength;</code></pre>
+  <pre><code><span class="cmt">20 字节包头布局</span>
+  偏移  0        4              8          12                  20
+        ├────────┼──────────────┼──────────┼───────────────────┤
+        │ <b>长度</b>   │ <b>ProtocolCode</b> │ <b>RpcId</b>    │ <b>Address</b>           │  消息体…
+        │ int32  │ uint32       │ uint32   │ int64             │
+        ├────────┴──────────────┴──────────┴───────────────────┤
+        │        <i>「长度」= 消息体字节数，不含这 20 字节</i>          │</code></pre>
+  <p><small>引用：<code>Packet.cs:11-43</code>。「长度前缀」是解决分包粘包三种通用方案（长度前缀/分隔符/定长）里唯一适合二进制协议的。</small></p>
+
+  <h3>证据 2 —— 状态机的记忆字段（ReadOnlyMemoryPacketParser.cs:22-29）</h3>
+  <pre><code><span class="kw">protected int</span>  Offset;               <span class="cmt">// 当前 buffer 的读取位置</span>
+<span class="kw">protected int</span>  MessageHeadOffset;    <span class="cmt">// 包头已攒了几个字节（0~20）</span>
+<span class="kw">protected int</span>  MessageBodyOffset;    <span class="cmt">// 包体已攒了几个字节</span>
+<span class="kw">protected int</span>  MessagePacketLength;  <span class="cmt">// 从包头解出的包体总长</span>
+<span class="kw">protected bool</span> IsUnPackHead = <span class="kw">true</span>;  <span class="cmt">// 当前在攒头还是攒体</span>
+<span class="kw">protected readonly byte</span>[] MessageHead = <span class="kw">new byte</span>[<span class="num">20</span>];  <span class="cmt">// 包头暂存区</span></code></pre>
+  <p><small>这些字段<b>跨 UnPack 调用存活</b>——这是整个设计的关键。上次只攒到半个包头，下次调用从 <code>MessageHead[已攒位数]</code> 接着拷。</small></p>
+
+  <h3>证据 3 —— 状态机流程图</h3>
+  <pre><code>                    ┌── false（没攒齐）──┐
+                    ↓                    │
+              [IsUnPackHead=true]        │
+              攒包头 20 字节              │
+                    │                    │
+                攒齐了？                  │
+                    │                    │
+              ┌──true──┐                 │
+              ↓         ↓                │
+        读出长度字段   [IsUnPackHead=false]│
+        攒包体 N 字节                    │
+              │                          │
+        攒齐了？                          │
+              │                          │
+        ┌─true──┐                        │
+        ↓        ↓                       │
+     交付一条    └── false（没攒齐）──────┘
+     完整消息    回到等下次数据
+     切回攒包头</code></pre>
+
+  <h3>证据 4 —— 攒包头：Math.Min 那行是灵魂（:228-262）</h3>
+  <pre><code><span class="kw">if</span> (IsUnPackHead)
+{
+    <span class="kw">var</span> outerPacketHeadLength = Packet.OuterPacketHeadLength - MessageHeadOffset;  <span class="cmt">// 还差多少</span>
+    <span class="kw">var</span> copyLength = <span class="type">Math</span>.<span class="type">Min</span>(bufferLength, outerPacketHeadLength);          <span class="cmt">// ← 能拿多少拿多少</span>
+
+    readOnlySpan.<span class="type">Slice</span>(Offset, copyLength)
+                .<span class="type">CopyTo</span>(MessageHead.<span class="type">AsSpan</span>(MessageHeadOffset, copyLength));
+
+    Offset            += copyLength;
+    MessageHeadOffset += copyLength;     <span class="cmt">// 进度推进</span>
+
+    <span class="kw">if</span> (MessageHeadOffset == Packet.OuterPacketHeadLength)   <span class="cmt">// 攒齐了</span>
+    {
+        MessagePacketLength = <span class="type">Unsafe</span>.<span class="type">ReadUnaligned</span>&lt;<span class="kw">int</span>&gt;(<span class="kw">ref</span> messageRef);
+
+        <span class="kw">if</span> (MessagePacketLength &gt; ProgramDefine.MaxMessageSize)   <span class="cmt">// ← 安全边界！</span>
+        {
+            <span class="kw">throw new</span> <span class="type">ScanException</span>(...);   <span class="cmt">// 伪造的超大长度 → 上层断连</span>
+        }
+
+        PackInfo = <span class="type">OuterPackInfo</span>.<span class="type">Create</span>(Network);
+        <span class="cmt">// 按最终总长一次性租好 stream，后续写包体不再扩容</span>
+        <span class="kw">var</span> memoryStream = PackInfo.<span class="type">RentMemoryStream</span>(..., OuterPacketHeadLength + MessagePacketLength);
+        memoryStream.<span class="type">Write</span>(MessageHead);    <span class="cmt">// 包头也写进去</span>
+        IsUnPackHead = <span class="kw">false</span>;               <span class="cmt">// 切到攒包体</span>
+    }
+    <span class="kw">else</span>
+    {
+        Offset = <span class="num">0</span>;
+        <span class="kw">return false</span>;                    <span class="cmt">// 头没齐，下次继续</span>
+    }
+}</code></pre>
+  <p><small>引用：<code>ReadOnlyMemoryPacketParser.cs:228-268</code>。三个要点：<b>(1)</b> <code>Math.Min</code> = 「需要 20 字节现有 7 字节就拿 7 字节存着」，流式解析的正确姿势；<b>(2)</b> 长度校验<b>必须</b>在 <code>RentMemoryStream</code> 之前——<code>MessagePacketLength</code> 来自网络完全不可信，伪造的 <code>0x7FFFFFFF</code> 就是 OOM 攻击，抛 <code>ScanException</code> 后上层降级为断连而非崩进程；<b>(3)</b> 按总长一次性租 stream 避免后续写包体时扩容。</small></p>
+
+  <h3>证据 5 —— 攒包体：同样的 Math.Min 思路（:288-305）</h3>
+  <pre><code><span class="kw">var</span> outerPacketBodyLength = MessagePacketLength - MessageBodyOffset;   <span class="cmt">// 还差多少</span>
+<span class="kw">var</span> copyBodyLength = <span class="type">Math</span>.<span class="type">Min</span>(bufferLength, outerPacketBodyLength);  <span class="cmt">// 同样的 Min</span>
+
+PackInfo.MemoryStream.<span class="type">Write</span>(readOnlySpan.<span class="type">Slice</span>(Offset, copyBodyLength));
+Offset            += copyBodyLength;
+MessageBodyOffset += copyBodyLength;
+
+<span class="kw">if</span> (MessageBodyOffset == MessagePacketLength)   <span class="cmt">// 攒齐了</span>
+{
+    packInfo          = PackInfo;    <span class="cmt">// 交付</span>
+    PackInfo          = <span class="kw">null</span>;        <span class="cmt">// ← 先交付再清空自己的引用</span>
+    IsUnPackHead      = <span class="kw">true</span>;       <span class="cmt">// 切回攒包头</span>
+    MessageBodyOffset = <span class="num">0</span>;
+    <span class="kw">return true</span>;
+}
+
+Offset = <span class="num">0</span>;
+<span class="kw">return false</span>;</code></pre>
+  <p><small>逻辑和攒包头对称。交付时把 <code>PackInfo</code> 置 null 再返回——「所有权转移后立即断开自己的引用」，和 FTask 的 <code>SetResult</code>「先清字段再 Invoke」是同一条纪律。</small></p>
+
+  <h3>证据 6 —— -1 哨兵：处理「空包体」特例（:271-279）</h3>
+  <pre><code><span class="kw">if</span> (MessagePacketLength == -<span class="num">1</span>)
+{
+    <span class="cmt">// protoBuf做了一个优化、就是当序列化的对象里的属性和字段都为默认值的时候</span>
+    <span class="cmt">// 就不会序列化任何东西。为了TCP的分包和粘包、需要判定下是当前包数据不完整还是</span>
+    <span class="cmt">// 本应该如此、所以用-1代表。</span>
+    packInfo     = PackInfo;
+    PackInfo     = <span class="kw">null</span>;
+    IsUnPackHead = <span class="kw">true</span>;
+    <span class="kw">return true</span>;   <span class="cmt">// 直接交付，不用等包体</span>
+}</code></pre>
+  <p>Protobuf 序列化全默认值消息结果是<b>零字节</b>，包体长度=0。但流式解析里「长度 0」和「还没读到长度」难区分，容易走进等更多数据的死路。<b>解法：打包时把 0 改写成 -1，解包时 -1 走单独分支立即交付。</b> -1 在「长度」语义下是不可能出现的合法值，可安全征用为哨兵。作者注释：「其实可以不用 -1、判断 0 也可以，但我仔细想了下，还是用 -1 代表更加清晰」——<b>可读性优先于最小改动</b>的取舍。</p>
+
+  <h3>为什么外层用 while 循环调 UnPack</h3>
+  <p>回看 3.2 的 <code>ReceiveData</code>：</p>
+  <pre><code><span class="kw">while</span> (_packetParser.<span class="type">UnPack</span>(<span class="kw">ref</span> buffer, <span class="kw">out var</span> packInfo))   <span class="cmt">// ← while 不是 if</span>
+{
+    Session.<span class="type">Receive</span>(packInfo);
+}</code></pre>
+  <p><code>while</code> 是因为<b>一次读到的数据可能含多个完整包</b>（粘包）。比如读到 250 字节，里面有两条完整 50B 消息 + 一条半 150B 消息。<code>while</code> 让它把能切的全切出来，直到切不动（返回 false 表示剩下的零头凑不齐）。所以 <code>UnPack</code> 返回值的含义是「<b>这次有没有切出一条完整消息</b>」，不是「有没有数据」。</p>
+
+  <h3>三种粘包场景全演一遍</h3>
+  <table>
+    <tr><th>场景</th><th>UnPack 怎么应对</th></tr>
+    <tr>
+      <td>一次读到 250B = 两条 50B 完整 + 半条 150B</td>
+      <td>第 1 次切出第一条 → 第 2 次切出第二条 → 第 3 次攒到 BodyOffset=130 返回 false，<b>记住已攒到哪</b>，下次接着凑那 20B</td>
+    </tr>
+    <tr>
+      <td>一次只读到 7B（包头都没齐）</td>
+      <td>往 <code>MessageHead</code> 拷 7B，<code>MessageHeadOffset=7</code>，返回 false；下次数据来了从 <code>MessageHead[7]</code> 接着拷</td>
+    </tr>
+    <tr>
+      <td>读到 0B</td>
+      <td><code>bufferLength == 0</code> 直接 <code>return false</code>（:218），不动状态</td>
+    </tr>
+  </table>
+
+  <h3>3.3 在整个收数据流程里的位置</h3>
+  <pre><code>3.1 连接流      管子接上
+     ↓
+3.2 收流解流    收字节 → Pipe → 切消息循环（流程框架）
+     │
+     │ 切消息循环里调的 UnPack 是什么？
+     ↓
+3.3 分包粘包    UnPack 状态机的切包规则（本节）  ← 你在这里
+     │
+     │ UnPack 交付的 packInfo 去哪？
+     ↓
+   Session.Receive → NetworkMessageScheduler → 业务 Handler</code></pre>
+  <p><b>3.2 是流程骨架，3.3 是骨架里那台「切包机器」的工作原理。</b></p>
+
+  <div class="callout tip">
+    <span class="callout-title">这条流最值钱的三个点</span>
+    <b>(1) 状态机有记忆</b>——跨调用保留进度，半包下次接着攒，这是流式解析的本质。<br>
+    <b>(2) Math.Min 那行是灵魂</b>——「需要 20 字节现有 7 字节就拿 7 字节」，不做任何一次到位的假设。<br>
+    <b>(3) 长度校验必须在分配内存之前</b>——<code>MessagePacketLength</code> 不可信，伪造的超大值就是 OOM 攻击，降级为断连而非崩进程。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">-1 哨兵的协议设计巧思</span>
+    在「长度」语义下征用一个不可能值当特殊标记——这是协议设计的通用手法。类似地，UTF-8 用字节高位标记、TCP 用 SYN/FIN 标志位。
+    作者特意选 <code>-1</code> 而非 <code>0</code>，理由是「-1 一眼就知道是特殊标记，0 需要读者自己推断」。这是<b>可读性优先于最小改动</b>的取舍，值得赞同。
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么 UnPack 要有记忆（跨调用保留状态）？</summary>
+    <p>因为 TCP 是字节流，一次读到的数据<b>几乎从不刚好是一条完整消息</b>——可能是半个包头、包头+半个包体、几条完整消息+一个零头。如果 UnPack 没记忆，每次调用都从头开始，那半个包头就永远凑不齐。<b>有记忆</b>意味着上次攒到哪，下次从那接着攒。比如攒到 <code>MessageHeadOffset=7</code> 返回了，下次调用从 <code>MessageHead[7]</code> 接着拷。这是流式解析和「一次一条」解析的本质区别。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：长度校验为什么必须放在 RentMemoryStream 之前？</summary>
+    <p>因为 <code>MessagePacketLength</code> 来自网络，是<b>完全不可信</b>的。攻击者可以伪造一个 <code>0x7FFFFFFF</code>（约 2GB）。如果不校验就拿去 <code>RentMemoryStream</code>，会尝试分配 2GB 内存——一次就是 OOM 攻击，能把进程撑爆。Fantasy 的做法：校验 <code>&gt; MaxMessageSize</code> 就抛 <code>ScanException</code>，上层 <code>ReceiveData</code> catch 到后 <code>Log.Warning + Dispose()</code>——<b>降级为断开这条连接，而不是让整个进程崩溃</b>。这是网络代码处理恶意输入的标准姿势。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：-1 这个特殊值解决了什么问题？为什么不用 0？</summary>
+    <p>Protobuf 序列化一个全默认值的消息，结果是<b>零字节</b>，于是包体长度=0。但流式解析里，「长度 0」和「我还没读到长度」难以区分——解析器可能误以为「还没读到」而干等更多数据，走进死路。解法：打包时把 0 改写成 -1，解包时 -1 走单独分支立即交付。<code>-1</code> 在「长度」语义下是不可能出现的合法值，可安全征用为哨兵。不用 0 的理由是可读性：<code>-1</code> 一眼就是特殊标记，<code>0</code> 需要读者自己推断「为什么是 0」。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：UnPack 的返回值 true/false 分别代表什么？为什么外层用 while？</summary>
+    <p><code>true</code> = 这次切出了一条完整消息（<code>packInfo</code> 有效）；<code>false</code> = 凑不齐（或没数据了），剩下零头留着下次。外层用 <code>while</code> 而非 <code>if</code>，是因为<b>一次读到的数据可能含多个完整包</b>（粘包）——比如 250 字节里有两条 50B 消息 + 一条半。<code>while</code> 让它把能切的全切出来，直到返回 false（剩下的零头凑不齐）。所以返回值含义是「这次有没有切出一条」，不是「有没有数据」。</p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
