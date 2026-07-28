@@ -218,6 +218,83 @@ done:
   </div>
 </section>
 
+<section id="coroutine-fire-and-forget">
+  <h2>FTask.Coroutine() 到底是干什么的？为什么要包一层 async FVoid InnerCoroutine？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/FTask/Task/FTask.cs:42-52</code>、<code>FTask.Tools.cs:319-336</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>fire-and-forget：启动 task 但不等它</li>
+    <li>为什么不直接 <code>SomeTask()</code> 不管它 —— async 方法的状态机会停在第一个 await</li>
+    <li>FVoid 是自驱动载体（IsCompleted 恒 true）</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>Coroutine()</code> 是 FTask 的 <b>fire-and-forget 入口</b>——让 task 在后台自驱跑完，调用方不用 await 它。
+    为什么不能直接 <code>SomeTask();</code> 不管？因为 <code>async FTask</code> 方法你不 await 它，
+    它的编译器状态机会在第一个 <code>await</code> 处挂起后停在那，<b>没人驱动它继续</b>。
+    <code>Coroutine()</code> 的作用就是包一层"自驱动的壳"把这个 task 跑完。
+  </p>
+  <p>
+    这层壳的实现很巧：用 <code>private async FVoid InnerCoroutine() { await this; }</code>。
+    关键在<b>壳是 FVoid 不是 FTask</b>——FVoid 的 Builder（AsyncFVoidMethodBuilder）在 <code>Start()</code> 时
+    同步调一次 <code>MoveNext</code>，能自己跑起来，不需要外部 await 驱动。所以包在 FVoid 里的 <code>await this</code>
+    能自己等 task 完成后收尾，调用方完全不用管。
+  </p>
+
+  <h3>证据 —— Coroutine 的三层实现</h3>
+  <p class="code-caption">FTask.cs:42-52 —— Coroutine 包了一层 async FVoid 当自驱动壳</p>
+  <pre><code><span class="kw">private async</span> <span class="type">FVoid</span> <span class="type">InnerCoroutine</span>()
+{
+    <span class="kw">await this</span>;                          <span class="cmt">// 在 FVoid 壳里等当前 FTask 完成</span>
+}
+
+<span class="kw">public void</span> <span class="type">Coroutine</span>()
+{
+    <span class="type">InnerCoroutine</span>().<span class="type">Coroutine</span>();           <span class="cmt">// 启动这个 FVoid（FVoid.Coroutine 是空方法，仅占位）</span>
+}</code></pre>
+  <p><small>引用：<code>FTask.cs:42-52</code>（FTask&lt;T&gt; 版本在 <code>FTask.cs:160-172</code>，结构相同）。FVoid.Coroutine 是空实现：<code>FVoid.cs:20</code>。</small></p>
+
+  <h3>真实用法 —— WaitAll 并行点火</h3>
+  <p class="code-caption">FTask.Tools.cs:319-336 —— 没有 Coroutine() 写不出"并行启动、汇总等待"</p>
+  <pre><code><span class="kw">var</span> sTaskCompletionSource = <span class="type">Create</span>();         <span class="cmt">// 只等这一个汇总点</span>
+
+<span class="kw">foreach</span> (<span class="kw">var</span> task <span class="kw">in</span> tasks)
+{
+    <span class="type">RunSTask</span>(task).<span class="type">Coroutine</span>();               <span class="cmt">// ← 每个 task 后台自驱跑</span>
+}
+
+<span class="kw">await</span> sTaskCompletionSource;                  <span class="cmt">// 只等汇总，不串行等每个</span>
+
+<span class="kw">async</span> <span class="type">FVoid</span> <span class="type">RunSTask</span>(<span class="type">FTask</span> task)
+{
+    <span class="kw">await</span> task;
+    count--;
+    <span class="kw">if</span> (count <= <span class="num">0</span>) sTaskCompletionSource.<span class="type">SetResult</span>();
+}</code></pre>
+
+  <h3>跨框架对照</h3>
+  <table>
+    <tr><th>概念</th><th>FTask</th><th>UniTask</th></tr>
+    <tr><td>fire-and-forget 入口</td><td><code>task.Coroutine()</code></td><td><code>UniTaskVoid.Forget()</code> / <code>UniTask.Void()</code></td></tr>
+    <tr><td>自驱动载体</td><td><code>FVoid</code></td><td><code>UniTaskVoid</code></td></tr>
+    <tr><td>忘记调的后果</td><td>异步逻辑不执行（无警告）</td><td>编译器警告 CS4014</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-title">何时用 await vs Coroutine()</span>
+    需要结果 / 必须等完成才能继续 → <code>await</code>。不在乎何时完成、点火就不管 → <code>Coroutine()</code>。
+    典型场景：后台日志/埋点、并行加载（配 WaitAll）、触发特效后立刻返回、心跳定时清理。
+    <code>GameClient</code> 里没用 Coroutine()，因为网络连接必须等结果（<code>return await m_connectTask</code>）。
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">FVoid 才是自驱动的关键</span>
+    Coroutine() 能成立，<b>完全依赖壳是 async FVoid 而不是 async FTask</b>。FVoid 的 AsyncFVoidMethodBuilder 在 Start 时同步调 MoveNext、永不挂起，所以不需要外部驱动。如果壳写成 async FTask，不 await 它就又回到"状态机停在第一个 await"的死循环。这也是 Fantasy 为何要单独造 FVoid——它是 fire-and-forget 的零开销载体。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
