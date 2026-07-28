@@ -443,7 +443,7 @@ Linux 没有这个行为（除非 socket 做了 connect）。这是最典型的�
 <p><span class="verified">✓ 已核实</span>：<code>KcpHeader.cs</code> 全文、<code>KCPClientNetwork.cs</code>（745 行）全文、<code>BufferPacketParser.cs</code>（389 行）全文、<code>KCPServerNetworkByPipe.cs</code> 的 <code>ReceiveData</code> 段与 <code>KcpHeader</code> 使用点、<code>TCPClientNetwork.cs:201</code> 的 Unity 注释。</p>
 <p><span class="unverified">⚠ 未核实</span>：<code>SetSioUdpConnReset()</code> / <code>SetSocketBufferToOsLimit()</code> 扩展方法的实现未读取，文中对其作用的说明基于方法名与 Windows <code>SIO_UDP_CONNRESET</code> 的通行含义；「非 Unity 平台不需要 Drain」的原因为推断；<code>_messageCache</code> 无上限的实际影响未压测。</p>
 <p>上一篇：<a href="网络层一-TCP讲解.html" style="color:var(--accent)">网络层（一）TCP</a>　下一篇：<a href="网络层三-KCP讲解.html" style="color:var(--accent)">网络层（三）KCP —— 把保证造回来</a></p>
-<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+<p>配套索引：<code>Fantasy源码阅读索引.md</code></p>
 </footer>
 
 </div>

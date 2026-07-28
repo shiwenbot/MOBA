@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络层 · Channel 与 Session 的区别 · 学习笔记</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/toc.js" defer></script>
+</head>
+<body>
+<main>
+<a class="back-home" href="../index.html">← 回到索引</a>
+<h1>网络层 · Channel 与 Session 的区别</h1>
+<p class="meta">
+  来源：<a href="../教材/网络层一-TCP讲解.html" target="_blank">网络层一-TCP讲解.html</a> ／
+  命名空间：<code>Fantasy.Network</code> ／ 状态：✓ 完成
+</p>
+
+<!-- 问答回答从这里往下追加，最新的在最下方 -->
+
+<section id="channel-vs-session">
+  <h2>读 INetworkChannel 时卡住：接口里有 Session，Session 里又有 Channel，这俩到底什么关系？是同一个东西的两个名字吗？</h2>
+  <p class="meta">2026-07-28 · 相关：<code>Fantasy.Unity/Runtime/Core/Network/Session/Session.cs</code>、<code>Protocol/Interface/INetworkChannel.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>一句话：<code>Channel</code> 管物理连接（怎么发字节），<code>Session</code> 管逻辑会话（发什么、谁接收、RPC 配对）</li>
+    <li>这是「传输 vs 业务」的经典分层，不是同一物的两个名字</li>
+    <li>互相持有 ≠ 同级：Session 持有 Channel 是 internal，Channel 反向持有 Session 是 public</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>Channel 是传输层抽象，Session 是业务会话层。</b>Channel 只懂「发字节」——
+    它的 <code>Send</code> 签名 <code>Send(uint rpcId, long address, MemoryStreamBuffer, IMessage, Type)</code>
+    全是为打包服务的参数，没有任何业务语义，它不知道这条消息是什么、谁该处理。
+    Session 才懂「消息分发」和「RPC」：<code>Session.Receive</code> 交给调度器分发，
+    <code>Session.Call&lt;T&gt;</code> 用 <code>_rpcId</code> + <code>RequestCallback</code> 实现「请求-响应配对」——
+    这层逻辑 Channel 完全不参与。
+  </p>
+  <p>
+    分两层的真正理由是<b>底下会换</b>：同一个 Session，今天挂 <code>TCPClientNetwork</code>，
+    明天换 <code>KCPClientNetwork</code>，后天出 WebGL 换 <code>WebSocketClientNetwork</code>——
+    Session 一行代码都不用改。<b>Channel 是可替换的传输插件，Session 是不动的业务外壳。</b>
+  </p>
+
+  <h3>证据 —— 两者职责的对照</h3>
+  <table>
+    <tr><th>维度</th><th><b>Channel</b>（<code>INetworkChannel</code>）</th><th><b>Session</b>（<code>Session</code>）</th></tr>
+    <tr><td><b>是什么</b></td><td>传输抽象（13 行最小契约）</td><td>逻辑会话（继承 <code>Entity</code>）</td></tr>
+    <tr><td><b>对外方法</b></td><td>只有 <code>Send</code> + <code>Dispose</code></td><td><code>Send</code> / <code>Call</code>（RPC）/ <code>Receive</code> / <code>Dispose</code></td></tr>
+    <tr><td><b>协议痕迹</b></td><td>实现里有 socket、Pipe、SAEA（TCP 版 427 行）</td><td><b>完全没有协议痕迹</b>，底下换 TCP/KCP/WS 它都不动</td></tr>
+    <tr><td><b>谁持有谁</b></td><td>反向持有 <code>Session</code> 属性（public）</td><td>持有 <code>Channel</code>（<code>internal</code>，外部碰不到）</td></tr>
+  </table>
+
+  <h3>证据 —— 数据流向上各自的活</h3>
+  <p class="code-caption">接收方向：Channel 交付字节，Session 负责分发</p>
+  <pre><code><span class="cmt">// Channel 这边：UnPack 凿出完整包，交付出去</span>
+UnPack 凿出完整包 → <span class="type">Session</span>.<span class="type">Receive</span>(packInfo)
+                        ↓
+                      <span class="cmt">// Session 这边：更新心跳 + 交给调度器分发</span>
+                      NetworkMessageScheduler.<span class="type">Scheduler</span>(<span class="kw">this</span>, packInfo) → Handler
+
+<span class="cmt">// 发送方向：Session 配 rpcId，Channel 负责发字节</span>
+session.<span class="type">Call</span>&lt;T&gt;(request)  <span class="cmt">// Session 用 _rpcId + RequestCallback 配对 RPC</span>
+      → channel.<span class="type">Send</span>(rpcId, address, ...)  <span class="cmt">// Channel 只管把字节发出去</span></code></pre>
+  <p><small>引用：<code>Session.cs:42</code>（<code>Channel</code> 属性，internal）、<code>:210</code>（<code>Call</code> RPC）、<code>:224</code>（<code>Receive</code>）；<code>INetworkChannel.cs</code>（13 行全文，<code>Session</code> 属性 public）。</small></p>
+
+  <h3>对比表 —— 客户端的「一人分饰两角」</h3>
+  <table>
+    <tr><th>形态</th><th>客户端</th><th>服务端</th></tr>
+    <tr><td>Channel 实现</td><td>Network 类<b>自己就是</b> Channel（<code>TCPClientNetwork : AClientNetwork, INetworkChannel</code>）</td><td>Network 和 Channel 分开（1 个 Network 管 N 个 Channel）</td></tr>
+    <tr><td>原因</td><td>客户端只有一条连接，没必要再分层</td><td>服务端要管多条连接，必须分层</td></tr>
+    <tr><td>Session</td><td colspan="2"><b>始终独立</b>——不管 Channel 是独立的还是合体的，Session 都是外面那层业务壳</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-title">可迁移的类比</span>
+    「Channel vs Session」和这些是同一类思路：<br>
+    • <code>HttpClient</code>（传输） vs <code>HttpRequest</code>（语义）<br>
+    • TCP 里 <code>socket</code>（传输） vs <code>connection</code>（会话）<br>
+    • 数据库 <code>DbConnection</code>（传输） vs <code>DbTransaction</code>（会话）
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-title">可见性不对称不是偶然</span>
+    <code>Session.Channel</code> 是 <code>internal</code>（外部碰不到），<code>INetworkChannel.Session</code> 是 public。
+    这个不对称说明：<b>业务代码应该只通过 Session 交互</b>，Channel 是框架内部细节，不该被业务直接操作。
+    如果你发现业务代码在想办法拿 Channel，多半是分层用错了。
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么 INetworkChannel 和 Session 要互相持有？</summary>
+    <p>接收方向需要 Channel → Session（Channel 收到字节后要回调 Session.Receive 分发）；发送方向需要 Session → Channel（Session.Send 要转调 Channel.Send 发字节）。去掉任一方向，数据流就断了。互相持有是因为<b>数据是双向流动的</b>。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：新增一个 QUIC 传输层，需要改 Session 类吗？</summary>
+    <p>不需要。只需新增 <code>QUICClientNetwork : AClientNetwork, INetworkChannel</code> 实现传输细节，Session 一行不改。<b>这正是分层抽象的价值——传输层是可插拔的。</b>需要改的只有协议选择处（如 <code>GameClient.cs</code> 里写死 <code>NetworkProtocolType</code> 的地方）。</p>
+  </details>
+</section>
+
+</main>
+</body>
+</html>

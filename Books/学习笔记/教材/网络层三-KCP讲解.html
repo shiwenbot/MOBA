@@ -880,7 +880,7 @@ Netty 的 <code>ByteBuf</code> 有 writerIndex 前的预留区，Linux 的 skb �
 <p><span class="verified">✓ 已核实</span>：<code>KCPClientNetwork.cs</code>（745 行）全文、<code>Base/Kcp.cs</code>（451 行）全文、<code>Base/include/kcp.cs</code>（127 行）全文、<code>KCPSettings.cs</code>（91 行）全文；<code>c/kcp.cs</code> 的 <code>ikcp_recv</code> / <code>ikcp_peeksize</code> / <code>ikcp_send</code> / <code>ikcp_update_ack</code> / <code>ikcp_parse_ack</code> / <code>ikcp_parse_una</code> / <code>ikcp_parse_fastack</code> / <code>ikcp_parse_data</code> / <code>ikcp_input</code> / <code>ikcp_encode_seg</code> / <code>ikcp_flush</code> / <code>ikcp_update</code> 及常量表。文中所有引用的代码片段与行号均来自实际读取。</p>
 <p><span class="unverified">⚠ 未核实</span>：<code>ikcp_check</code> 仅读到前段；<code>ikcp_create</code> / <code>ikcp_ack_push</code> / <code>ikcp_setmtu</code> 未读取；<code>_allowWraparound</code> 开关的必要性未推演完整；服务端两个实现（<code>ByArrayPool</code> / <code>ByPipe</code>）仅读取了 <code>ReceiveData</code> 与 <code>Update</code> 片段。「10%~20% 带宽换 30%~40% 延迟」引自 kcp 项目公开说明，非本仓库实测。</p>
 <p>上一篇：<a href="网络层二-UDP讲解.html" style="color:var(--accent)">网络层（二）UDP</a>　｜　<a href="网络层一-TCP讲解.html" style="color:var(--accent)">回到第一篇</a></p>
-<p>配套索引：<code>Books/4-Fantasy源码阅读索引.md</code></p>
+<p>配套索引：<code>Fantasy源码阅读索引.md</code></p>
 </footer>
 
 </div>
