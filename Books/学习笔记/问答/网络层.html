@@ -1124,6 +1124,153 @@ seg = 队首;
   </details>
 </section>
 
+<section id="kcp-receive-two-shelves">
+  <h2>接收侧的两个货架：ikcp_parse_data 和 ikcp_recv 到底在干嘛？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> 第三章 §3.1~3.4；<code>Base/c/kcp.cs:711-768</code>（parse_data）、<code>:337-446</code>（peeksize/recv）、<code>:773-924</code>（input）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>核心画面：<b>两个货架 + 一个卡口</b></li>
+    <li>暂存货架（rcv_buf）存乱序，成品货架（rcv_queue）存有序</li>
+    <li>卡口 <code>rcv_nxt</code>：编号连续就搬，一断档就停</li>
+    <li>ACK 怎么发：收货先记账，flush 时批量回；una 搭车免费送</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>一句话画面</b>：你（收货方）仓库里有两个货架——<b>暂存货架（rcv_buf）</b>放刚到的、可能乱序的货；<b>成品货架（rcv_queue）</b>放排好序、连续的货，可以直接交给老板（用户）。整个第三章就是讲"货怎么在这两个货架之间流动"。</p>
+
+  <blockquote><b>为什么不能合并成一个货架？</b>因为"收到了"和"能交付了"是两回事。8 收到了但 7 没到，8 只能蹲在暂存货架等着——不能直接给老板（老板按顺序要的是 7，给他 8 他就懵了）。<b>用两个货架做缓冲，卡住断档点，这就是"有序交付"的实现本质。</b></blockquote>
+
+  <h4>先补：完整四个货架图（发送两个 + 接收两个）</h4>
+  <p>第一章讲了发送侧（snd_queue 待发无序号 → snd_buf 已发等 ACK），本章补全接收侧，凑成四货架。发送侧搬运是"按窗口搬"（受流量/拥塞限制），接收侧搬运是"按 sn 连续搬"（受序号连续限制）。<b>两个方向各有一个卡口，但卡的东西不同。</b></p>
+
+  <h4>3.1 ikcp_input：先拆大箱子 + 无条件处理搭车信息</h4>
+  <p>一个 UDP 包里可能塞了好几个货（第一章 <code>len</code> 字段的作用），用 <code>while(true)</code> 循环逐个拆出来。每个拆出来的货，<b>无条件</b>做三件事——抄窗口（wnd）、按 una 批量划清单（parse_una）、删完找起点（shrink_buf）。<b>这就是第一章"控制信息搭车"的兑现</b>：每个包都带 wnd 和 una，收到就处理，不浪费任何一次往返。</p>
+
+  <p>三步的零术语白话：</p>
+  <ul>
+    <li><b>① 抄窗口</b>：朋友说"我仓库还能放 X 箱"，我抄下来记成 <code>rmt_wnd</code>，控制自己发货速度（流量控制）</li>
+    <li><b>② 划清单</b>：朋友说"N 号之前我全收到了"，我翻"已发未确认"清单（snd_buf），把 <code>&lt; N</code> 的全划掉（一次一批）</li>
+    <li><b>③ 找起点</b>：划完一批，重新找清单里剩下最早的编号，记成 <code>snd_una</code>（删完后的收尾，给后面逻辑用）</li>
+  </ul>
+
+  <h4>★ ACK 怎么发：两种"告诉发货方收到货"的方式</h4>
+  <p>发货方要知道"哪些包裹到了"，收货方有两种反馈方式（这就是第一章 <code>sn + una</code> 组合拳的完整闭环）：</p>
+  <table>
+    <tr><th></th><th>小纸条（ACK 包）</th><th>顺带写一句（una，每个包裹免费带）</th></tr>
+    <tr><td>怎么送</td><td><b>专门</b>的回执包，每个货一张</td><td><b>搭车</b>，每个包裹标签上免费带</td></tr>
+    <tr><td>确认方式</td><td>一张纸条确认<b>一个</b>具体包</td><td>一句话确认<b>一大片</b>（连续的）</td></tr>
+    <tr><td>不可替代时</td><td><b>乱序/丢包时</b>：精确知道哪个到了</td><td><b>正常时</b>：批量划清单，省事</td></tr>
+    <tr><td>有成本吗</td><td>有（要占专门包的位置）</td><td>几乎没有（搭车）</td></tr>
+  </table>
+
+  <p><b>ACK 不是立刻发的，是"延迟 ACK"</b>：收货方收到一个 PUSH 货，不立刻回纸条，而是<b>先记到 acklist（记账本）</b>，等下次 flush（Fantasy 配置最多 5ms）把攒着的纸条<b>批量打包</b>寄出去。10 个货可能只需 1 个 UDP 包就把 10 张回执全带上，省运费。<b>但最终每个货都会有对应的一张纸条（1:1）</b>——这是精确重传能工作的前提。</p>
+
+  <p><b>关键：两种方式不矛盾，各干各的活</b>。<code>ikcp_parse_una</code> 按 una 批量划（连续确认），<code>ikcp_parse_ack</code> 按 sn 精确划单个（选择性确认）。<b>正因为小纸条有成本，平时靠搭车的 una 批量搞定；只有丢包时才靠小纸条精确定位。既省又准。</b></p>
+
+  <h4>3.3 ikcp_parse_data：货到了怎么放进暂存货架（本章核心）</h4>
+  <p>一个货到了，做三件事：</p>
+  <ol>
+    <li><b>该不该收？</b>太超前（超出窗口范围）或太落后（早就交过老板了）的，直接扔。</li>
+    <li><b>查重 + 按编号排好放进去</b>。放之前看一眼有没有同编号的：有就扔（重复）；没有就<b>从尾巴往前找位置插入</b>（大多数新货编号大，插尾巴 O(1) 命中，乱序才往前翻）。<b>这就是第一章 sn 字段"去重"能力的落地。</b></li>
+    <li><b>能不能搬到成品货架？</b>——这是重点中的重点，见下面的卡口规则。</li>
+  </ol>
+
+  <h4>★ 卡口规则：rcv_nxt（本章最重要的机制）</h4>
+  <p><code>rcv_nxt</code> = "我下一个期待的编号"。搬运规则：<b>只搬编号正好等于 rcv_nxt 的货，搬完 rcv_nxt++，继续看下一个；一遇到断档（编号 ≠ rcv_nxt）立刻停。</b></p>
+
+  <p><b>例子 B：7 缺了，全堵住</b>（rcv_nxt=7，暂存货架 <code>[8,9,10]</code>）：</p>
+  <ul>
+    <li>最前面是 8，<code>8 == rcv_nxt(7)</code>？<b>不等于！立刻停，一个都不搬</b></li>
+    <li>8/9/10 <b>全卡在暂存货架</b>，老板什么也拿不到</li>
+    <li><b>为什么停？</b>不能给老板 8——他按顺序要的是 7，给他 8 顺序就乱了</li>
+  </ul>
+
+  <p><b>例子 C：7 终于来了（重传到），一口气全涌过去</b>（7 插入后 <code>[7,8,9,10]</code>）：</p>
+  <ul>
+    <li>最前面 7，<code>7==7</code> ✓ → 搬，rcv_nxt=8</li>
+    <li>最前面 8，<code>8==8</code> ✓ → 搬，rcv_nxt=9</li>
+    <li>……一口气 7、8、9、10 全搬过去</li>
+  </ul>
+
+  <blockquote><b>洞察</b>：用 rcv_nxt 当卡口，断档处立刻停。<b>缺一个，后面全堵着；缺的一来，后面连续的全涌过去。</b>这个设计<b>天然处理了乱序和重传两种情况，不用任何特殊判断</b>——这就是"有序交付"的实现本质。</blockquote>
+
+  <p>搬运条件里还有 <code>nrcv_que &lt; rcv_wnd</code>（成品货架没满）：满了就不搬，让货积压在暂存货架，这个背压通过 wnd 字段告知对端慢点发——第一章 wnd 字段的闭环。</p>
+
+  <h4>3.4 ikcp_recv：老板取货做三件事</h4>
+  <ol>
+    <li><b>拼分片</b>：成品货架上是分片（第二章拆的箱），按 frg 顺序拼回完整的一件货。看到 <code>frg==0</code>（末片）就停——第二章倒序编号在这里兑现。一次 recv 拿到完整一条消息，不是半个。</li>
+    <li><b>再搬一批</b>：老板取走货腾出空位，原本因为"满了"卡在暂存货架的货现在可以搬过来了。主动维护，不等下次 input。</li>
+    <li><b>fast recover（小优化）</b>：之前成品货架满了报过 <code>wnd=0</code>，发货方停发了。现在老板取走货、腾出空间，要<b>赶紧</b>告诉发货方"我又能收了"——否则发货方最坏要傻等 <code>IKCP_PROBE_INIT=7000ms</code>（7 秒！）。这里立刻标记 <code>IKCP_ASK_TELL</code>，下次 flush 发 WINS 包主动告知新窗口，把 7 秒缩到 5ms。<b>这是第一章 cmd=84 WINS 字段的具体用法</b>。</li>
+  </ol>
+
+  <h3>证据</h3>
+  <p class="code-caption">ikcp_input 的 PUSH/ACK 分支 + 无条件三步（c/kcp.cs:809-870）</p>
+  <pre><code>kcp-&gt;rmt_wnd = wnd;              <span class="cmt">// ① 无论什么包，都更新对端窗口</span>
+<span class="type">ikcp_parse_una</span>(kcp, una);        <span class="cmt">// ② 累积确认，批量清 snd_buf</span>
+<span class="type">ikcp_shrink_buf</span>(kcp);            <span class="cmt">// ③ 重算 snd_una</span>
+
+<span class="kw">if</span> (cmd == IKCP_CMD_ACK) {
+    ...
+    <span class="type">ikcp_parse_ack</span>(kcp, sn);        <span class="cmt">// ← 收到 ACK 包：精确划掉单个</span>
+    <span class="type">ikcp_shrink_buf</span>(kcp);
+}
+<span class="kw">else if</span> (cmd == IKCP_CMD_PUSH) {
+    <span class="type">ikcp_ack_push</span>(kcp, sn, ts);     <span class="cmt">// ← 收到货：不立刻回，先记账（延迟 ACK）</span>
+    ...
+    <span class="type">ikcp_parse_data</span>(kcp, seg);      <span class="cmt">//   该收的货照样收</span>
+}</code></pre>
+
+  <p class="code-caption">ikcp_parse_data 的搬运循环：只搬连续的，断档就停（c/kcp.cs:755-768）</p>
+  <pre><code><span class="kw">while</span> (!<span class="type">iqueue_is_empty</span>(&amp;kcp-&gt;rcv_buf))
+{
+    seg = 队首;
+    <span class="kw">if</span> (seg-&gt;sn == kcp-&gt;rcv_nxt &amp;&amp; kcp-&gt;nrcv_que &lt; kcp-&gt;rcv_wnd)
+    {
+        <span class="type">iqueue_del</span>(&amp;seg-&gt;node);          kcp-&gt;nrcv_buf--;
+        <span class="type">iqueue_add_tail</span>(&amp;seg-&gt;node, &amp;kcp-&gt;rcv_queue);  kcp-&gt;nrcv_que++;
+        kcp-&gt;rcv_nxt++;                  <span class="cmt">// 期待值前进</span>
+    }
+    <span class="kw">else break</span>;                           <span class="cmt">// 断档了，停</span>
+}</code></pre>
+
+  <p class="code-caption">flush 时批量发 ACK（延迟 ACK 的发送端，c/kcp.cs:979-992）</p>
+  <pre><code><span class="cmt">// flush acknowledges</span>
+count = (<span class="kw">int</span>)kcp-&gt;ackcount;
+<span class="kw">for</span> (i = <span class="num">0</span>; i &lt; count; i++)
+{
+    <span class="type">ikcp_ack_get</span>(kcp, i, &amp;seg.sn, &amp;seg.ts);   <span class="cmt">// 从 acklist 取第 i 条</span>
+    ptr = <span class="type">ikcp_encode_seg</span>(ptr, &amp;seg);          <span class="cmt">// 编码成 ACK 包发出</span>
+}
+kcp-&gt;ackcount = <span class="num">0</span>;   <span class="cmt">// 清空 acklist</span></code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:155-313</code>（§3 全）；具体段落：四队列图 :159-175 / ikcp_input 拆包 :177-210 / parse_data 卡口 :234-282 / ikcp_recv :283-313</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">💡 这一章的全局逻辑链</span>
+    快递送来货（PUSH） → ikcp_input 拆大箱子 → 无条件处理搭车的 una/wnd → ikcp_parse_data 查重+按编号放进暂存货架+尝试按 rcv_nxt 连续搬到成品货架 → ikcp_recv 老板取货时拼分片+再搬一批+通知发货方。<b>整章就一个主题：货怎么在两个货架之间流动。</b>
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么需要两个货架（rcv_buf 和 rcv_queue）？合并成一个行不行？</summary>
+    <p>不行。"收到了"和"能交付了"是两回事。8 收到了但 7 没到，8 只能蹲在 rcv_buf 等着——不能直接给老板，老板按顺序要的是 7。<b>用两个货架做缓冲、卡住断档点，就是"有序交付"的本质。</b>合并成一个，就无法区分"已经到但还不能交"和"可以交"。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：rcv_nxt=7、暂存货架是 [8,9,10]，会发生什么？然后 7 来了又会怎样？</summary>
+    <p><b>7 缺时</b>：队首 8 ≠ rcv_nxt(7)，断档立刻停，8/9/10 全卡在暂存货架，老板拿不到任何东西。<b>7 来了</b>：插入后 [7,8,9,10]，队首 7==7 ✓ 搬过去 rcv_nxt=8，接着 8==8 ✓ 搬，9、10 同理——<b>一口气把堵着的 7,8,9,10 全涌到成品货架</b>。这就是"缺一个全堵，缺的一来全涌过去"。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：小纸条（ACK）和顺带写一句（una）有什么区别？为什么两种都需要？</summary>
+    <p><b>小纸条</b>：专门的回执包，一张确认一个具体包，有成本（占包位置）。<b>顺带写一句</b>：搭在每个包裹上免费带，一句确认一大片连续的。<b>正常时</b>靠搭车的 una 批量划清单（省事），<b>丢包时</b> una 卡住推不动，只能靠小纸条一个一个精确确认 8/9/10 到了、7 没到。<b>正因为小纸条有成本，平时才靠免费的 una；只有丢包才用小纸条精确补。</b>两者各干各的活，不矛盾。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么收到货不立刻回 ACK，要先记 acklist？</summary>
+    <p>因为 ACK 也要占带宽。每收一个货就立刻发一张回执，10 个货 10 张回执太啰嗦。<b>延迟 ACK</b>：收到货先记到 acklist（记账本），等下次 flush（最多 5ms）把攒着的纸条<b>批量打包</b>寄出去——10 张回执可能塞进 1 个 UDP 包，省运费。<b>但最终每个货都有对应的一张纸条（1:1）</b>，这是精确重传的前提。</p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
