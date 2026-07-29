@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Box2DSharp 0.6 · 卡点速写</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/toc.js" defer></script>
+</head>
+<body>
+<main>
+<a class="back-home" href="../index.html">← 回到索引</a>
+<h1>Box2DSharp 0.6 · 卡点速写</h1>
+<p class="meta">
+  来源：<a href="../教材/Box2D讲解.html" target="_blank">Box2D讲解.html</a> 第五章（求解器） ／
+  源码 <code>D:\Unity\Box2DSharp-src</code> tag <code>0.6</code> ／ 状态：📖 进行中
+</p>
+
+<!-- 问答回答从这里往下追加，最新的在最下方 -->
+
+<section id="iteration-vs-accumulation">
+  <h2>求解器「算了 8 轮」到底是累加 8 次，还是以当前帧为基础值算 8 次？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>ContactSolver.cs:402-408</code>、Testbed <code>Stacking → Pyramid</code> 实验</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>「帧」和「迭代」是两个不同颗粒度——迭代在<b>帧内部</b></li>
+    <li>8 轮迭代之间是 <b>in-place 更新</b>，不是累加；但有「累积冲量」这个量是真累加</li>
+    <li><code>Vel Iters=1</code> 为什么塔会塌（warm starting 关掉时）</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    答案是<b>迭代收敛，不是累加</b>。「算了 8 轮」= 同一个问题（接触冲量该多大）反复用<b>上一轮算完的最新状态</b>当初值重新算，向稳定解逼近，直到收敛。这是 Gauss-Seidel 的 in-place 更新特性。
+  </p>
+  <p>
+    颗粒度要分清：<b>帧 / Step</b> 是画面动一次（<code>World.Step</code>），<b>迭代</b>是帧<b>内部</b>把所有接触点扫一遍。<code>Vel Iters=8</code> 表示这一帧里扫 8 遍，不是 8 帧。迭代对画面不可见——它改的是求解器临时数组 <code>_velocities[]</code>，全跑完才写回 body。类比拍照：按快门前的对焦测光去噪（迭代）看不见，只看到成片（一帧）。
+  </p>
+  <p>
+    容易混的地方：有一个量<b>确实在累加</b>——<code>NormalImpulse</code>（累积冲量）。它是内部「账本」，存「这帧总共给了多少」，为钳制（<code>max(x,0)</code> 只推不拉）和 warm starting 跨帧复用服务。但<b>真正推动物体的是增量 <code>lambda</code>（累积值的差分），不是累积值本身</b>。所以物理结果（速度、位置）是收敛出来的，不是加出来的——「累加感」只来自累积冲量这个账本。
+  </p>
+  <p>
+    「基础值」其实有两层：<b>① 帧开始时</b> = 上一帧的速度 + warm starting 的累积冲量（跨帧种子）；<b>② 帧内每轮迭代时</b> = 上一轮算完的速度和冲量。8 轮迭代对应第 ② 层。一句话：<b>不是分 8 份加起来，是同一个问题反复用上轮结果当初值，直到收敛。</b>
+  </p>
+
+  <h3>实验印证（Testbed，warm starting 关掉）</h3>
+  <p>
+    <code>Stacking → Pyramid</code> 场景，关 <code>WarmStarting</code>，把 <code>Vel Iters</code> 从 8 调到 <b>1</b>：<b>塔直接塌下来</b>。
+    这是「迭代不足」最干净的可视化——剥离了跨帧累积变量，只剩纯粹的「一轮够不够」问题，答案是不够。
+  </p>
+  <p>
+    为什么塌：求解器每轮按 <b>①地面-A → ②A-B → ③B-C</b> 顺序扫。解 ① 时 A 的速度<b>还没反映 B、C 压在上面</b>（②③ 尚未解），于是地面给 A 的冲量 <b>偏小</b>，抵消不了三层重力。Vel=1 扫过就停，这个偏小冲量定在那不动 → 这一帧重力没被抵消干净 → 箱子下沉 → 每帧都欠一点 → 累积成塌。把 <code>Vel Iters</code> 从 1 一档档拖回 8，能肉眼看塔一点点「硬」起来，冲量向真实值收敛。
+  </p>
+  <p>
+    对比：同样的 Vel=1，<code>WarmStarting</code> <b>开着</b>时症状是<b>箱子像弹球一样乱飞</b>而非软塌——一轮 over-correct 出的偏大冲量被 warm starting 跨帧复用、不做钳制地放大，能量凭空增长。关掉它才显出「纯迭代不足 = 冲量给少了」的真面目。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">ContactSolver.cs:402-408 —— 钳累积值，施加增量</p>
+  <pre><code>vn = dot(dv, normal);
+lambda = -vcp.NormalMass * (vn - vcp.VelocityBias);
+
+newImpulse = Math.Max(vcp.NormalImpulse + lambda, 0.0f);  <span style="color:#888">// 钳「累积值」</span>
+lambda     = newImpulse - vcp.NormalImpulse;              <span style="color:#888">// 反解实际增量</span>
+vcp.NormalImpulse = newImpulse;</code></pre>
+  <p>
+    <small>
+      <code>vcp.NormalImpulse + lambda</code> = 累加（账本）；真正施加到速度的是反解出的 <code>lambda</code>（增量）。源码注释（<code>:439-440</code>）：
+      <i>the iterative nature of the solver which only requires that the accumulated impulse is clamped and not the incremental impulse</i>。
+      官方推荐值 <code>Vel Iters=8 / Pos Iters=3</code>（<code>test/Testbed.Abstractions/TestSettings.cs:19-20</code>）。
+    </small>
+  </p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    「以当前帧为基础值算了 8 轮」——对，但要精确：<b>帧内部</b>每轮以上一轮输出为初值反复算，向稳定解收敛。累加只发生在累积冲量这个内部账本上（为钳制和 warm starting 服务），推动物体的是它的差分。
+  </div>
+</section>
+
+</main>
+</body>
+</html>
