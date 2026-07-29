@@ -1267,7 +1267,148 @@ kcp-&gt;ackcount = <span class="num">0</span>;   <span class="cmt">// 清空 ack
 
   <details class="qa">
     <summary>自测：为什么收到货不立刻回 ACK，要先记 acklist？</summary>
-    <p>因为 ACK 也要占带宽。每收一个货就立刻发一张回执，10 个货 10 张回执太啰嗦。<b>延迟 ACK</b>：收到货先记到 acklist（记账本），等下次 flush（最多 5ms）把攒着的纸条<b>批量打包</b>寄出去——10 张回执可能塞进 1 个 UDP 包，省运费。<b>但最终每个货都有对应的一张纸条（1:1）</b>，这是精确重传的前提。</p>
+    <p>因为 ACK 也要占带宽。每收一个货就立刻发一张回执，10 个货 10 张回执太啰嗦。<b>延迟 ACK</b>：收到货先记到 acklist（记账本），等下次 flush（最多 5ms）把攒着的纸条<b>批量打包</b>寄出去——10 张回执可能塞进 1 个 UDP包，省运费。<b>但最终每个货都有对应的一张纸条（1:1）</b>，这是精确重传的前提。</p>
+  </details>
+</section>
+
+<section id="kcp-flush-send-window">
+  <h2>ikcp_flush 上半场：窗口怎么算、货怎么上架、超时怎么重传？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> 第四章 §4.1 阶段⑤；<code>Base/c/kcp.cs:1054-1158</code>（窗口计算、上架、重传循环）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>flush 是真正发货的地方，干两件事：上架 + 遍历决定谁发</li>
+    <li>窗口 = 三个限制取最小（snd_wnd / rmt_wnd / cwnd），Fantasy 关了 cwnd</li>
+    <li>每个货挂"重传闹钟" resendts，闹钟响还没 ACK 就重发</li>
+    <li>重传要退避（拉长下次等待），Fantasy 用 ×1.5；置 lost=1 是严重信号</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>反直觉回顾</b>：第二章的 <code>ikcp_send</code> 一个字节都不发，只把货切好贴标签挂到 <code>snd_queue</code>（待发货货架）。真正往网络上发是 <code>ikcp_flush</code> 的事。它干两件大事：① 把货从 snd_queue 搬到 snd_buf（上架，分配序号）② 遍历 snd_buf 决定哪些该发（重传逻辑也在这）。<b>本章只讲上半场</b>——窗口 + 上架 + 首次发送 + 超时重传。快速重传和拥塞控制下次讲。</p>
+
+  <h4>第一道门：没调过 update，flush 啥也不干</h4>
+  <p><code>kcp.cs:968</code> 第一行 <code>if (kcp-&gt;updated == 0) return;</code>。因为 flush 里所有判断都依赖时间（重传时刻、退避、RTT），而时间由 <code>ikcp_update</code> 注入。没调过 update，<code>current</code> 是 0，所有时间判断全错。<b>这是个防御设计——时间没准备好之前不碰任何时间逻辑。</b></p>
+
+  <h4>第二道门：一个货能不能上架，看"发送窗口"</h4>
+  <p>回忆四货架图的发送方向：snd_queue（待发无序号）→ snd_buf（已发等ACK）。不是所有待发货都能立刻上架，要看"在途额度"——同时在路上（已发未确认）的货不能太多，否则堵死。这就是发送窗口。</p>
+
+  <p><b>窗口 = 三个限制取最小</b>（哪个最紧听哪个的，像三个领导下指标你只能按最严的来）：</p>
+  <table>
+    <tr><th>限制</th><th>谁定的</th><th>白话</th></tr>
+    <tr><td><code>snd_wnd</code></td><td>自己配置的（Fantasy 客户端 2048）</td><td>"我最多同时在路上放 2048 个货"</td></tr>
+    <tr><td><code>rmt_wnd</code></td><td>对端告诉我的（第一章 wnd 字段）</td><td>"朋友说他仓库还能收 X 箱"</td></tr>
+    <tr><td><code>cwnd</code>（拥塞窗口）</td><td>KCP 自己算的</td><td>"根据网络拥堵情况，我觉得安全的车流量"</td></tr>
+  </table>
+
+  <p><b>Fantasy 把第三个关了</b>：<code>if (kcp-&gt;nocwnd == 0) cwnd = _imin_(kcp-&gt;cwnd, cwnd);</code>——Fantasy 配置 <code>nc=1</code>，这个 if 被跳过。<b>拥塞窗口 cwnd 仍在计算，但不参与发送决策</b>，实际窗口只受前两个限制。这是"无视网络拥塞，全速发"，对小流量游戏消息可以接受，但弱网或传大文件可能把链路打爆（第五章配置那节会重点讲）。</p>
+
+  <p><b>上架逻辑</b>：<code>while (snd_queue 非空 &amp;&amp; snd_nxt - snd_una &lt; cwnd)</code>——只要路上还没塞满窗口额度，就从 snd_queue 拿一个货上架。<b>上架时分配序号 <code>sn = snd_nxt; snd_nxt++</code></b>——货从"待发"变成"已发"的那一刻领到身份证号。这就是 sn 序号分配的地方（呼应第一章 sn 字段）。</p>
+
+  <h4>第三道门：遍历 snd_buf，三种情况判断谁该发</h4>
+  <p>货上架到 snd_buf 后，遍历整个 snd_buf 对每个货判断"该不该现在发"。有三种情况：<b>A 首次发送（xmit==0）/ B 超时重传（闹钟响了）/ C 快速重传（被跳过太多次）</b>。本次只讲 A 和 B。</p>
+
+  <h5>情况 A · 首次发送（xmit == 0）</h5>
+  <p><code>xmit</code> = 这个货已发几次。<code>xmit == 0</code> 意味着从没发过——第一次发。做的事：标记要发 + xmit++（变成 1）+ 设重传闹钟 <code>resendts = current + rto + rtomin</code>。<b>resendts 就是这个货的"重传倒计时"——现在 + 超时时间 = 闹钟响的时刻。</b>这就是第一章 resendts/rto 字段（不上网的本地状态）的用法。</p>
+
+  <p><code>rtomin</code> 是首包的额外余量：普通模式（nodelay=0）加 <code>rto/8</code>；<b>Fantasy 用 nodelay=1，余量是 0</b>，超时判定更激进——宁可早点重传也不多等。</p>
+
+  <h5>★ 情况 B · 超时重传（闹钟 resendts 响了还没 ACK）</h5>
+  <p><b>画面：每个货都挂一个闹钟。</b>首次发送时设了 <code>resendts = now + rto</code>。每次 flush 跑时逐个检查闹钟：<code>if (_itimediff(current, resendts) &gt;= 0)</code> → 闹钟响了！重发。</p>
+  <blockquote><b>回忆第三章的 <code>_itimediff</code></b>：比较时间/序号必须用它，不能直接写 <code>current &gt;= resendts</code>，否则 uint 回绕会出错（49 天 bug）。<b>这是滑动窗口协议的铁律。</b></blockquote>
+
+  <p><b>重发不是简单再发一遍，它还要"退避"——把下次等待时间拉长。</b>为什么？网络本来就堵，你发了个货没收到 ACK，重发还没收到，如果还按原来那么短的时间间隔疯狂塞包，越塞越堵最后雪崩。<b>退避 = 打不过就退一步，给网络喘息机会。</b>就像打电话没人接，你不会每 10 秒打一次，而是隔 20s、40s、80s 慢慢拉长。</p>
+
+  <p>退避力度（nodelay 取值）：</p>
+  <table>
+    <tr><th>nodelay</th><th>公式</th><th>倍率</th><th>含义</th></tr>
+    <tr><td>0（普通）</td><td><code>rto += max(rto, rx_rto)</code></td><td>约 ×2</td><td>TCP 式指数退避，对网络友好</td></tr>
+    <tr><td>1（Fantasy 用）</td><td><code>rto += rto / 2</code></td><td>×1.5</td><td>退避更缓，重传更积极</td></tr>
+    <tr><td>2</td><td><code>rto += rx_rto / 2</code></td><td>线性</td><td>最激进，几乎不退避</td></tr>
+  </table>
+  <p><b>Fantasy 用 ×1.5（nodelay=1）</b>：×2 是 100→200→400ms 涨得快对网络温柔；×1.5 是 100→150→225ms 涨得慢重传更频繁。<b>退避越缓，丢包恢复越快，但重复发送越多——这就是"用带宽换延迟"的具体兑现点之一。</b></p>
+
+  <p><b>关键标记 lost = 1</b>：超时重传会置 <code>lost = 1</code>，告诉后面的"阶段⑥拥塞控制"——发生了超时丢包。<b>这是严重信号</b>，因为超时意味着"连 ACK 都没回来，可能整条路断了/严重拥塞"，跟情况 C 快速重传（链路还通只是个别包丢）的严重程度判断天差地别，拥塞惩罚力度也是十倍之差。</p>
+
+  <h4>具体例子走一遍超时重传（rto 初始 100ms，nodelay=1 ×1.5）</h4>
+  <pre><code>时刻 0：   首次发 sn=7，设闹钟 resendts = 0 + 100 = 100，xmit=1
+时刻 100： current(100) &gt;= resendts(100)？是！闹钟响了
+           → 重发 sn=7
+           → 退避 rto = 100 + 100/2 = 150
+           → 重设闹钟 resendts = 100 + 150 = 250，xmit=2，lost=1
+时刻 250： 还没 ACK，current(250) &gt;= resendts(250)？是！又响
+           → 再重发 → rto = 150 + 150/2 = 225 → resendts = 250 + 225 = 475，xmit=3
+时刻 475： ……继续（每次闹钟响，重发 + 拉长等待：100→150→225→...）</code></pre>
+
+  <h3>证据</h3>
+  <p class="code-caption">窗口计算（三限制取最小）+ 上架分配 sn（c/kcp.cs:1054-1081）</p>
+  <pre><code><span class="cmt">// calculate window size</span>
+cwnd = <span class="type">_imin_</span>(kcp-&gt;snd_wnd, kcp-&gt;rmt_wnd);
+<span class="kw">if</span> (kcp-&gt;nocwnd == <span class="num">0</span>) cwnd = <span class="type">_imin_</span>(kcp-&gt;cwnd, cwnd);   <span class="cmt">// ← Fantasy nc=1 跳过</span>
+
+<span class="cmt">// move data from snd_queue to snd_buf</span>
+<span class="kw">while</span> (<span class="type">_itimediff</span>(kcp-&gt;snd_nxt, kcp-&gt;snd_una + cwnd) &lt; <span class="num">0</span>)
+{
+    newseg = iqueue_entry(snd_queue.next);
+    iqueue_del(&amp;newseg-&gt;node);
+    iqueue_add_tail(&amp;newseg-&gt;node, &amp;kcp-&gt;snd_buf);
+    kcp-&gt;nsnd_que--;   kcp-&gt;nsnd_buf++;
+
+    newseg-&gt;sn = kcp-&gt;snd_nxt++;     <span class="cmt">// ★ 上架时分配序号</span>
+    newseg-&gt;xmit = <span class="num">0</span>;                <span class="cmt">// 还没发过</span>
+    ...
+}</code></pre>
+
+  <p class="code-caption">重传循环：情况 A 首次发送 / 情况 B 超时重传（c/kcp.cs:1088-1128）</p>
+  <pre><code><span class="kw">for</span> (p = kcp-&gt;snd_buf.next; p != &amp;kcp-&gt;snd_buf; p = p-&gt;next)
+{
+    segment = iqueue_entry(p);
+    <span class="kw">int</span> needsend = <span class="num">0</span>;
+
+    <span class="kw">if</span> (segment-&gt;xmit == <span class="num">0</span>)                       <span class="cmt">// ═══ 情况 A：首次发送 ═══</span>
+    {
+        needsend = <span class="num">1</span>;
+        segment-&gt;xmit++;
+        segment-&gt;rto = (<span class="kw">uint</span>)kcp-&gt;rx_rto;
+        segment-&gt;resendts = current + segment-&gt;rto + rtomin;   <span class="cmt">// 设闹钟</span>
+    }
+    <span class="kw">else if</span> (<span class="type">_itimediff</span>(current, segment-&gt;resendts) &gt;= <span class="num">0</span>)  <span class="cmt">// ═══ 情况 B：闹钟响了 ═══</span>
+    {
+        needsend = <span class="num">1</span>;
+        segment-&gt;xmit++;   kcp-&gt;xmit++;
+
+        <span class="kw">int</span> step = (kcp-&gt;nodelay &lt; <span class="num">2</span>) ? ((<span class="kw">int</span>)(segment-&gt;rto)) : kcp-&gt;rx_rto;
+        segment-&gt;rto += (<span class="kw">uint</span>)(step / <span class="num">2</span>);            <span class="cmt">// nodelay=1：×1.5 退避</span>
+
+        segment-&gt;resendts = current + segment-&gt;rto;            <span class="cmt">// 重设闹钟</span>
+        lost = <span class="num">1</span>;                                             <span class="cmt">// ← 严重信号</span>
+    }
+    <span class="kw">else if</span> (segment-&gt;fastack &gt;= resent)               <span class="cmt">// ═══ 情况 C：快速重传（下次讲）═══</span>
+    { ... }</code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:314-400</code>（§4.1 阶段⑤，三种发送触发条件）；具体段落：update 前置检查 :330-334 / 窗口计算 :322-328 / 上架 :336-352 / 首次发送 A :345-352 / 超时重传 B :353-369</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 退避是"用带宽换延迟"的核心兑现点</span>
+    退避越缓（×1.5 vs ×2），丢包时恢复越快，但重复发送越多。Fantasy 全程选激进：<code>nodelay=1</code> 让退避更缓、首包余量 rtomin=0。<b>这套取向适合实时对战/动作游戏，不适合文件传输或需要与 TCP 公平竞争的场景。</b>弱网下可能把链路打爆反而加剧丢包——第五章配置那节会回到这个坑。
+  </div>
+
+  <details class="qa">
+    <summary>自测：发送窗口是哪三个限制取最小？为什么取最小？Fantasy 关了哪个？</summary>
+    <p>三个限制：① <code>snd_wnd</code>（自己配置的，客户端 2048）② <code>rmt_wnd</code>（对端告知的）③ <code>cwnd</code>（拥塞窗口，KCP 自己算）。<b>取最小</b>是因为三个都是上限约束，哪个最紧就听哪个——自己的额度、对端的容量、网络的承受力，任何一个超了都不行（像三个领导下指标只能按最严的来）。<b>Fantasy 用 nc=1 关了第三个 cwnd</b>，所以实际窗口只受前两个限制，等于"无视网络拥塞全速发"。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：超时重传的"闹钟"是怎么工作的？判断该重传用哪个函数？</summary>
+    <p>首次发送时给货设闹钟 <code>resendts = now + rto</code>（现在 + 超时时间 = 闹钟响的时刻）。每次 flush 遍历 snd_buf 时逐个检查：<code>if (_itimediff(current, resendts) &gt;= 0)</code> → 现在到了/超过闹钟时刻就重发。<b>必须用 <code>_itimediff</code> 而不是直接 <code>current &gt;= resendts</code></b>，因为 uint 时间戳会回绕（49 天 bug），直接比较在回绕后会判反。这是滑动窗口协议的铁律。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：超时重传为什么要"退避"拉长等待时间？不拉长会怎样？</summary>
+    <p>网络堵了你发了个货没收到 ACK，如果还按原间隔疯狂塞包，越塞越堵最后雪崩。<b>退避 = 每重传一次把下次等待拉长，给网络喘息机会</b>（像打电话没人接就慢慢拉长拨打间隔）。不拉长会导致拥塞恶化——发得越多丢得越多，形成恶性循环。Fantasy 用 ×1.5（nodelay=1）比 TCP 的 ×2 更激进，恢复快但重复发送多。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：lost=1 这个标记为什么重要？它跟后面哪个阶段挂钩？</summary>
+    <p><code>lost=1</code> 告诉"阶段⑥拥塞控制"——发生了超时丢包。<b>这是严重信号</b>：超时意味着"连 ACK 都没回来，可能整条路断了或严重拥塞"，跟情况 C 快速重传（链路还通、后面 ACK 回来了，只是个别包丢）的严重程度判断完全不同。<b>拥塞惩罚力度也是十倍之差</b>——超时重传会让 cwnd 直接砸到 1（退回慢启动），而快速重传只是温和下调。这就是 lost 和 change 两个标记的区别。</p>
   </details>
 </section>
 
