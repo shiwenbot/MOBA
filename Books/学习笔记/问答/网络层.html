@@ -1412,6 +1412,236 @@ cwnd = <span class="type">_imin_</span>(kcp-&gt;snd_wnd, kcp-&gt;rmt_wnd);
   </details>
 </section>
 
+<section id="kcp-fastack-congestion">
+  <h2>快速重传和拥塞控制：KCP 为什么比 TCP 快？丢包后怎么刹车？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> 第四章 §4.1 情况C / §4.2 阶段⑥；<code>Base/c/kcp.cs:631-655</code>（parse_fastack）、<code>:1117-1192</code>（快速重传+拥塞控制）、<code>:895-921</code>（慢启动/拥塞避免）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>快速重传核心：后面的 ACK 回来了 → 说明前面的包丢了（不用等闹钟）</li>
+    <li>fastack 数"被跳过几次"，攒够 fastresend(2) 就重传</li>
+    <li>change vs lost 两种信号 → 两种严重程度 → 两种惩罚力度（差十倍）</li>
+    <li>加速分两阶段：慢启动（指数）→ ssthresh → 拥塞避免（线性）</li>
+    <li>Fantasy 关了拥塞控制（nc=1）：cwnd 仍在算但不参与决策</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>快速重传是整个 KCP 最值得学的一个机制，它解释了"为什么 KCP 比 TCP 快"的核心原因。</b></p>
+
+  <h4>★ 快速重传核心思想：用后面的 ACK 反推前面的丢包</h4>
+  <p>超时重传（情况 B）的痛点：<b>要干等闹钟响（200ms）才知道丢了</b>。但很多时候早就该知道丢了——</p>
+  <pre><code>我发了：6  7  8  9  10    （7 丢了）
+
+收到 ACK sn=6  → 6✓
+收到 ACK sn=8  → 8✓
+收到 ACK sn=9  → 9✓
+收到 ACK sn=10 → 10✓
+
+7 的 ACK 一直没回来，但 8/9/10 都回来了 → <b>7 肯定丢了</b>
+（序号按顺序发，7 到了对端一定会回 ACK，现在唯独它没有）</code></pre>
+  <p><b>不用等闹钟 200ms，收到几个后续 ACK 就能判断 7 丢了，立刻重发。</b>这就是快速重传——靠后续 ACK 提前判断丢包。</p>
+
+  <h4>fastack 字段：数"我被后面的 ACK 跳过几次"</h4>
+  <p>第一章 IKCPSEG 结构体里有个本地状态 <code>fastack</code>（不上网）。收到 ACK sn=X 时，遍历 snd_buf 里所有序号 <b>比 X 小且还没确认</b>的包，给它们的 fastack 各 +1（因为它们被 X 跳过了）。见 <code>ikcp_parse_fastack</code>（kcp.cs:631-655）。</p>
+  <p>用"7 丢了，收 ACK 8/9/10"走一遍（各包初始 fastack=0）：</p>
+  <ul>
+    <li>收 ACK sn=8：snd_buf 里比 8 小且没确认的只有 7 → seg[7].fastack=1</li>
+    <li>收 ACK sn=9：又是 7 → seg[7].fastack=2 <b>← 攒够 2 次（fastresend=2）！</b></li>
+    <li>收 ACK sn=10：又是 7 → seg[7].fastack=3（实际 fastack=2 时就触发了）</li>
+  </ul>
+
+  <h4>触发条件（情况 C，kcp.cs:1117-1128）</h4>
+  <pre><code><span class="kw">else if</span> (segment-&gt;fastack &gt;= resent)                    <span class="cmt">// ① 攒够跳过次数</span>
+{
+    <span class="kw">if</span> (segment-&gt;xmit &lt;= kcp-&gt;fastlimit || fastlimit &lt;= <span class="num">0</span>)  <span class="cmt">// ② 防无限快重传</span>
+    {
+        needsend = <span class="num">1</span>;                    <span class="cmt">// 重发！</span>
+        segment-&gt;xmit++;
+        segment-&gt;fastack = <span class="num">0</span>;            <span class="cmt">// 清零，重新数</span>
+        change++;                        <span class="cmt">// ★ 标记"快重传"</span>
+    }
+}</code></pre>
+  <p><b>两个条件</b>：① <code>fastack &gt;= fastresend</code>（Fantasy=2，被跳过 2 次就重传）；② <code>xmit &lt;= fastlimit</code>（默认 5，限制同一包最多被快重传几次，防极差网络下无限快重传打满带宽）。<b>触发后置 change=1，跟情况 B 的 lost=1 形成两种严重程度信号。</b></p>
+
+  <h4>★ 快速重传 vs 超时重传：根本区别（第四章最重要的对比）</h4>
+  <table>
+    <tr><th></th><th>超时重传（情况 B）</th><th>快速重传（情况 C）</th></tr>
+    <tr><td>怎么发现丢包</td><td>闹钟响了（等 rto 时间）</td><td>后面的 ACK 跳过我 N 次</td></tr>
+    <tr><td>等多久</td><td>200ms（rto）</td><td>几个 ACK 间隔（可能 10ms 内）</td></tr>
+    <tr><td>信号严重程度</td><td><b>严重</b>——连 ACK 都没，可能整条路断了</td><td><b>轻微</b>——链路还通（后续 ACK 都回来了），只是个别包丢</td></tr>
+    <tr><td>丢包标记</td><td><code>lost = 1</code></td><td><code>change = 1</code></td></tr>
+    <tr><td>后续惩罚</td><td>cwnd 砸到 1（重罚）</td><td>cwnd 温和下调（轻罚）</td></tr>
+  </table>
+  <p><b>这就是 KCP 比 TCP 快的核心原因之一</b>——TCP 早期只有超时重传，丢包要干等 rto；KCP 加了快速重传，能靠后续 ACK 提前判断，几乎不浪费时间。</p>
+
+  <h4>阶段⑥ 拥塞控制：加速分两阶段</h4>
+  <p>核心思想：<b>试探着发，顺利就加速，丢包就刹车</b>（像往高速派车，顺利就多派，堵了就少派）。加速逻辑在 <code>ikcp_input</code> 末尾（kcp.cs:895-921），每次收到 ACK 就考虑给 cwnd 加码，分两阶段：</p>
+  <table>
+    <tr><th></th><th>慢启动（cwnd &lt; ssthresh）</th><th>拥塞避免（cwnd &gt;= ssthresh）</th></tr>
+    <tr><td>增长方式</td><td>每收一个 ACK cwnd+1（<b>指数</b>：1→2→4→8...）</td><td>每 RTT 只 +1（<b>线性</b>）</td></tr>
+    <tr><td>为什么这样</td><td>前期猛涨快速找合理水位</td><td>到了 ssthresh 踩刹车，避免一下打爆</td></tr>
+  </table>
+  <blockquote><b>慢启动其实不慢</b>——它是指数增长，只是<b>从 1 开始</b>（起点慢）。名字里的"慢"指起点不指速度。过了 ssthresh 就切到线性增长，温和试探。</blockquote>
+
+  <h4>阶段⑥ 刹车：两种丢包信号 → 两种惩罚力度（精华）</h4>
+  <pre><code><span class="kw">if</span> (change != <span class="num">0</span>) {                              <span class="cmt">// 快速重传信号</span>
+    ssthresh = (snd_nxt - snd_una) / <span class="num">2</span>;          <span class="cmt">// 阈值砍半</span>
+    cwnd = ssthresh + resent;                      <span class="cmt">// 温和下调，继续拥塞避免</span>
+}
+<span class="kw">if</span> (lost != <span class="num">0</span>) {                                <span class="cmt">// 超时信号</span>
+    ssthresh = cwnd / <span class="num">2</span>;
+    cwnd = <span class="num">1</span>;                                     <span class="cmt">// ★ 直接砸到 1！退回慢启动</span>
+}</code></pre>
+  <table>
+    <tr><th></th><th>快速重传（change）</th><th>超时（lost）</th></tr>
+    <tr><td>信号含义</td><td>链路还通，个别包丢</td><td>可能整条路断了</td></tr>
+    <tr><td>ssthresh</td><td>在途包数 / 2</td><td>当前 cwnd / 2</td></tr>
+    <tr><td>cwnd</td><td>ssthresh + resent（温和）</td><td><b>= 1（砸地）</b></td></tr>
+    <tr><td>退不退回慢启动</td><td>不退，继续拥塞避免</td><td><b>退回慢启动</b></td></tr>
+    <tr><td>直观</td><td>轻踩刹</td><td>急刹</td></tr>
+  </table>
+  <p><b>KCP 靠区分丢包信号严重程度对症下药</b>——轻微丢包轻踩刹（不过度反应，网络利用率高），严重拥塞才急刹（退回慢启动让网络恢复）。</p>
+
+  <h4>★ Fantasy 把拥塞控制关了（nc=1）—— 最重要的坑</h4>
+  <p>发送窗口计算（kcp.cs:1056）：<code>if (kcp-&gt;nocwnd == 0) cwnd = _imin_(kcp-&gt;cwnd, cwnd);</code>——Fantasy 配置 <code>nc=1</code>，这个 if 被跳过。</p>
+  <p><b>含义</b>：拥塞窗口 cwnd <b>仍在计算</b>（慢启动、拥塞避免、刹车逻辑全在跑），<b>但不参与发送决策</b>——实际发送窗口只看 snd_wnd 和 rmt_wnd，无视 cwnd。等于 KCP 后台认真算着"网络堵不堵"，Fantasy 说"我不管，按配置全速发"。</p>
+  <p><b>为什么敢这么做</b>：游戏消息通常小流量、突发性（移动指令、技能释放），不太会打爆网络，所以关掉拥塞控制换最低延迟是合理取舍。而且 nc=1 后丢包时 cwnd 砸到 1 也不拖慢发送，<b>丢包恢复更快</b>。</p>
+
+  <h3>证据</h3>
+  <p class="code-caption">fastack 累加逻辑（ikcp_parse_fastack，kcp.cs:638-655）</p>
+  <pre><code><span class="kw">for</span> (p = kcp-&gt;snd_buf.next; p != &amp;kcp-&gt;snd_buf; p = next)
+{
+    seg = iqueue_entry(p);
+    <span class="kw">if</span> (<span class="type">_itimediff</span>(sn, seg-&gt;sn) &lt; <span class="num">0</span>) <span class="kw">break</span>;        <span class="cmt">// 后面的不用看了</span>
+    <span class="kw">else if</span> (sn != seg-&gt;sn)
+        seg-&gt;fastack++;                       <span class="cmt">// ★ 我被跳过一次！</span>
+}</code></pre>
+
+  <p class="code-caption">阶段⑥ 拥塞控制调整（kcp.cs:1168-1192）</p>
+  <pre><code><span class="cmt">// update ssthresh</span>
+<span class="kw">if</span> (change != <span class="num">0</span>)          <span class="cmt">// 发生过快速重传</span>
+{
+    <span class="kw">uint</span> inflight = kcp-&gt;snd_nxt - kcp-&gt;snd_una;   <span class="cmt">// 在途包数</span>
+    kcp-&gt;ssthresh = inflight / <span class="num">2</span>;
+    <span class="kw">if</span> (kcp-&gt;ssthresh &lt; IKCP_THRESH_MIN) kcp-&gt;ssthresh = IKCP_THRESH_MIN;
+    kcp-&gt;cwnd = kcp-&gt;ssthresh + resent;            <span class="cmt">// 温和下调</span>
+}
+
+<span class="kw">if</span> (lost != <span class="num">0</span>)            <span class="cmt">// 发生过超时重传</span>
+{
+    kcp-&gt;ssthresh = cwnd / <span class="num">2</span>;
+    <span class="kw">if</span> (kcp-&gt;ssthresh &lt; IKCP_THRESH_MIN) kcp-&gt;ssthresh = IKCP_THRESH_MIN;
+    kcp-&gt;cwnd = <span class="num">1</span>;                                <span class="cmt">// ← 直接砸到 1！</span>
+}</code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:402-491</code>（§4.1C 快速重传 + §4.2 拥塞控制）；具体段落：快速重传触发 :402-430 / 阶段⑥拥塞控制 :432-491</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ nc=1 的边界（第五章配置会回到这里）</span>
+    <b>适合</b>：实时对战、动作游戏、帧同步（小流量、要低延迟）。<b>不适合</b>：文件传输、大量玩家共享带宽、弱网环境。<b>如果将来要做大规模同屏或弱网稳定运行，nc 是第一个该重新评估的参数</b>——弱网下全速发可能把链路打爆，反而加剧丢包，形成恶性循环。
+  </div>
+
+  <details class="qa">
+    <summary>自测：快速重传的核心思想是什么？跟超时重传的根本区别？</summary>
+    <p><b>核心思想：用后面的 ACK 反推前面的丢包。</b>后面的 ACK 都回来了，唯独某个包的 ACK 没回来，说明它肯定丢了——不用等闹钟响。跟超时重传的根本区别：<b>超时要干等 rto（200ms）才知道丢了，快速重传靠后续 ACK 几个间隔内（可能 10ms）就能判断</b>。这就是 KCP 比 TCP 快的核心原因之一。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：fastack 怎么累加？拿"7丢了，收 ACK 8/9/10"走一遍</summary>
+    <p>收到 ACK sn=X 时，遍历 snd_buf 里所有<b>序号比 X 小且还没确认</b>的包，给它们 fastack 各 +1。7 丢了时：收 ACK 8 → snd_buf 里比 8 小没确认的只有 7 → fastack=1；收 ACK 9 → 又是 7 → fastack=2（<b>攒够 fastresend=2 触发！</b>）；收 ACK 10 → fastack=3（实际 fastack=2 就触发了）。<b>fastack 本质就是"我被后面的 ACK 跳过几次"。</b></p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：change 和 lost 两种惩罚为什么力度差十倍？</summary>
+    <p>因为两种信号的<b>严重程度本质不同</b>：快速重传（change）说明<b>链路还通</b>（后续 ACK 都回来了，只是个别包丢），所以只温和下调 cwnd 到 ssthresh+resent，继续拥塞避免，轻踩刹车。超时（lost）说明<b>连 ACK 都没回来，可能整条路断了或严重拥塞</b>，所以直接砸 cwnd=1 退回慢启动，急刹几乎停车让网络恢复。<b>KCP 靠区分信号严重程度对症下药，轻微不过度反应、严重才重罚。</b></p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：慢启动为什么叫"慢"？它真的慢吗？</summary>
+    <p><b>不慢，是指数增长（每 RTT 翻倍：1→2→4→8...）。</b>"慢"指的是<b>起点从 1 开始</b>，不是速度慢。前期猛涨是为了快速找到合理水位。撞到 ssthresh 后切到线性增长（拥塞避免），每 RTT 只 +1，温和试探避免一下打爆网络。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：Fantasy 关了拥塞控制（nc=1），具体关掉了哪行代码？什么场景会变成坑？</summary>
+    <p>关掉了 <code>kcp.cs:1056</code> 的 <code>if (kcp-&gt;nocwnd == 0) cwnd = _imin_(kcp-&gt;cwnd, cwnd);</code>——这个 if 被跳过，cwnd 不参与发送决策。<b>注意 cwnd 仍在计算（慢启动/拥塞避免/刹车都在跑），只是算出来的值不生效。</b>适合小流量游戏消息（实时对战、帧同步）。坑：<b>弱网或大流量场景（大规模同屏、传大文件）下全速发可能把链路打爆，反而加剧丢包</b>——这是第一个该重新评估的参数。</p>
+  </details>
+</section>
+
+<section id="kcp-flow-vs-congestion">
+  <h2>流量控制 vs 拥塞控制：wnd 和 cwnd 到底是不是一回事？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> §4.2 延伸；<code>Base/c/kcp.cs:1054-1056</code>（发送窗口三限制取最小）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>两套独立机制，解决两个不同问题</li>
+    <li>wnd = 流量控制（对端扛得住吗），cwnd = 拥塞控制（网络扛得住吗）</li>
+    <li>各自独立计算，最后在"发送窗口取最小"处汇合</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>这是网络协议里最容易搞混的一个区分。</b>很多人以为"窗口就是窗口"，其实控制"我能发多快"的有<b>两套完全独立的机制</b>，解决两个不同问题：</p>
+
+  <table>
+    <tr><th></th><th>流量控制（Flow Control）</th><th>拥塞控制（Congestion Control）</th></tr>
+    <tr><td>字段</td><td><code>wnd</code>（rmt_wnd）</td><td><code>cwnd</code></td></tr>
+    <tr><td>解决什么问题</td><td><b>接收方扛不扛得住</b></td><td><b>中间的网络扛不扛得住</b></td></tr>
+    <tr><td>谁测的</td><td>接收方告诉发送方</td><td>发送方自己估算</td></tr>
+    <tr><td>调整依据</td><td>接收方处理进度</td><td>丢包信号（change/lost）</td></tr>
+    <tr><td>响应速度</td><td><b>快</b>——每个包都带，实时更新</td><td><b>慢</b>——要等丢包信号才调</td></tr>
+    <tr><td>管的是</td><td>对方的能力</td><td>网络的能力</td></tr>
+  </table>
+
+  <p><b>两者的关系</b>：各自独立计算，最后在"发送窗口取最小"处汇合（kcp.cs:1055-1056）：</p>
+  <pre><code>cwnd = _imin_(kcp-&gt;snd_wnd, kcp-&gt;rmt_wnd);     <span class="cmt">// ① 先取 snd_wnd 和 rmt_wnd（流量控制）的最小</span>
+<span class="kw">if</span> (kcp-&gt;nocwnd == <span class="num">0</span>)
+    cwnd = _imin_(kcp-&gt;cwnd, cwnd);              <span class="cmt">// ② 再跟 cwnd（拥塞控制）取最小（Fantasy 跳过）</span></code></pre>
+  <p><b>wnd 不参与 cwnd 的计算，cwnd 也不受 wnd 影响——它们各自独立运作，最后只是在"取最小"这个环节碰头。</b>哪个最紧就听哪个的（像三个领导下指标，只能按最严的来）。</p>
+
+  <h4>用具体例子看"瓶颈是谁"</h4>
+  <p><b>场景 1：被对端能力卡住（流量控制起作用）</b></p>
+  <pre><code>snd_wnd = 2048   （配置上限）
+cwnd    = 500    （网络很好，涨上来了）
+rmt_wnd = 10     （对端仓库快满了）
+
+实际发送窗口 = min(2048, 10, 500) = 10   ← 被对端能力卡住</code></pre>
+  <p><b>场景 2：被网络能力卡住（拥塞控制起作用）</b></p>
+  <pre><code>snd_wnd = 2048
+cwnd    = 8      （网络刚丢包，砸到很小）
+rmt_wnd = 2000   （对端仓库很大）
+
+实际发送窗口 = min(2048, 2000, 8) = 8    ← 被网络能力卡住</code></pre>
+
+  <h4>为什么要两套？不能合并成一个？</h4>
+  <p>因为它们<b>响应速度和方式完全不同，互为补充，缺一不可</b>：</p>
+  <ul>
+    <li><b>网络好但接收方卡住</b>：如果只有拥塞控制（cwnd），网络没丢包 cwnd 还在涨，你会继续猛发 → <b>接收方被淹没</b>。有流量控制（wnd）兜底：对端立刻带 wnd=0 告诉你"我扛不住了"，你立刻停手。</li>
+    <li><b>接收方快但网络拥塞</b>：如果只有流量控制（wnd），对端 wnd 还很大你继续猛发 → <b>网络彻底堵死</b>。有拥塞控制（cwnd）兜底：丢包信号让 cwnd 砸下去，你主动减少在途量。</li>
+  </ul>
+  <p><b>两套机制各捕捉一种瓶颈——一个管对端能力，一个管网络能力，互为补充。</b>这就是 TCP/IP 协议栈几十年来最经典的设计区分之一。</p>
+
+  <h3>证据</h3>
+  <p class="code-caption">发送窗口 = 三限制取最小（kcp.cs:1054-1056）</p>
+  <pre><code><span class="cmt">// calculate window size</span>
+cwnd = <span class="type">_imin_</span>(kcp-&gt;snd_wnd, kcp-&gt;rmt_wnd);        <span class="cmt">// 流量控制：snd_wnd 和 rmt_wnd</span>
+<span class="kw">if</span> (kcp-&gt;nocwnd == <span class="num">0</span>)
+    cwnd = <span class="type">_imin_</span>(kcp-&gt;cwnd, cwnd);                 <span class="cmt">// 拥塞控制：cwnd（Fantasy 跳过）</span></code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:322-328</code>（窗口计算）/ <code>:484-491</code>（Fantasy 关 cwnd 的 warn 框）</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">💡 一句话记住</span>
+    <b>wnd 管"对端扛得住吗"（流量控制），cwnd 管"网络扛得住吗"（拥塞控制）</b>。两套独立机制，各自计算，最后取最小汇合。Fantasy 关了 cwnd 不参与决策（nc=1），所以实际只看 wnd。
+  </div>
+
+  <details class="qa">
+    <summary>自测：wnd 会影响 cwnd 的计算吗？它们是什么关系？</summary>
+    <p><b>不会。</b>cwnd 的计算完全不看 wnd，它只看丢包信号（change/lost）和 ACK 回来的情况。两者是<b>两套独立机制</b>，各自计算，最后只在"发送窗口取最小"处汇合（<code>cwnd = min(snd_wnd, rmt_wnd)</code>，Fantasy 跳过了跟 cwnd 取最小那步）。<b>wnd 不参与 cwnd 的计算，cwnd 也不受 wnd 影响。</b></p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：为什么需要两套机制？合并成一个不行吗？</summary>
+    <p>因为它们<b>响应速度和方式不同，捕捉的瓶颈不同，互为补充缺一不可</b>。只靠 cwnd（拥塞控制）：网络好但接收方卡住时，没丢包 cwnd 还在涨，你会继续猛发淹没接收方。只靠 wnd（流量控制）：对端很快但网络拥塞时，wnd 还很大你继续猛发，网络彻底堵死。<b>两套各管一种瓶颈——一个管对端能力，一个管网络能力。</b></p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
