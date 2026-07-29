@@ -1642,6 +1642,256 @@ cwnd = <span class="type">_imin_</span>(kcp-&gt;snd_wnd, kcp-&gt;rmt_wnd);      
   </details>
 </section>
 
+<section id="kcp-rto-estimate">
+  <h2>RTO 估算：超时重传的闹钟时间是怎么算出来的？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> §4.3；<code>Base/c/kcp.cs:550-568</code>（ikcp_update_ack）、<code>:813-817</code>（ACK 里带回 ts）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>核心矛盾：等太久（延迟高）vs 等太短（疯狂误判重发）</li>
+    <li>两个值：srtt（平均往返时间）+ rttval（抖动幅度）</li>
+    <li>灵魂公式：rto = srtt + max(interval, 4×rttval) —— 余量跟着抖动走</li>
+    <li>Jacobson/Karels 算法，TCP 同一套</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>第四章超时重传一直说"等 rto 时间（比如 200ms）"。这个 200ms 怎么来的？——<b>动态算出来的，跟着网络状况自适应</b>。</p>
+
+  <p><b>核心矛盾：两难。</b>等太短（50ms）：网络稍微一抖，包还在路上就以为丢了重发 → 疯狂白发浪费带宽。等太长（1000ms）：真丢了也干等 → 游戏卡死。理想是 <b>rto 比正常往返时间（RTT）稍微长一点，但不能太长</b>。但网络是动态的（RTT 时 30ms 时 80ms），所以 rto 必须动态调整。</p>
+
+  <h4>解法：维护两个值（移动平均）</h4>
+  <p><b>值 1 · rx_srtt —— "平滑平均往返时间"</b>。RTT 的移动平均，权重 <b>7/8 旧 + 1/8 新</b>。为什么要平均？单次 RTT 噪音太大（可能正好网络卡一下），平均掉噪音得到稳定趋势。7/8 旧值保证平滑，1/8 新值保证能跟上趋势。</p>
+  <p><b>值 2 · rx_rttval —— "往返时间的抖动幅度"</b>。每次拿"当前 RTT 和平均值的差距"做移动平均，权重 1/4。网络稳定 → rttval 小；网络抖动 → rttval 大。</p>
+
+  <h4>★ 灵魂公式：安全余量跟着抖动走</h4>
+  <pre><code>rto = rx_srtt + max(interval, 4 * rx_rttval);
+       ↑           ↑
+   平均往返时间    安全余量（取 interval 和 4 倍抖动的较大者）</code></pre>
+  <p><b>这就是整个算法的灵魂——安全余量跟着抖动走。</b>两组对比：</p>
+  <ul>
+    <li><b>网络 A 稳定</b>：srtt=30ms, rttval=2ms → rto = 30 + max(5, 8) = <b>38ms</b>。余量少，rto 紧贴 RTT，重传快响应灵敏。</li>
+    <li><b>网络 B 抖动</b>：srtt=30ms, rttval=20ms → rto = 30 + max(5, 80) = <b>110ms</b>。余量多，rto 远高于 RTT，避免一波动就误判丢包疯狂重发。</li>
+  </ul>
+  <blockquote><b>它自适应，不需人工调参。</b>稳定网络 rto 紧贴 RTT 重传快（游戏要的）；抖动网络 rto 自动放宽避免误判（防雪崩）。<b>一个公式同时处理两种网络状况</b>——这就是 TCP 用了 30 多年还在用它的原因。</blockquote>
+
+  <h4>Fantasy 的微调：SetMinrto(30)</h4>
+  <p>最后一行 <code>bound(rx_minrto, rto, 60000)</code> 把 rto 夹在 [30, 60000] 之间。Fantasy 配置 <code>SetMinrto(30)</code>——"不管算出来多小，最快 30ms 才触发重传"。防极端情况：RTT 极小（本地回环 1ms）时算出 rto 才 5ms，太激进，随便一点系统调度延迟就误判。30ms 下限兜底。</p>
+
+  <h4>RTT 怎么测出来？ts 字段走一圈</h4>
+  <p>回忆第一章 ts 字段：发货时写 <code>ts = current</code>，对端 ACK 时<b>原样带回</b>，收到 ACK 用 <code>current - ts</code> 就是 RTT（kcp.cs:813-817）。<b>不需要维护发送时间表——时间戳跟着包走一圈就回来了。</b></p>
+
+  <h3>证据</h3>
+  <p class="code-caption">ikcp_update_ack —— Jacobson/Karels 算法（kcp.cs:550-568）</p>
+  <pre><code><span class="kw">public static void</span> <span class="type">ikcp_update_ack</span>(<span class="type">IKCPCB</span>* kcp, <span class="kw">int</span> rtt)
+{
+    <span class="kw">if</span> (kcp-&gt;rx_srtt == <span class="num">0</span>)
+    {
+        kcp-&gt;rx_srtt = rtt;                          <span class="cmt">// 第一次：直接用</span>
+        kcp-&gt;rx_rttval = rtt / <span class="num">2</span>;
+    }
+    <span class="kw">else</span>
+    {
+        <span class="kw">long</span> delta = rtt - kcp-&gt;rx_srtt;
+        <span class="kw">if</span> (delta &lt; <span class="num">0</span>) delta = -delta;
+        kcp-&gt;rx_rttval = (<span class="kw">int</span>)((<span class="num">3</span> * kcp-&gt;rx_rttval + delta) / <span class="num">4</span>);   <span class="cmt">// 抖动平均 α=1/4</span>
+        kcp-&gt;rx_srtt = (<span class="num">7</span> * kcp-&gt;rx_srtt + rtt) / <span class="num">8</span>;              <span class="cmt">// 平滑平均 α=1/8</span>
+    }
+
+    rto = (<span class="kw">int</span>)(kcp-&gt;rx_srtt + <span class="type">_imax_</span>(kcp-&gt;interval, (<span class="kw">uint</span>)(<span class="num">4</span> * kcp-&gt;rx_rttval)));
+    kcp-&gt;rx_rto = (<span class="kw">int</span>)<span class="type">_ibound_</span>((<span class="kw">uint</span>)kcp-&gt;rx_minrto, (<span class="kw">uint</span>)rto, IKCP_RTO_MAX);
+}</code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:493-532</code>（§4.3 RTO 估算）</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">💡 一句话记住</span>
+    rto = 平均往返时间 + 安全余量。<b>安全余量跟着抖动走</b>（网络越抖余量越大），所以稳定网络重传快、抖动网络不误判。这是 Jacobson/Karels 算法，TCP 同一套。
+  </div>
+
+  <details class="qa">
+    <summary>自测：rto 公式里为什么用 rttval（抖动）而不是常数做安全余量？</summary>
+    <p>因为常数无法适应不同网络。<b>用抖动做余量，余量自动跟着网络状况走</b>：稳定网络 rttval 小余量小，rto 紧贴 RTT 重传快（游戏要的）；抖动网络 rttval 大余量大，rto 自动放宽，避免一波动就误判丢包疯狂重发导致雪崩。<b>一个公式同时处理两种网络状况，不需人工调参。</b></p>
+  </details>
+</section>
+
+<section id="kcp-config-tradeoff">
+  <h2>配置取舍：SetNoDelay(1,5,2,1) 四个数字为什么这么选？MTU=470 图啥？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> 第五章；<code>KCPSettings.cs:65-89</code>（KCPFactory）、<code>:15-62</code>（KCPSettings）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>SetNoDelay(1,5,2,1) 四个参数全是"极速模式"取向</li>
+    <li>interval=5 影响最大（决定响应粒度，CPU 开销 ×20）</li>
+    <li>nc=1 关拥塞控制（前面已展开，这里收口）</li>
+    <li>MTU=470 牺牲头部效率换通过率</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>一行代码决定全部性能取向</b>（KCPFactory.Create，KCPSettings.cs:69-78）：</p>
+  <pre><code><span class="kw">var</span> kcp = <span class="kw">new</span> <span class="type">Kcp</span>(conv, output, FANTASY_KCP_RESERVED_HEAD);
+kcp.<span class="type">SetNoDelay</span>(<span class="num">1</span>, <span class="num">5</span>, <span class="num">2</span>, <span class="num">1</span>);     <span class="cmt">// ★ 全部性能取向</span>
+kcp.<span class="type">SetWindowSize</span>(sendWnd, recvWnd);
+kcp.<span class="type">SetMtu</span>(mtu);
+kcp.<span class="type">SetMinrto</span>(<span class="num">30</span>);</code></pre>
+  <p>前面散落讲的 nodelay/nc/fastresend/退避/rtomin 全是从这一行来的，现在串起来收口。</p>
+
+  <h4>四个参数逐个拆</h4>
+  <table>
+    <tr><th>参数</th><th>值</th><th>默认</th><th>作用</th><th>代价</th></tr>
+    <tr><td><code>nodelay</code></td><td><b>1</b></td><td>0</td><td>RTO 退避 ×1.5 而非 ×2；首包 rtomin=0</td><td>重传更频繁</td></tr>
+    <tr><td><code>interval</code></td><td><b>5</b>ms</td><td>100</td><td>flush 间隔，决定<b>响应粒度</b></td><td>CPU 与调度开销 ×20</td></tr>
+    <tr><td><code>resend</code></td><td><b>2</b></td><td>0（关）</td><td>被跳过 2 次即快速重传</td><td>误判时白发一个包</td></tr>
+    <tr><td><code>nc</code></td><td><b>1</b></td><td>0</td><td><b>关闭拥塞控制</b></td><td>弱网下可能加剧拥塞</td></tr>
+  </table>
+  <ul>
+    <li><b>nodelay=1</b>：超时退避 ×1.5（100→150→225）比 TCP 的 ×2（100→200→400）更缓，恢复更快但重复发更多。首包 rtomin=0 超时判定更激进。</li>
+    <li><b>interval=5 ⭐ 影响最大</b>：默认 100ms 时 ACK 最快 100ms 才发，对端 RTT 测量和快重传全受拖累。5ms 让响应粒度极细。同时影响三件事：① ACK 发出频率 ② ts_flush 推进步长 ③ RTO 公式下限项 <code>rto = srtt + max(interval, 4×rttval)</code>。代价是 CPU 开销 ×20（每秒 flush 从 10 次变 200 次）。</li>
+    <li><b>resend=2</b>：快速重传阈值，被跳过 2 次就重传（默认 0 是关闭纯靠超时）。</li>
+    <li><b>nc=1</b>：关闭拥塞控制，前面已展开。cwnd 仍在算但不参与决策。</li>
+  </ul>
+
+  <p><b>四个参数全部指向同一方向：牺牲带宽效率和网络友好度，换取最低延迟。</b>这是 kcp 作者文档推荐的"极速模式"。适合实时对战/动作/帧同步；不适合文件传输/大量共享带宽/需与 TCP 公平竞争。<b>将来做大规模同屏或弱网，nc 是第一个该重新评估的。</b></p>
+
+  <h4>MTU=470 的理由（牺牲头部效率换通过率）</h4>
+  <p>470 远低于以太网 MTU 1500 和 kcp 默认 1400。作者两条经验理由：① 大包可能被路由器过滤 ② 小包在路由层优先级更高。<b>代价是头部开销占比升高</b>——24KCP头 + 5Fantasy头 + 8UDP头 + 20IP头 = 57 字节，在 470 载荷里占约 12%。</p>
+  <p>内网（Inner）设 1200、窗口 8192——内网稳定流量大可发大包开大窗口，客户端用不到，但体现"内外网差异化配置"思路。注意注释写 1400 但代码是 1200（注释没跟上代码）。</p>
+
+  <h3>证据</h3>
+  <p class="code-caption">KCPFactory.Create —— 配置发源地（KCPSettings.cs:69-78）</p>
+  <pre><code><span class="kw">public static</span> <span class="type">Kcp</span> <span class="type">Create</span>(<span class="type">NetworkTarget</span> networkTarget, <span class="kw">uint</span> conv,
+                         <span class="type">KcpCallback</span> output, <span class="kw">out</span> <span class="type">KCPSettings</span> kcpSettings)
+{
+    <span class="kw">var</span> kcp = <span class="kw">new</span> <span class="type">Kcp</span>(conv, output, FANTASY_KCP_RESERVED_HEAD);
+    kcpSettings = <span class="type">KCPSettings</span>.<span class="type">Create</span>(networkTarget);
+
+    kcp.<span class="type">SetNoDelay</span>(<span class="num">1</span>, <span class="num">5</span>, <span class="num">2</span>, <span class="num">1</span>);   <span class="cmt">// ← 这一行是全部性能取向</span>
+    kcp.<span class="type">SetWindowSize</span>(kcpSettings.SendWindowSize, kcpSettings.ReceiveWindowSize);
+    kcp.<span class="type">SetMtu</span>(kcpSettings.Mtu);
+    kcp.<span class="type">SetMinrto</span>(<span class="num">30</span>);
+    <span class="kw">return</span> kcp;
+}</code></pre>
+  <p><small>引用：<code>网络层三-KCP讲解.html:534-609</code>（第五章 配置取舍）</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 极速模式的边界</span>
+    <code>(1,5,2,1)</code> 是"用带宽换延迟"的极致取向。<b>适合实时对战/动作/帧同步（小流量低延迟）</b>；<b>不适合文件传输、大量玩家共享带宽、需与 TCP 公平竞争的场景</b>。弱网下 nc=1 全速发可能把链路打爆反而加剧丢包——做大规模同屏或弱网稳定时这是第一个该重新评估的参数。
+  </div>
+
+  <details class="qa">
+    <summary>自测：interval=5 为什么是四个参数里影响最大的？它同时影响什么？</summary>
+    <p>因为它<b>决定 flush 多久跑一次</b>，而 flush 是所有实际网络发送发生的地方。默认 100ms 时 ACK 最快 100ms 才发，对端的 RTT 测量和快重传判断全受拖累。5ms 让响应粒度极细。同时影响三件事：① <b>ACK 发出频率</b>（影响对端 RTT 测量和快重传）② <b>ts_flush 推进步长</b> ③ <b>RTO 公式下限项</b> <code>rto = srtt + max(interval, 4×rttval)</code>。代价是 CPU 开销 ×20（每秒 flush 从 10 次变 200 次）。</p>
+  </details>
+</section>
+
+<section id="kcp-integration-layer">
+  <h2>集成层：Fantasy 怎么驱动 KCP 这个被动算法？</h2>
+  <p class="meta">2026-07-29 · 相关：<code>网络层三-KCP讲解.html</code> 第六章 §6.1~6.5；<code>KCPClientNetwork.cs</code>（Update 驱动/定时器/零拷贝/断线策略）</p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>核心认知：KCP 算法是<b>被动</b>的，不认识 socket 不知道时间，只在你调 Update 时干活</li>
+    <li>集成层三件事：谁来调 Update / 多久调一次别空转 / 怎么处理输出（零拷贝）</li>
+    <li>三处 AddToUpdate(0)：有事件就立刻 flush，不等定时器</li>
+    <li>预留 5 字节：零分配零拷贝填 Fantasy 头</li>
+    <li>断线策略：积压超限快速失败比慢性死亡好</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p><b>KCP 算法本身是被动的</b>：它不认识 socket，不知道时间，只在你调 Update 时干活。所以 Fantasy 作为集成层要解决三个问题——驱动、定时器、输出处理。</p>
+
+  <h4>问题 1 · 谁来调 Update</h4>
+  <p><code>KCPClientNetworkUpdateSystem</code>（:34）注册了 Update 系统，每帧调 <code>CheckUpdate()</code>。<b>这就是为什么 NetworkProtocolFactory 里 KCP 写 <code>Entity.Create&lt;KCPClientNetwork&gt;(scene, false, true)</code> 而 TCP 是 false</b>——最后参数是"是否注册 Update 系统"。</p>
+  <blockquote><b>TCP 全靠 socket 事件驱动</b>（数据来了内核通知，不需轮询）；<b>KCP 必须有心跳驱动</b>（重传和 flush 是时间触发的，必须有人定期喊它干活）。<b>不注册 Update 系统 KCP 就废了。</b></blockquote>
+
+  <h4>问题 2 · 定时器：别每帧都 flush</h4>
+  <p>朴素做法每帧调 Update，但 <code>ikcp_check</code> 能告诉你"下次真正需要 flush 的时刻"，可跳过大量空转。Fantasy 用 SortedSet 实现时间轮（:485-545）：</p>
+  <pre><code><span class="kw">private void</span> <span class="type">KcpUpdate</span>()
+{
+    <span class="kw">var</span> nowTime = TimeNow;
+    _kcp.<span class="type">Update</span>(nowTime);
+    <span class="type">AddToUpdate</span>(_kcp.<span class="type">Check</span>(nowTime));   <span class="cmt">// 把下次时刻登记进去</span>
+}</code></pre>
+  <p><b>两个关键设计</b>：</p>
+  <ul>
+    <li><b>_updateMinTime 短路优化</b>：CheckUpdate 每帧先比一次它，没到就整个跳过，不遍历 SortedSet。大多数帧空转，这个短路省掉大量无谓遍历。</li>
+    <li><b>AddToUpdate(0) = 立刻 flush</b>：在三处被调用——Input 收到数据后、SendMemoryStream 发送后。<b>意思是"有事件发生，别等定时器，立刻 flush"</b>。这是低延迟的另一半：定时器保证兜底（5ms），事件驱动保证即时。回忆第三章——收到 PUSH 后立刻 AddToUpdate(0) 就是为了尽快把 ACK 发回去，ACK 延迟直接影响对端 RTT 测量和快重传判断。</li>
+  </ul>
+
+  <h5>聪明细节：用相对时间避开回绕</h5>
+  <p><code>private uint TimeNow =&gt; (uint)(TimeHelper.Now - _startTime);</code>（:67）。<b>_startTime 在 Connect 时设为当时的绝对时间</b>，所以 TimeNow 是"从连接开始算的相对时间"，uint 从 0 开始计，要跑满 2³²ms（<b>约 49.7 天</b>）才回绕。<b>一个连接活不了这么久，用相对时间把回绕从"必然发生"降级为"几乎不可能"</b>，再加上 _itimediff 兜底，双重保险。</p>
+
+  <h4>★ 问题 3 · 零拷贝：预留 5 字节（整个集成层最巧的一处）</h4>
+  <p><b>背景</b>：每个 UDP 包前要加 5 字节 Fantasy 头（1 字节 header + 4 字节 channelId）。朴素做法：KCP 输出 buffer → 申请大 5 字节的新 buffer → 拷过去填头 → <b>每包一次分配 + 一次拷贝</b>。</p>
+  <p><b>Fantasy 做法：让 KCP 从一开始就写在偏移 5 的位置</b>：</p>
+  <pre><code><span class="kw">public const int</span> FANTASY_KCP_RESERVED_HEAD = <span class="num">5</span>;
+<span class="kw">var</span> kcp = <span class="kw">new</span> <span class="type">Kcp</span>(conv, output, FANTASY_KCP_RESERVED_HEAD);
+
+<span class="cmt">// Kcp.Update 里：</span>
+<span class="kw">fixed</span> (<span class="kw">byte</span>* ptr = &amp;_buffer[_reserved])   <span class="cmt">// ← 从第 5 字节开始写</span>
+{
+    <span class="type">ikcp_update</span>(_kcp, current, ptr, _buffer, _output);  <span class="cmt">// 算法在 ptr 写，回调拿完整 _buffer</span>
+}</code></pre>
+  <p>于是回调里<b>原地填头</b>（:698-717）：</p>
+  <pre><code><span class="kw">private unsafe void</span> <span class="type">KcpSpanCallback</span>(<span class="kw">byte</span>[] buffer, <span class="kw">int</span> count)
+{
+    <span class="kw">fixed</span> (<span class="kw">byte</span>* p = buffer)
+    {
+        p[<span class="num">0</span>] = KcpHeaderReceiveData;      <span class="cmt">// 原地写第 0 字节</span>
+        *(<span class="kw">uint</span>*)(p + <span class="num">1</span>) = ChannelId;       <span class="cmt">// 原地写第 1~4 字节</span>
+    }
+    <span class="type">SendAsync</span>(buffer, <span class="num">0</span>, count + <span class="num">5</span>);        <span class="cmt">// 从 0 发 count+5 字节</span>
+}</code></pre>
+  <p><b>内存布局</b>：算法在偏移 5 写数据，回调原地填前 5 字节，<b>零分配、零拷贝</b>。</p>
+  <pre><code>_buffer:
+┌───┬────────────┬─────────────────────────────────────┐
+│ 0 │  1  2  3 4 │ 5 ...                               │
+├───┼────────────┼─────────────────────────────────────┤
+│hdr│ channelId  │ ← KCP 算法从这里开始写（ptr）         │
+└───┴────────────┴─────────────────────────────────────┘
+  ↑   ↑            ↑
+  └───┴────────────┘ 回调里原地填这 5 字节</code></pre>
+  <blockquote><b>"预留头部空间"是网络库标准做法</b>。Netty 的 ByteBuf 有 writerIndex 前预留区，Linux 的 skb 有 headroom，同一思路——<b>在最内层分配内存时就为外层协议头留出空间</b>，让每层协议原地填头而非层层拷贝。判断标准：如果你在某一层写了 Array.Copy 只为腾出前缀空间，那就该用预留了。</blockquote>
+
+  <h4>断线策略：WaitSendCount 超限</h4>
+  <p>SendMemoryStream（:589-611）每次发送前检查：</p>
+  <pre><code><span class="kw">if</span> (_kcp.WaitSendCount &gt; _maxSndWnd)
+{
+    Log.<span class="type">Warning</span>($<span class="str">"ERR_KcpWaitSendSizeTooLarge ..."</span>);
+    <span class="type">Dispose</span>();    <span class="cmt">// ★ 直接断开</span>
+    <span class="kw">return</span>;
+}</code></pre>
+  <p><code>WaitSendCount = nsnd_buf + nsnd_que</code>（已发未确认 + 排队待发总包数）。<code>_maxSndWnd</code> 客户端是 <code>2048*2048*7</code>。</p>
+  <p><b>为什么积压要断线而不是等？</b>因为 KCP 重传是<b>无限的</b>——只要不 Dispose 就一直重传。积压持续增长说明链路已<b>实质不可用</b>，继续等只会内存增长、flush 遍历越来越长、玩家看着卡死画面。<b>快速失败比慢性死亡好</b>，断开走重连流程比让玩家盯卡死界面强。</p>
+  <p><b>finally 还池细节</b>：无论 Send 成功还是抛异常都归还 MemoryStream 到池。能还池是因为 <code>_kcp.Send</code> 内部把数据 memcpy 进了自己的 segment，不再引用外部 buffer。<b>这是"拷贝换所有权清晰"的取舍</b>，和零拷贝并不矛盾：那边省输出路径拷贝，这边花输入路径拷贝，后者换来内存池立刻回收。</p>
+
+  <h3>证据</h3>
+  <p><small>引用：<code>网络层三-KCP讲解.html:611-803</code>（第六章 集成层 §6.1~6.5）；具体：Update 驱动 :615-627 / 定时器 :629-682 / 零拷贝 :684-741 / 断线策略 :743-773 / Input 完整链路 :775-803</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">💡 集成层 = 算法到工程的桥梁</span>
+    KCP 算法是被动纯函数（不知道时间、socket），<b>集成层负责"喂数据、喂时间、处理输出"</b>。三处 AddToUpdate(0) 实现事件驱动即时性、SortedSet+短路实现定时器兜底、预留 5 字节实现零拷贝、WaitSendCount 实现快速失败。<b>这是从"读懂算法"到"能在工程里跑起来"的关键一层。</b>
+  </div>
+
+  <details class="qa">
+    <summary>自测：为什么 KCP 的 Entity.Create 第三个参数传 true，TCP 传 false？</summary>
+    <p>最后那个参数是"是否注册 Update 系统"。<b>TCP 全靠 socket 事件驱动</b>（数据来了内核通知，不需轮询）；<b>KCP 必须有心跳驱动</b>——重传和 flush 是时间触发的，必须有人定期喊它干活。所以 KCP 必须注册 Update 系统每帧 CheckUpdate，不注册就废了。TCP 不需要。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：三处 AddToUpdate(0) 为什么重要？为什么不能等下一个 5ms 定时器？</summary>
+    <p>因为这三处分别是 Input 收到数据后、SendMemoryStream 发送后——都是"有事件发生"的时刻。<b>立刻 flush 意味着低延迟的另一半</b>：定时器保证兜底（最多 5ms），事件驱动保证即时。比如收到 PUSH 后立刻 AddToUpdate(0) 就是为了尽快把 ACK 发回去——<b>ACK 延迟直接影响对端 RTT 测量和快重传判断</b>，不能等下一个 5ms 定时器。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：预留 5 字节省掉了什么开销？不用预留的话 KcpSpanCallback 要怎么写？</summary>
+    <p>省掉了<b>每包一次内存分配 + 一次拷贝</b>（朴素做法要申请大 5 字节的新 buffer 再拷过去填头）。不用预留的话，回调里得自己 new 一个新数组、Array.Copy 把 KCP 输出的数据拷到偏移 5 之后、再在前面填 5 字节头——<b>分配 + 拷贝双份开销</b>，每个 UDP 包都来一遍。预留让算法从一开始就写在偏移 5，回调原地填前 5 字节，零分配零拷贝。</p>
+  </details>
+
+  <details class="qa">
+    <summary>自测：WaitSendCount 超限为什么选择断开而不是阻塞等待？</summary>
+    <p>因为 KCP 重传是<b>无限的</b>——只要不 Dispose 就一直重传。积压持续增长说明链路已<b>实质不可用</b>，继续等只会：内存持续增长、每次 flush 遍历越来越长的 snd_buf、玩家盯着卡死画面。<b>快速失败比慢性死亡好</b>，断开后走重连流程，比让玩家盯卡死界面强。</p>
+  </details>
+</section>
+
 </main>
 </body>
 </html>
