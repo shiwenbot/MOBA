@@ -1,0 +1,1612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Box2DSharp 0.6 讲解</title>
+<link rel="stylesheet" href="reading-notes.css">
+<link rel="stylesheet" href="toc.css">
+<script src="toc.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="网络层一-TCP讲解.html">网络层 · TCP</a>
+    <a href="网络层二-UDP讲解.html">UDP</a>
+    <a href="网络层三-KCP讲解.html">KCP</a>
+    <a class="cur" href="Box2D讲解.html">Box2DSharp</a>
+  </div>
+  <h1>Box2DSharp 0.6 讲解</h1>
+  <div class="sub">
+    第三方库源码阅读 · <code>D:\Unity\Box2DSharp-src</code> tag <code>0.6</code>（commit <code>0547ad7</code>）<br>
+    19057 行 / 110 文件 · 目标是学会正确使用这个库
+  </div>
+</header>
+
+<div class="warn">
+<b>版本前提：必须 checkout 0.6</b>
+上游 master 已是 <code>3.0.0-alpha1</code>（Box2D v3 重写版），API 完全不同 ——
+v3 是 ID 化的 <code>static void SetLinearVelocity(BodyId, Vec2)</code>，
+0.6 是对象 + 属性的 <code>Body.LinearVelocity</code>。<br><br>
+版本核对证据：命名空间 9 个一致（含 <code>Box2DSharp.Ropes</code>）、<code>Body.LinearVelocity</code> setter 为
+<code>internal</code>、<code>IContactListener</code> / <code>Fixture</code> 存在。
+</div>
+
+<h2 id="ch0">零、怎么用这份教材</h2>
+
+<p>手里有 19057 行源码和 61 个官方示例，缺的不是知识是路径。这一章就是路径。</p>
+
+<h3>推荐顺序（注意源码在最后）</h3>
+
+<div class="flow"><b>四步</b>
+
+  <i>1.</i> <b>略读本教材</b>          2 小时     建立概念地图，不求记住行号
+  <i>2.</i> <b>跑 Testbed 看现象</b>    半天       让抽象概念有画面锚点
+  <i>3.</i> <b>写小项目撞问题</b>       2-3 天     产生具体问题
+  <i>4.</i> <b>按需精读源码</b>         随时       用源码回答问题，不用它建立理解
+</div>
+
+<div class="warn">
+<b>为什么源码放最后</b>
+直觉上「读教材 → 读源码 → 动手」更顺，但实际会卡住。<br><br>
+现在直接读 <code>ContactSolver.SolveVelocityConstraints</code> 那 350 行，你看到的是手工内联的标量运算
+（<code>vAX/vAY/wA</code> 而不是 <code>Vector2</code>），算法语义被优化痕迹埋住。
+没有「我见过这个现象」做锚点，读它就是在背代码。<br><br>
+反过来，在 Testbed 里把 <code>VelocityIterations</code> 调到 1、<b>亲眼看见金字塔塌下来</b>之后，
+再读那个循环，每一行都有意义。<br><br>
+<b>源码是用来回答问题的，不是用来建立理解的。</b>
+</div>
+
+<h3>第一步：教材怎么读</h3>
+
+<p><b>略读，不要精读。</b>目标是知道「有哪些概念、坑在哪」。</p>
+
+<table>
+<tr><th>章</th><th>第一遍怎么处理</th></tr>
+<tr><td><b>第二章（单位尺度）</b></td><td><b>认真看。</b>唯一「定错了后面全部重做」的决策，必须在写第一行代码前搞定</td></tr>
+<tr><td><b>第十二章（易错点 15 条）</b></td><td><b>认真看。</b>当 checklist 用，写代码时对照</td></tr>
+<tr><td>第五章（求解器）</td><td><b>第一遍跳过。</b>跑完 Testbed 再回来读，效率差好几倍</td></tr>
+<tr><td>第八章（CCD）</td><td>知道「默认就开着」即可，细节按需</td></tr>
+<tr><td>其余</td><td>扫一遍，记住小标题就够</td></tr>
+</table>
+
+<h3>第二步：Testbed 该跑哪些</h3>
+
+<p>61 个示例不要都跑。按「理解引擎」和「贴近俯视角小球/弹球场景」两个标准挑出来的：</p>
+
+<table>
+<tr><th>示例</th><th>演示什么</th><th>对应章节</th></tr>
+<tr><td><code>HelloWorld</code></td><td>最小骨架</td><td>第十章</td></tr>
+<tr><td><b><code>BoxStack</code></b> / <b><code>Pyramid</code></b></td><td>堆叠稳定性 —— <b>三个必做实验在这里</b></td><td>第五章</td></tr>
+<tr><td><b><code>CollisionFiltering</code></b></td><td>category / mask / group 三件套的实际效果</td><td>第六章</td></tr>
+<tr><td><b><code>Sensors</code></b></td><td>「能穿过但要知道谁穿过」的标准做法</td><td>第六章</td></tr>
+<tr><td><b><code>CharacterCollision</code></b></td><td>角色碰撞 + 幽灵顶点，滑过地形接缝不被绊住</td><td>第三章</td></tr>
+<tr><td><code>Platformer</code></td><td>单面碰撞实战</td><td>第三章</td></tr>
+<tr><td><b><code>BulletTest</code></b> / <code>ContinuousTest</code></td><td>穿隧与 CCD，直观看到不开 CCD 时子弹穿墙</td><td>第八章</td></tr>
+<tr><td><code>Tumbler</code></td><td>kinematic 旋转容器</td><td>第三章</td></tr>
+<tr><td><code>PinBall</code></td><td>弹球台完整实现</td><td>综合</td></tr>
+<tr><td><code>DynamicTree</code></td><td>宽相位树的可视化</td><td>第四章</td></tr>
+</table>
+
+<h4>三个必做实验</h4>
+
+<p>都在 <code>BoxStack</code> 或 <code>Pyramid</code> 里做。Testbed 有 UI 滑条可实时调（范围 0-50），不用改代码重编译。</p>
+
+<ul class="checklist">
+<li><span class="n">1</span><span><code>VelocityIterations</code> 调到 <b>1</b> → 看堆叠塌下来。理解<b>为什么必须迭代</b></span><span class="ln">第五章</span></li>
+<li><span class="n">2</span><span>关掉 <b>warm starting</b> → 看堆叠变软、下沉。理解<b>跨帧冲量的价值</b></span><span class="ln">第五章</span></li>
+<li><span class="n">3</span><span>打开 <b>contact 点显示</b> → 找到那些「AABB 碰上但没 touching」的候选对。理解<b>Contact 存在 ≠ 正在接触</b></span><span class="ln">第四章</span></li>
+</ul>
+
+<p>第三个实验最重要 —— 那是第四章的核心概念，<b>看一眼比读三遍文字有用</b>。</p>
+
+<h3>第三步：小项目怎么定范围</h3>
+
+<div class="warn">
+<b>建议用纯控制台，不要用 Unity</b>
+Unity 会引入渲染、Prefab、生命周期一堆无关变量，出问题时你分不清是 Box2D 的问题还是 Unity 的问题。<br><br>
+纯控制台 + <code>Console.WriteLine</code> 打坐标就够了，<code>test/ConsoleTest/</code> 有现成骨架可以抄。
+</div>
+
+<p>一次只加一样，每步都能独立跑通：</p>
+
+<table>
+<tr><th>版本</th><th>做什么</th><th>会学到</th></tr>
+<tr><td><code>v1</code></td><td>一个球落到地面停住</td><td>单位尺度、density、BodyType 默认值</td></tr>
+<tr><td><code>v2</code></td><td>加四面墙，球在盒子里弹</td><td><code>Restitution</code> / <code>Friction</code> 的手感与混合律</td></tr>
+<tr><td><code>v3</code></td><td>两个球互相碰</td><td>contact 事件、Begin/EndContact 的真实时机</td></tr>
+<tr><td><code>v4</code></td><td>加一个 sensor 区域，进出打日志</td><td>sensor 与实体碰撞的区别、PreSolve 不触发</td></tr>
+<tr><td><code>v5</code></td><td>加键盘控制移动</td><td>力 vs 冲量 vs 直接设速度，三者的差别</td></tr>
+<tr><td><b><code>v6</code></b></td><td><b>存档 / 读档</b>：手动保存所有 body 状态并恢复</td><td><b>见下</b></td></tr>
+</table>
+
+<div class="note">
+<b>v6 是关键一步</b>
+你会发现恢复后的第一帧结果和原来<b>不完全一样</b> —— 撞上的正是第五章那个 warm starting 累积冲量问题：
+冲量存在 <code>Contact.Manifold</code>（internal 字段），你的存档没存它，也没有公开 API 能存。<br><br>
+自己撞一次，对「跨帧隐藏状态」的理解就是第一手的了。这个概念在任何需要回滚、存档、
+或确定性重放的场景里都是核心难点。
+</div>
+
+<h3>第四步：源码按需读</h3>
+
+<p>做到这一步，你手里会有一串具体问题。那时候读源码是<b>查</b>不是<b>学</b>：</p>
+
+<table>
+<tr><th>你会遇到的问题</th><th>去读</th></tr>
+<tr><td>为什么两个方块之间有一条缝</td><td><code>Settings.cs:38-47</code>（LinearSlop / PolygonRadius）</td></tr>
+<tr><td>为什么物体尺寸小了就抖</td><td>第二章 + <code>Settings.cs</code> 全部常量</td></tr>
+<tr><td>为什么恢复状态后结果不一样</td><td><code>ContactSolver.cs:93-97</code>、<code>696-719</code></td></tr>
+<tr><td>为什么改了 <code>Density</code> 质量没变</td><td><code>Body.cs:1042</code>（<code>ResetMassData</code> 是 private）</td></tr>
+<tr><td>为什么在回调里删物体崩了 / 没反应</td><td><code>World.cs:441</code>、<code>268-269</code></td></tr>
+<tr><td>为什么物体不睡，或睡了推不动</td><td><code>Island.cs:267-307</code>（整岛判定）</td></tr>
+<tr><td>为什么我的射线只命中最近的一个</td><td>第六章 RayCast 四种返回值</td></tr>
+<tr><td>为什么 <code>QueryAABB</code> 返回了没碰到的东西</td><td>第六章（fat AABB 保守超集）</td></tr>
+</table>
+
+<h3>明确不用读的部分</h3>
+
+<div class="tip">
+<b>范围提醒</b>
+目标是<b>正确使用这个库</b>，不是成为物理引擎作者。这两件事需要的深度差很多。
+</div>
+
+<table>
+<tr><th>模块</th><th>规模</th><th>为什么可以跳过</th></tr>
+<tr><td><code>src/Dynamics/Joints/</code></td><td>5370 行</td><td>各种约束的数学推导。<b>用到哪个读哪个的注释即可</b>，不用读实现</td></tr>
+<tr><td>GJK 单纯形演化</td><td><code>DistanceAlgorithm.cs</code></td><td>知道「它算最近距离、最多 20 次迭代」就够</td></tr>
+<tr><td>TOI 的割线法求根</td><td><code>TimeOfImpact.cs</code></td><td>知道「三层嵌套、比普通窄相位贵 1-2 个数量级」就够</td></tr>
+<tr><td>2×2 block solver 四个 case</td><td><code>ContactSolver.cs:489-684</code></td><td>是对单个接触 patch 两点的精确联立求解，理解了单点版本就够</td></tr>
+<tr><td><code>src/Ropes/</code></td><td>—</td><td>绳索模拟，独立子系统</td></tr>
+<tr><td><code>DynamicTree</code> 的 SAH 与旋转细节</td><td>—</td><td>知道「插入用启发式下降、插删后 AVL 旋转」就够</td></tr>
+</table>
+
+<h3>时间估算</h3>
+
+<div class="flow"><b>一周计划</b>
+
+  教材略读              2 小时
+  Testbed + 三个实验     半天
+  小项目 v1-v6          2-3 天
+  源码按需查            随时
+
+  <b>一周内你对这个库的掌握会超过大部分「用过 Box2D」的人</b>
+</div>
+
+<div class="note">
+<b>做完 v6 再谈接入现有项目</b>
+那时候你能自己回答这几个问题：我的场景需不需要真实碰撞响应？需不需要旋转？
+回滚要不要 bit-exact？<br><br>
+这几个答案一定，接入方案就是道选择题。也有可能结论是「这个场景用不着物理引擎」——
+那同样是有效结论，省下的时间可以投到别处。
+</div>
+
+<h2>本篇写给谁</h2>
+
+<p>假设你写过多年 C#，但没系统读过物理引擎。所以不解释什么是向量点积，但会解释「为什么位置求解器要单独存在」这类只有读源码才能说清的事。</p>
+
+<p>19057 行不通读。本篇覆盖的是<b>正确使用一个 2D 物理引擎所必须理解的部分</b>：单位约定、对象模型、碰撞管线、求解器、生命周期规则。Joints 的数学推导（5370 行）、Rope、GJK/TOI 的具体算法全部跳过 —— 用到时再查。</p>
+
+<div class="tip">
+<b>贯穿全篇的一条元信息</b>
+这个库是 C++ Box2D 2.4 的手工移植，移植过程产生了一批<b>与主流 Box2D 文献不符</b>的细节
+（可见性变化、常量改名、去掉的排序步骤、C# struct 默认值的绕法）。
+这类差异会集中列在最后一章的对照表里，是你以后查资料时最容易被坑的地方。
+</div>
+
+<h2>一、物理引擎在解什么问题</h2>
+
+<p>先建立心智模型，否则后面的代码只是一堆函数名。</p>
+
+<h3>核心矛盾：离散时间 vs 连续世界</h3>
+
+<p>真实世界里物体连续运动、碰撞瞬间产生约束力。计算机只能按帧采样。所有物理引擎的复杂度都来自这一个矛盾，而它衍生出三个必须解决的子问题：</p>
+
+<div class="flow"><b>一帧的三件事</b>
+
+  <i>1. 积分</i>   已知速度和力，算出「如果没有障碍，物体会在哪」
+             v += a·dt;  p += v·dt
+                │
+                │  问题：算出来的位置可能已经<b>穿进</b>别的物体了
+                ▼
+  <i>2. 检测</i>   找出哪些物体对可能碰撞，算出接触点与法线
+             宽相位（粗筛）→ 窄相位（精算）
+                │
+                │  问题：知道穿了，但该怎么把它们分开？
+                ▼
+  <i>3. 求解</i>   算出需要多大的力/冲量才能让它们不穿透
+             速度求解（不再继续穿入）+ 位置求解（消除已有穿透）
+</div>
+
+<p>这个顺序不能改。而每一步都有「精确但慢」和「近似但快」的选择，Box2D 的每个设计决策基本都可以还原成这个权衡。</p>
+
+<h3>为什么「求解」需要迭代</h3>
+
+<p>这是最不直观的一步。单个接触点的约束能一次解析求出，但接触点之间<b>互相耦合</b>：</p>
+
+<div class="q">
+<b>三个箱子叠在地上</b><br><br>
+解完「箱子 A 与地面」的接触，A 的速度变了 → 「A 与 B」的接触被破坏 →
+解完 A-B，B 的速度变了 → 「B 与 C」被破坏 → 解完 C，又影响回 B……<br><br>
+所以只能反复扫描，让误差逐轮衰减。这叫 <b>Gauss-Seidel 迭代</b>，是全库最核心的算法思想。
+</div>
+
+<p>更本质的困难：接触是<b>不等式</b>约束（可以推不能拉），构成 LCP 而非线性方程组。哪些接触点实际承力事先未知，必须靠迭代加钳制来「发现」。</p>
+
+<h3>三个层次的近似</h3>
+
+<p>理解了这三层，你就知道 Box2D 的精度边界在哪：</p>
+
+<table>
+<tr><th>层次</th><th>近似手段</th><th>代价</th></tr>
+<tr><td>碰撞检测</td><td>宽相位用 AABB 粗筛，窄相位才算真实几何</td><td>AABB 是保守超集，会产生「还没真接触」的候选对</td></tr>
+<tr><td>约束求解</td><td>固定次数迭代，不求收敛到精确解</td><td>迭代不足时堆叠会「软」、会下沉</td></tr>
+<tr><td>穿透处理</td><td>容许一个固定的微小穿透量（slop）</td><td>物体之间总有一条极小的缝或重叠</td></tr>
+</table>
+
+<p>第三条尤其重要：<b>Box2D 从不追求「零穿透」</b>，它追求「穿透量稳定在一个可接受的小值」。理解这一点，后面很多常量（<code>LinearSlop</code>、<code>Baumgarte</code>）就都讲得通了。</p>
+
+<h3>本篇的阅读地图</h3>
+
+<div class="flow"><b>章节对应关系</b>
+
+  第零章  <b>怎么用这份教材</b>    ← 路径、Testbed 实验、小项目 v1-v6、不用读什么
+  第二章  <b>单位与尺度</b>      ← 上面所有「小值」都以米为单位，这是第一个坑
+  第三章  <b>对象模型</b>        World / Body / Fixture / Shape 各管什么
+  第四章  <b>碰撞检测</b>        对应上图第 2 步
+  第五章  <b>求解器</b>          对应上图第 3 步
+  第六章  <b>过滤与查询</b>      控制「哪些对该被检测」
+  第七章  <b>Island 与休眠</b>    性能优化的两个主要机制
+  第八章  <b>连续碰撞</b>        离散采样漏掉高速物体时的补救
+  第九章  <b>生命周期与锁定</b>   什么时候不能改世界（最容易踩的坑）
+  第十章  <b>最小范例 + 对照表</b>
+</div>
+
+<!-- CH1 -->
+<h2>二、单位与尺度：第一个必须先知道的坑</h2>
+
+<p><code>Settings.cs</code> 开头第 13-14 行有一句注释，它是整个库最重要的一句话：</p>
+
+<div class="q">
+Global tuning constants based on <b>meters-kilograms-seconds (MKS)</b> units.
+</div>
+
+<p>这不是「建议」，是<b>硬编码前提</b>。所有容差常量都以「米」为量纲写死了：</p>
+
+<h3>全部尺度相关常量</h3>
+
+<table>
+<tr><th>常量</th><th>值（米）</th><th>行号</th><th>它在假设什么</th></tr>
+<tr><td><code>LengthUnitsPerMeter</code></td><td>1.0</td><td><code>:11</code></td><td>换算基准，下面几个都乘它</td></tr>
+<tr><td><code>LinearSlop</code></td><td><b>0.005</b></td><td><code>:38</code></td><td>「容许的穿透量」应当<b>数值上显著、视觉上不显著</b></td></tr>
+<tr><td><code>PolygonRadius</code></td><td>0.01</td><td><code>:47</code></td><td>多边形 skin 厚度 = <code>2 * LinearSlop</code></td></tr>
+<tr><td><code>AABBExtension</code></td><td>0.1</td><td><code>:29</code></td><td>物体单帧移动量通常远小于 0.1</td></tr>
+<tr><td><code>MaxLinearCorrection</code></td><td>0.2</td><td><code>:59</code></td><td>单轮位置修正不该超过 0.2</td></tr>
+<tr><td><code>MaxTranslation</code></td><td><b>2.0</b></td><td><code>:67</code></td><td>单帧位移不该超过 2 米</td></tr>
+<tr><td><code>LinearSleepTolerance</code></td><td>0.01</td><td><code>:90</code></td><td>速度低于 0.01 m/s 算静止</td></tr>
+<tr><td><code>AngularSlop</code></td><td>2°</td><td><code>:42</code></td><td>角度容差</td></tr>
+<tr><td><code>MaxRotation</code></td><td>90°</td><td><code>:73</code></td><td>单帧转角不该超过 90°</td></tr>
+</table>
+
+<p><code>LinearSlop</code> 的注释（<code>:36-37</code>）把设计意图说得最清楚：<i>A small length used as a collision and constraint tolerance. Usually it is chosen to be numerically significant, but visually insignificant.</i></p>
+
+<p><b>「数值上显著」</b>意味着它不能太小，否则浮点误差会淹没它；<b>「视觉上不显著」</b>意味着它相对物体尺寸要足够小。这两个要求同时成立，只有当物体尺寸在<b>米的量级</b>时才成立。</p>
+
+<h3>经典错误：用像素当单位</h3>
+
+<div class="warn">
+<b>如果一个角色是 50 单位高</b>
+你的直觉是「50 像素高的角色」，但引擎理解成「50 米高的角色」——
+一栋 16 层楼。于是：<br><br>
+<b>① slop 相对变得无意义。</b>0.005 相对 50 是 万分之一 —— 位置求解器容许的穿透小到被浮点误差淹没，
+求解器会在临界点反复抖动。<br><br>
+<b>② 重力看起来像慢动作。</b><code>-9.8 m/s²</code> 作用在「50 米高的角色」上，
+下落一个身位要 3 秒多。你会本能地把重力调到 -300 来「修正」，然后掉进下一个坑。<br><br>
+<b>③ <code>MaxTranslation = 2.0</code> 变成致命钳制。</b>角色想以「每帧 5 像素」移动，
+引擎认为你要每帧移动 5 米，接近钳制阈值；跑得再快一点就被<b>静默限速</b>。
+</div>
+
+<p>反方向的错误同样存在：</p>
+
+<div class="warn">
+<b>如果物体只有 0.05 单位大</b>
+<code>PolygonRadius</code> 的 0.01 skin 占了物体尺寸的 20% —— 两个方块之间会有一条肉眼可见的、
+占体积五分之一的缝。而 <code>LinearSlop</code> 的 0.005 占 10%，物体会明显互相嵌入。<br><br>
+更糟的是 <code>PolygonShape.Set</code> 会焊接距离平方小于 <code>(0.5 * LinearSlop)²</code> 的顶点
+（<code>PolygonShape.cs:83-84</code>）—— 小物体的顶点可能被<b>直接焊掉</b>，形状静默退化。
+</div>
+
+<h3>推荐的尺寸范围</h3>
+
+<p>源码没有直接写「物体应该多大」，但可以从常量反推：</p>
+
+<div class="flow"><b>各常量隐含的安全区间</b>
+
+  0.005  LinearSlop           ← 物体尺寸要远大于这个（至少 20 倍 → 0.1 米）
+  0.01   PolygonRadius
+  0.1    AABBExtension        ← 单帧位移最好小于这个（否则每帧都重建树节点）
+  0.2    MaxLinearCorrection
+  2.0    MaxTranslation       ← 单帧位移的硬上限
+
+  <b>结论：物体尺寸落在 0.1 ~ 10 米区间最安全</b>
+  这正好是「弹珠到卡车」的范围 —— Box2D 就是按这个调的
+</div>
+
+<h3>正确做法：物理单位与渲染单位分离</h3>
+
+<p>不要试图改 <code>LengthUnitsPerMeter</code> 去适配你的像素 —— 它是 <code>const</code>，改它要重新编译，而且所有派生常量的相对关系是精心调过的。</p>
+
+<div class="tip">
+<b>标准解法</b>
+物理世界用米，渲染时乘一个缩放系数。比如 1 米 = 32 像素：<br><br>
+<code>screenPos = physicsPos * 32f;</code><br><br>
+一个 1.8 米高的角色在物理世界里就是 1.8，渲染出来 57.6 像素。
+重力保持 <code>-9.8</code>，手感直接就是真实的。<br><br>
+Unity 用户注意：Unity 的默认单位本身就是米，所以只要不乱缩放，天然对齐。
+</div>
+
+<h3>为什么这一章放在最前面</h3>
+
+<p>因为尺度错误的症状<b>看起来完全不像尺度问题</b>：物体抖动、堆叠不稳、穿透、速度莫名被限、重力手感不对。你会去调迭代次数、调 <code>Baumgarte</code>、调重力，全都治不了根。</p>
+
+<p>而它又是唯一一个「一开始定错、后面全部要重做」的决策。</p>
+
+<!-- CH2 -->
+<h2>三、对象模型：World / Body / Fixture / Shape</h2>
+
+<h3>为什么是四层而不是两层</h3>
+
+<p>新手常问「为什么不能直接给物体一个形状」。四层各管一件事：</p>
+
+<table>
+<tr><th>层</th><th>管什么</th><th>关键字段</th></tr>
+<tr><td><code>World</code></td><td>容器 + 调度：重力、Step、宽相位树、接触管理</td><td><code>BodyList</code>、<code>ContactManager</code></td></tr>
+<tr><td><code>Body</code></td><td><b>运动状态与质量</b>，没有任何几何字段</td><td><code>LinearVelocity</code>、<code>_mass</code>、<code>Transform</code>、<code>Sweep</code></td></tr>
+<tr><td><code>Fixture</code></td><td><b>几何 + 表面性质</b>，是宽相位的注册单位</td><td><code>Shape</code>、<code>Density</code>、<code>Friction</code>、<code>Restitution</code>、<code>Filter</code>、<code>IsSensor</code></td></tr>
+<tr><td><code>Shape</code></td><td><b>纯几何</b>，可独立于世界存在</td><td>顶点 / 半径</td></tr>
+</table>
+
+<p><code>Fixture</code> 的类头注释（<code>Fixture.cs:13-17</code>）就是这层存在的理由：</p>
+
+<div class="q">
+A fixture is used to attach a shape to a body for collision detection. A fixture inherits its transform from its parent.
+Fixtures hold additional <b>non-geometric</b> data such as friction, collision filters, etc.<br>
+@warning you cannot reuse fixtures.
+</div>
+
+<h3>一个 Body 挂多个 Fixture 的三个理由</h3>
+
+<ol>
+<li><b>表达凹形。</b><code>PolygonShape</code> 必须凸（<code>PolygonShape.cs:10-11</code>）且顶点上限 8（<code>Settings.cs:24</code>）。L 形、飞船轮廓只能拼多个凸 Fixture。</li>
+<li><b>逐块不同材质。</b>密度、摩擦、弹性都是 per-Fixture 的。「重底盘 + 轻顶棚」会让质心自动偏向重的一侧（<code>Body.cs:1065-1076</code> 逐个累加）。</li>
+<li><b>实体与传感器混挂。</b><code>IsSensor</code> 在 Fixture 层，所以一个 Body 可以有实体碰撞体 + 一个更大的感应范围。</li>
+</ol>
+
+<div class="tip">
+<b>Shape 是被拷贝的</b>
+<code>Fixture.Create</code> 内部做 <code>Shape = def.Shape.Clone()</code>（<code>Fixture.cs:118</code>）。
+所以 <code>FixtureDef.Shape</code> 可以是栈上临时对象、可以复用同一个 shape 实例建多个 fixture。
+</div>
+
+<h3>三种 BodyType</h3>
+
+<p>枚举前的注释（<code>Body.cs:14-17</code>）是最好的总结：</p>
+
+<pre><code><span class="cmt">static:    zero mass, zero velocity, may be manually moved</span>
+<span class="cmt">kinematic: zero mass, non-zero velocity set by user, moved by solver</span>
+<span class="cmt">dynamic:   positive mass, non-zero velocity determined by forces, moved by solver</span></code></pre>
+
+<div class="warn">
+<b>第一个必踩的坑：默认是 Static</b>
+<code>BodyDef.BodyType</code> 默认值是 <code>StaticBody</code>（<code>Body.cs:73</code>，枚举 0 值即 static，<code>Body.cs:20</code>）。
+<b>不显式设置 BodyType，创建出来的物体不会掉落</b> —— 而且不报任何错。
+</div>
+
+<table>
+<tr><th>行为</th><th>Static</th><th>Kinematic</th><th>Dynamic</th><th>证据</th></tr>
+<tr><td>受力/冲量</td><td>否</td><td>否</td><td>是</td><td>所有 <code>Apply*</code> 首行 <code>if (_type != DynamicBody) return;</code></td></tr>
+<tr><td>重力与阻尼积分</td><td>否</td><td>否</td><td>是</td><td><code>Island.cs:132-147</code></td></tr>
+<tr><td>可作 island 种子</td><td>否</td><td>是</td><td>是</td><td><code>World.cs:725-729</code></td></tr>
+<tr><td>传播 island</td><td><b>否</b></td><td>是</td><td>是</td><td><code>World.cs:749-754</code></td></tr>
+<tr><td>可休眠</td><td>无此概念</td><td>是</td><td>是</td><td><code>Body.cs:447-450</code></td></tr>
+<tr><td>可设速度</td><td>否</td><td>是</td><td>是</td><td><code>Body.cs:591-594</code>、<code>606-609</code></td></tr>
+<tr><td>默认 CCD 保护</td><td>总有</td><td>总有</td><td>仅 <code>IsBullet</code></td><td><code>World.cs:992-999</code></td></tr>
+</table>
+
+<p><b>Kinematic 的核心限制</b>：至少一方必须是 dynamic 才产生碰撞（<code>Body.cs:1214-1220</code>）。所以 static↔static、static↔kinematic、kinematic↔kinematic <b>全部不碰</b>。kinematic 平台能推动 dynamic 箱子，但两个 kinematic 平台互相穿透。</p>
+
+<div class="note">
+<b>切换 BodyType 的代价</b>
+setter（<code>Body.cs:336-395</code>）会：重算质量 → 清零速度/力/扭矩 →
+<b>销毁该 body 上所有接触点</b>（<code>374-382</code>）→ touch 所有 proxy 重建。
+不适合每帧做。另外世界锁定期间禁止切换（<code>341-345</code>）。
+</div>
+
+<h3>四种 Shape</h3>
+
+<table>
+<tr><th>Shape</th><th>用途</th><th>关键限制</th><th>ChildCount</th></tr>
+<tr><td><code>CircleShape</code></td><td>圆</td><td><code>Radius</code> 是真实几何半径，唯一可由用户直接设置的</td><td>1</td></tr>
+<tr><td><code>PolygonShape</code></td><td>凸多边形</td><td>顶点 ≤ 8、必须凸；<code>SetAsBox(hx, hy)</code> 参数是<b>半</b>宽半高</td><td>1</td></tr>
+<tr><td><code>EdgeShape</code></td><td>单线段</td><td>无内部（<code>TestPoint</code> 恒 false）、零质量</td><td>1</td></tr>
+<tr><td><code>ChainShape</code></td><td>折线/闭环地形</td><td>单面碰撞、不能自相交、零质量</td><td><b><code>Count - 1</code></b></td></tr>
+</table>
+
+<div class="warn">
+<b>与主流教程矛盾：顶点不需要你按 CCW 提供</b>
+几乎所有教程都说「顶点必须逆时针」。0.6 的 <code>PolygonShape.Set</code> 内部跑 Gift wrapping
+<b>自己算凸包</b>（<code>PolygonShape.cs:105-161</code>），顺序随便给。CCW 是<b>输出</b>保证，不是输入约束。<br><br>
+代价更隐蔽：<b>凹顶点会被凸包静默吃掉，不报错。</b>你以为建了个 L 形，实际得到它的凸包。
+另外过近的顶点会被焊接（阈值 <code>(0.5 * LinearSlop)²</code>，<code>PolygonShape.cs:83-84</code>），
+焊接后不足 3 个才抛异常。
+</div>
+
+<h3>Radius 的两种语义（易错）</h3>
+
+<table>
+<tr><th>Shape</th><th>Radius 初值</th><th>语义</th><th>可改</th></tr>
+<tr><td>Circle</td><td>0</td><td><b>真实几何半径</b></td><td>是（<code>CircleShape.cs:16-20</code> 用 <code>new</code> 重新暴露为 public）</td></tr>
+<tr><td>Polygon / Edge / Chain</td><td><code>PolygonRadius</code> = <code>2*LinearSlop</code> = 0.01</td><td><b>碰撞 skin</b></td><td>否（基类 <code>internal set</code>）</td></tr>
+</table>
+
+<p>源码注释（<code>Settings.cs:44-46</code>）：<i>This should not be modified. Making this smaller means polygons will have an insufficient buffer for continuous collision.</i></p>
+
+<p><b>后果</b>：多边形之间会留约 0.01 单位的可见缝隙，这是设计如此不是 bug。这条直接连到第二章的尺度问题 —— 如果物体只有 0.05 单位大，这条缝就占 20%，视觉上直接崩。</p>
+
+<h3>ChainShape 的幽灵顶点</h3>
+
+<p>地面由多段 edge 拼成时，物体滑过接缝会被相邻段端点「绊住」（碰到了不该碰的内侧法线）。解法是告诉算法邻居在哪：</p>
+
+<div class="filetag">src/Collision/Shapes/EdgeShape.cs:21-25</div>
+<pre><code><span class="kw">public</span> <span class="type">Vector2</span> Vertex0;  <span class="cmt">// 幽灵顶点：前驱</span>
+<span class="kw">public</span> <span class="type">Vector2</span> Vertex1;  <span class="cmt">// 实际端点</span>
+<span class="kw">public</span> <span class="type">Vector2</span> Vertex2;  <span class="cmt">// 实际端点</span>
+<span class="kw">public</span> <span class="type">Vector2</span> Vertex3;  <span class="cmt">// 幽灵顶点：后继</span></code></pre>
+
+<p><code>SetOneSided(v0,v1,v2,v3)</code> 带幽灵顶点并<b>变成单面</b>（法线朝 v1→v2 的右侧）。单面性让物体只从外侧碰撞，避免从地形背面被挤出 —— raycast 里也体现了这点：<code>if (OneSided && numerator > 0.0f) return false;</code>（<code>EdgeShape.cs:119-122</code>）。</p>
+
+<p><code>ChainShape</code> 内部就是复用这套机制：<code>GetChildEdge</code>（<code>ChainShape.cs:124-137</code>）取出的 EdgeShape <b>恒为 <code>OneSided = true</code></b>，v0/v3 从相邻段自动取。</p>
+
+<h3>质量是怎么产生的</h3>
+
+<div class="flow"><b>质量链路</b>
+
+  Fixture.Density ──┐
+                    ├─→ Shape.ComputeMass(out MassData, density)
+  Shape 几何      ──┘        │
+                             ▼
+        Fixture.GetMassData()          Fixture.cs:222-225
+                             │
+                             ▼
+        Body.ResetMassData()  累加所有 Fixture    Body.cs:1042-1105
+                             │
+                             ▼
+        _mass / InvMass / _inertia / Sweep.LocalCenter
+</div>
+
+<ul>
+<li><b>Static / Kinematic 提前返回</b>（<code>Body.cs:1052-1059</code>）：质量恒 0，质心退化到 origin</li>
+<li><b><code>Density == 0</code> 的 Fixture 被跳过</b>（<code>Body.cs:1067-1070</code>）—— 参与碰撞但不贡献质量。静态体的 fixture 通常这样建</li>
+<li><b><code>FixedRotation</code> 是通过把惯量置零实现的</b>（<code>Body.cs:1092-1096</code>），所有角速度增量被乘 0 抹掉</li>
+<li><b>副作用</b>：质心移动会补偿线速度（<code>Body.cs:1103-1104</code>），物理上正确</li>
+</ul>
+
+<div class="warn">
+<b>0.6 的一个真实 API 缺口</b>
+<code>Fixture.Density</code> 的注释（<code>Fixture.cs:36</code>）写着
+<i>You must call <b>b2Body::ResetMassData</b> to update the body's mass.</i><br><br>
+但 <code>Body.ResetMassData</code> 在 0.6 里是 <code>private</code>（<code>Body.cs:1042</code>），<b>你调不到</b>。
+上游 C++ 版是 public，这是移植时的可见性差异。<br><br>
+后果：<b>运行时改 <code>Density</code> 后无法让质量生效。</b>四个内部触发点是切 <code>BodyType</code>、
+切 <code>IsFixedRotation</code>、<code>CreateFixture</code>（density&gt;0）、<code>DestroyFixture</code>。
+干净的替代方案是用 public 的 <code>SetMassData</code>（<code>Body.cs:997</code>）直接给定质量。
+</div>
+
+<h3>origin 与质心：两套参考点</h3>
+
+<p>这是全库最容易出错的概念。引擎同时维护两种位置表示：</p>
+
+<div class="q">
+<b><code>Sweep</code> 的结构体注释（<code>Sweep.cs:8-11</code>）说明了原因</b><br><br>
+Shapes are defined with respect to the <b>body origin</b>, which may not coincide with the center of mass.
+However, to support dynamics we must interpolate the <b>center of mass</b> position.
+</div>
+
+<p>几何以 origin 为参考（方便建模），动力学必须以质心为参考（否则力矩方程不成立）。靠 <code>Sweep.LocalCenter</code> 互转，转换范式是 <code>Sweep.GetTransform</code> 里那行：</p>
+
+<pre><code>xf.Position -= <span class="type">Mul</span>(xf.Rotation, LocalCenter);   <span class="cmt">// Sweep.cs:28</span></code></pre>
+
+<table>
+<tr><th>方法</th><th>返回</th><th>参考点</th></tr>
+<tr><td><code>GetPosition()</code></td><td><code>Transform.Position</code></td><td><b>origin</b></td></tr>
+<tr><td><code>GetWorldCenter()</code></td><td><code>Sweep.C</code></td><td><b>质心</b></td></tr>
+<tr><td><code>LinearVelocity</code></td><td>—</td><td><b>质心</b>的速度（<code>Body.cs:322-325</code>）</td></tr>
+</table>
+
+<p><b>易错点</b>：<code>GetPosition()</code> 返回 origin，但 <code>LinearVelocity</code> 是质心速度。当 <code>LocalCenter != 0</code>（多 Fixture 不对称）且 body 在旋转时，<code>GetPosition()</code> 的变化率<b>不等于</b> <code>LinearVelocity</code>。渲染同步用 <code>GetPosition()</code>（精灵按 origin 对齐几何），速度计算要清楚它是质心的。</p>
+
+<h3>SetTransform 是「传送」</h3>
+
+<p>副作用清单必须记住（<code>Body.cs:747-772</code>）：</p>
+
+<ul class="checklist">
+<li><span class="n">✗</span><span><b>不修改速度</b> —— 传送后保持原速度继续运动</span><span class="ln">—</span></li>
+<li><span class="n">✗</span><span><b>不唤醒 body</b> —— 传送一个睡着的物体，它还是睡着</span><span class="ln">—</span></li>
+<li><span class="n">✗</span><span><b>不检测重叠</b> —— 可能传送到与他人重叠处，下一帧被大冲量弹开</span><span class="ln">743-744</span></li>
+<li><span class="n">!</span><span><b>把 <code>C0</code>/<code>A0</code> 也设为新值</b>，抹掉运动历史 —— 所以 CCD 不会阻挡传送</span><span class="ln">761-762</span></li>
+</ul>
+
+<p>源码注释直接警告（<code>Body.cs:743-744</code>）：<i>Manipulating a body's transform may cause non-physical behavior.</i></p>
+
+<h3>力 vs 冲量</h3>
+
+<table>
+<tr><th>类别</th><th>方法</th><th>何时生效</th></tr>
+<tr><td><b>力</b></td><td><code>ApplyForce</code> / <code>ApplyForceToCenter</code> / <code>ApplyTorque</code></td><td>只累加到 <code>Force</code>/<code>Torque</code> 字段，等 <code>Island.Solve</code> 积分才生效（<code>Island.cs:135-136</code>），每步后被清零</td></tr>
+<tr><td><b>冲量</b></td><td><code>ApplyLinearImpulse</code> / <code>ApplyLinearImpulseToCenter</code> / <code>ApplyAngularImpulse</code></td><td><b>立即修改速度</b>（<code>Body.cs:921-922</code>），不经过积分</td></tr>
+</table>
+
+<ul>
+<li><b>力矩臂相对质心</b>：<code>point - Sweep.C</code>（<code>Body.cs:835</code>、<code>922</code>），不是相对 origin</li>
+<li><b>唤醒陷阱</b>：若 <code>wake == false</code> 且 body 睡着，<b>这次调用被完全丢弃</b>（<code>Body.cs:831-832</code>，注释 <i>Don't accumulate a force if the body is sleeping.</i>）。这是静默失效的常见来源</li>
+<li><code>FixedRotation</code>（<code>InverseInertia == 0</code>）的 body 对任何角冲量<b>无反应</b></li>
+</ul>
+
+<h3>internal setter 与 public 方法的对照</h3>
+
+<p>两个属性刻意做成「getter public / setter internal」，配 public 方法作为唯一写入口：</p>
+
+<table>
+<tr><th>属性（只读）</th><th>public 写方法</th><th>方法额外做的事</th></tr>
+<tr><td><code>LinearVelocity</code><br><code>Body.cs:326</code></td><td><code>SetLinearVelocity(in Vector2)</code><br><code>Body.cs:604</code></td><td>① Static 直接 return ② <code>dot(v,v) &gt; 0</code> 时 <code>IsAwake = true</code></td></tr>
+<tr><td><code>AngularVelocity</code><br><code>Body.cs:306</code></td><td><code>SetAngularVelocity(float)</code><br><code>Body.cs:589</code></td><td>同上</td></tr>
+</table>
+
+<p><b>设计意图</b>：保证「设了速度物体就会动」。注意零向量不唤醒（<code>dot == 0</code> 不满足 <code>&gt; 0</code>）。</p>
+
+<div class="tip">
+<b>遇到 internal setter 时先把类读完</b>
+看到 <code>internal set</code> 就上反射是常见错误。0.6 里凡是刻意收窄 setter 的地方，
+基本都在附近提供了 public 方法。<code>ResetMassData</code> 是唯一的真实缺口。
+</div>
+
+<h3>struct 默认值的绕法（陷阱）</h3>
+
+<p>C# struct 不能自定义无参构造，无法像 C++ 那样在构造时写默认值。移植版用 <code>Nullable&lt;T&gt; + GetValueOrDefault</code> 绕开：</p>
+
+<div class="filetag">src/Dynamics/Fixture.cs:282-307</div>
+<pre><code><span class="kw">public ushort</span> CategoryBits
+{
+    <span class="kw">get</span> =&gt; _categoryBits.<span class="type">GetValueOrDefault</span>(<span class="num">0x0001</span>);   <span class="cmt">// 未赋值 → 0x0001</span>
+    <span class="kw">set</span> =&gt; _categoryBits = value;
+}
+<span class="kw">private ushort</span>? _categoryBits;</code></pre>
+
+<table>
+<tr><th>字段</th><th>不写时</th><th>显式写 0 时</th></tr>
+<tr><td><code>Filter.CategoryBits</code></td><td><b>0x0001</b></td><td>0</td></tr>
+<tr><td><code>Filter.MaskBits</code></td><td><b>0xFFFF</b></td><td>0</td></tr>
+<tr><td><code>FixtureDef.Friction</code></td><td><b>0.2</b></td><td>0</td></tr>
+<tr><td><code>FixtureDef.Restitution</code></td><td>0（普通字段）</td><td>0</td></tr>
+</table>
+
+<div class="warn">
+<b>两个后果</b>
+一、<b>显式写 0 和不写，效果不同。</b><code>Friction = 0</code> 得到 0，不写得到 0.2。<br><br>
+二、<b><code>Filter</code> 是属性不是字段，不能就地改。</b>
+<code>fixture.Filter.CategoryBits = x</code> 编译不过（返回的是副本），必须整体读改写：<br>
+<code>var f = fixture.Filter; f.CategoryBits = x; fixture.Filter = f;</code><br>
+好处是这样会经过 setter，自动触发 <code>Refilter()</code>（<code>Fixture.cs:56-64</code>）。
+</div>
+
+<!-- CH3 -->
+<h2>四、碰撞检测：宽相位 → 窄相位 → 接触生命周期</h2>
+
+<h3>为什么分两相</h3>
+
+<p>n 个物体两两检测是 O(n²)，而精确几何求交本身就贵。分两相是为了让「贵的计算」只发生在少数候选对上：</p>
+
+<div class="flow"><b>两相分工</b>
+
+  <i>宽相位</i>  用 AABB（轴对齐包围盒）快速筛出「可能碰撞」的对
+            数据结构：动态 AABB 树，查询 O(log n)
+            输出：候选 pair 列表 —— <b>保守超集</b>，会有假阳性
+                    │
+                    ▼
+  <i>窄相位</i>  对每个候选对算真实几何：接触点、法线、穿透深度
+            输出：Manifold（最多 2 个接触点）
+</div>
+
+<h3>宽相位：动态 AABB 树</h3>
+
+<p>本体是 <code>TreeNode[]</code>，从 <code>ArrayPool</code> 租借（<code>DynamicTree.cs:26</code>、<code>32-34</code>），二叉树 + 自由链表管理节点。<code>proxyId</code> 就是数组下标，会被回收复用。</p>
+
+<h4>fat AABB：两个常量的分工</h4>
+
+<table>
+<tr><th>常量</th><th>值</th><th>作用</th></tr>
+<tr><td><code>AABBExtension</code></td><td>0.1 米（<code>Settings.cs:29</code>）</td><td>各方向<b>等量</b>膨胀。注释：<i>allows proxies to move by a small amount without triggering a tree adjustment</i></td></tr>
+<tr><td><code>AABBMultiplier</code></td><td>4.0（<code>Settings.cs:34</code>）</td><td>按位移方向<b>单向</b>拉伸，预测未来位置</td></tr>
+</table>
+
+<p><code>CreateProxy</code> 只用前者（无位移可预测，<code>DynamicTree.cs:112-114</code>）；<code>MoveProxy</code> 两者都用，且拉伸是单向的 —— 预测框只朝运动方向长，不浪费体积（<code>DynamicTree.cs:152-170</code>）。</p>
+
+<h4>关键：没动树就不发起查询</h4>
+
+<p><code>MoveProxy</code> 有三段判定（<code>DynamicTree.cs:174-190</code>）：树里的 AABB 仍包含紧致 aabb、且没有大得离谱 → <b>直接 return false，树不动</b>。返回值决定是否进 move buffer：</p>
+
+<div class="filetag">src/Collision/BroadPhase.cs:79-83</div>
+<pre><code><span class="kw">var</span> buffer = _tree.MoveProxy(proxyId, aabb, displacement);
+<span class="kw">if</span> (buffer) { BufferMove(proxyId); }</code></pre>
+
+<p>所以：<b>没动树 = 不进 move buffer = 这一帧它不发起宽相位查询。</b>这是宽相位省开销的主要机制。</p>
+
+<h4>树的平衡</h4>
+
+<ul>
+<li><b>插入位置</b>：SAH 启发式下降（<code>DynamicTree.cs:544-618</code>），比较「就地新建父节点」与「继续下沉」的代价。2D 下代价度量用<b>周长</b>（<code>AABB.GetPerimeter()</code>）不是面积</li>
+<li><b>旋转</b>：AVL 风格，平衡因子阈值 ±1（<code>Balance</code>，<code>DynamicTree.cs:737-880</code>），插入与删除后沿 parent 链回溯</li>
+</ul>
+
+<div class="warn">
+<b>树的遍历用共享 Stack，不可重入</b>
+<code>Query</code> 用 <code>_queryStack</code>、<code>RayCast</code> 用 <code>_rayCastStack</code>，都是预分配 256 的实例字段，
+每次 <code>Clear()</code> 复用（<code>DynamicTree.cs:233</code>、<code>274</code>）。<br><br>
+<b>同一个 DynamicTree 上的查询不可重入、不可多线程并发。</b>
+这是移植 C++ 单线程假设的典型痕迹。
+</div>
+
+<h3>pair 的产生与去重</h3>
+
+<p><code>BroadPhase.UpdatePairs</code>（<code>BroadPhase.cs:117-164</code>）五步：重置计数 → 遍历 move buffer 发起查询（用 <b>fat AABB</b> 去查，<code>:134</code>）→ 派发给上层 → 清 Moved 标记 → 重置 move buffer。</p>
+
+<div class="warn">
+<b>与旧版文献矛盾：0.6 不排序、没有基于排序的去重</b>
+旧版 Box2D 有 <code>b2PairLessThan</code> 排序 + 相邻去重，很多文献照此讲。
+0.6 的 <code>_pairBuffer</code> <b>没有任何排序调用</b>，改用三道防线：<br><br>
+① 自己不和自己配对（<code>BroadPhase.cs:240-243</code>）<br>
+② 双方都在移动时按 id 择一：<code>if (moved &amp;&amp; proxyId &gt; _queryProxyId) return true;</code>（<code>:246-251</code>）<br>
+③ 真正的语义去重在上层 <code>ContactManager.AddPairCallback</code> 线性扫描（<code>ContactManager.cs:153-171</code>，
+源码里还留着「用哈希表优化」的 TODO）
+</div>
+
+<div class="note">
+<b>对确定性的含义（重要）</b>
+pair 顺序是<b>确定但非规范化</b>的 —— 由 move buffer 插入顺序、树遍历栈顺序（LIFO，实际先访问 Child2）、
+树当前形状共同决定，<b>不按 proxyId 字典序</b>。<br><br>
+给定相同输入序列可复现；但同样两个物体在不同树形状下可能以不同顺序被报告。
+而 <code>ContactList</code> 是 <code>AddFirst</code> 头插（<code>ContactManager.cs:191</code>），
+pair 顺序直接变成求解顺序 → 浮点累加顺序。<br><br>
+<b>这就是「物体创建顺序影响数值结果」的完整机制链。</b>
+</div>
+
+<h3>窄相位：分派表与 Manifold</h3>
+
+<p>形状组合 → 算法的分派用一张静态二维表（<code>ContactManager.cs:43</code>），注册 7 项：</p>
+
+<table>
+<tr><th>组合</th><th>算法入口</th></tr>
+<tr><td>Circle × Circle</td><td><code>CollideCircles</code>（<code>ColliderCircle.cs:12</code>）</td></tr>
+<tr><td>Polygon × Circle</td><td><code>CollidePolygonAndCircle</code>（<code>ColliderCircle.cs:44</code>）</td></tr>
+<tr><td>Polygon × Polygon</td><td><code>CollidePolygons</code>（<code>ColliderPolygon.cs:139</code>）</td></tr>
+<tr><td>Edge × Circle / Edge × Polygon</td><td><code>ColliderEdge.cs:23</code> / <code>:291</code></td></tr>
+<tr><td>Chain × Circle / Chain × Polygon</td><td>取出子边后复用 Edge 算法</td></tr>
+</table>
+
+<p><b>未注册的组合</b>：Edge×Edge、Chain×Chain、Chain×Edge —— 命中会抛 <code>NullReferenceException</code>（<code>ContactManager.cs:101-102</code>）。这就是为什么地形之间不能互相碰撞。</p>
+
+<p>注册时同时填对称槽位但标 <code>Primary = false</code>（<code>:55-65</code>），<code>CreateContact</code> 读这个标记决定是否交换 A/B，保证 fixtureA 始终是算法期望的那一侧。</p>
+
+<h4>Manifold 结构</h4>
+
+<div class="filetag">src/Collision/Collider/Manifold.cs:22-39</div>
+<pre><code><span class="kw">public</span> <span class="type">FixedArray2</span>&lt;<span class="type">ManifoldPoint</span>&gt; Points;  <span class="cmt">// 点数上限 2，类型层面强制</span>
+<span class="kw">public</span> <span class="type">Vector2</span> LocalNormal;                <span class="cmt">// 语义随 Type 变化</span>
+<span class="kw">public</span> <span class="type">Vector2</span> LocalPoint;
+<span class="kw">public</span> <span class="type">ManifoldType</span> Type;                  <span class="cmt">// Circles / FaceA / FaceB</span>
+<span class="kw">public int</span> PointCount;</code></pre>
+
+<p><code>Settings.MaxManifoldPoints = 2</code>，注释 <i>Do not change this value.</i>（<code>Settings.cs:20</code>）。两点足以描述 2D 中两个凸形状的接触面。</p>
+
+<p><b>为什么存局部量而非世界量</b>（注释 <code>Manifold.cs:18-21</code>）：<i>so that position correction can account for movement, which is critical for continuous physics</i>，且 <i>This structure is stored across time steps, so we keep it small.</i></p>
+
+<p><code>WorldManifold</code>（<code>WorldManifold.cs:7-94</code>）负责把局部量按当前 transform 展开成世界量，供渲染和游戏逻辑用。它是<b>派生数据、不跨帧保存</b>。<code>Normal</code> 方向恒为 A→B（FaceB 分支末尾会取反，<code>:76</code>）。</p>
+
+<h3>接触生命周期</h3>
+
+<div class="flow"><b>完整链路</b>
+
+  Fixture 创建 / Body 移动
+    └─ Fixture.CreateProxies 或 Synchronize        Fixture.cs:141 / :248
+         └─ BroadPhase.CreateProxy / MoveProxy → BufferMove
+              └─ <b>ContactManager.FindNewContacts()</b>     ← 创建发生在这里
+                   └─ BroadPhase.UpdatePairs
+                        └─ AddPairCallback
+                             ├─ 同 body 排除 / 重复排除 / 过滤
+                             └─ <b>CreateContact</b>（查分派表）  ContactManager.cs:180
+                                  └─ 挂入 ContactList + 两侧 Body.ContactEdges
+
+  每帧 World.Step
+    └─ <b>ContactManager.Collide()</b>                        ← 更新与销毁
+         ├─ 重过滤（带 FilterFlag 的）→ 失败则 Destroy
+         ├─ 双方都不活跃 → continue（不更新不销毁，睡眠优化）
+         ├─ fat AABB 不再重叠 → <b>Destroy</b>
+         └─ <b>Contact.Update(listener)</b> → 窄相位 + 事件派发
+</div>
+
+<div class="note">
+<b>创建与销毁在不同地方</b>
+<code>Collide()</code> <b>从不创建</b>接触点，只更新流形和销毁失效的。
+创建全部发生在 <code>FindNewContacts</code>（走 <code>BroadPhase.UpdatePairs</code>）。<br><br>
+一个 Step 内 <code>FindNewContacts</code> 最多调三次：Step 开头（<code>World.cs:434</code>）、
+Solve 尾部（<code>:888</code>）、SolveTOI 每轮（<code>:1318</code>）。
+</div>
+
+<h3>核心概念：Contact 存在 ≠ 正在接触</h3>
+
+<p>这是理解整个管线的枢纽，也是最容易卡住的地方。</p>
+
+<table>
+<tr><th></th><th>AABB 重叠</th><th><code>IsTouching</code></th></tr>
+<tr><td>判定对象</td><td><b>fat AABB</b>（已膨胀 0.1m + 位移预测）</td><td>真实几何</td></tr>
+<tr><td>决定什么</td><td><b>Contact 是否存在</b>（不重叠即销毁，<code>ContactManager.cs:287-294</code>）</td><td>是否参与求解、是否触发 Begin/EndContact</td></tr>
+<tr><td>来源</td><td><code>BroadPhase.TestOverlap</code>（用的是 <code>GetFatAABB</code>）</td><td><code>Manifold.PointCount &gt; 0</code>（<code>Contact.cs:298</code>）</td></tr>
+</table>
+
+<p>因果是<b>单向包含</b>：AABB 重叠是 <code>IsTouching</code> 的必要条件，不是充分条件。</p>
+
+<div class="tip">
+<b>实际后果</b>
+由于 fat AABB 比真实形状大至少 0.1 米，场上会<b>常态存在一批 <code>IsTouching == false</code> 的 Contact</b> ——
+它们只是「AABB 已经碰上但几何还差一点」。这批每帧都跑窄相位，但被 island 构建显式跳过
+（<code>World.cs:777-781</code>）。<br><br>
+好处：物体反复轻微分离/接触时，Contact 对象不必反复创建销毁（含对象池 churn 与线性重复扫描）。
+代价：维护一批「预备」Contact 的窄相位开销。
+</div>
+
+<h3>touching 的判定与事件派发</h3>
+
+<p><code>Contact.Update</code>（<code>Contact.cs:259-356</code>）先值拷贝 <code>oldManifold</code>，然后按是否 sensor 分两路：</p>
+
+<table>
+<tr><th></th><th>非 sensor</th><th>sensor</th></tr>
+<tr><td>判定方式</td><td><code>Evaluate</code> 生成流形，<code>touching = PointCount &gt; 0</code></td><td>GJK 距离查询 <code>TestOverlap</code></td></tr>
+<tr><td>Manifold</td><td>正常生成</td><td>强制 <code>PointCount = 0</code>（<i>Sensors don't generate manifolds</i>）</td></tr>
+</table>
+
+<p>事件派发（<code>Contact.cs:339-355</code>）：</p>
+
+<ul>
+<li><code>!wasTouching &amp;&amp; touching</code> → <b>BeginContact</b></li>
+<li><code>wasTouching &amp;&amp; !touching</code> → <b>EndContact</b></li>
+<li><code>!sensor &amp;&amp; touching</code> → <b>PreSolve</b> —— <b>sensor 不发 PreSolve</b></li>
+</ul>
+
+<div class="warn">
+<b>四个回调的真实时机（与通用说法不符）</b>
+通用说法是「PreSolve 在约束求解前调用」。0.6 里它唯一的调用点是 <code>Contact.cs:353</code>，
+在 <code>Contact.Update</code> 末尾、和 Begin/EndContact 同一个 <code>if</code> 块内 —— 也就是<b>在 Collide 阶段</b>。<br><br>
+四个回调里只有 <b>PostSolve</b> 真在 Solve 阶段（<code>Island.cs:481</code>，位置迭代之后、休眠判定之前）。<br><br>
+另外 <code>EndContact</code> 有<b>两个</b>触发点：状态跃变（<code>Contact.cs:348</code>）
+和 Contact 被销毁时（<code>ContactManager.cs:223</code>）。
+</div>
+
+<h3>冲量跨帧靠几何特征 id 匹配</h3>
+
+<p><code>ContactId</code> 是 4 字节联合体（<code>ContactID.cs:6-15</code>）：</p>
+
+<pre><code>[<span class="type">StructLayout</span>(<span class="type">LayoutKind</span>.Explicit, Size = <span class="num">4</span>)]
+<span class="kw">public struct</span> <span class="type">ContactId</span>
+{
+    [<span class="type">FieldOffset</span>(<span class="num">0</span>)] <span class="kw">public</span> <span class="type">ContactFeature</span> ContactFeature;  <span class="cmt">// IndexA/IndexB/TypeA/TypeB</span>
+    [<span class="type">FieldOffset</span>(<span class="num">0</span>)] <span class="kw">public uint</span> Key;                        <span class="cmt">// 一次比较搞定四元组</span>
+}</code></pre>
+
+<p>四个 byte 是两侧的特征索引和类型（Vertex / Face）。所以一次 <code>uint</code> 比较等价于比较四元组 —— <b>这是几何特征标识，只要接触的还是同一对顶点/面就跨帧稳定</b>。</p>
+
+<p>匹配是 O(2×2) 暴力（<code>Contact.cs:300-321</code>），因为点数上限就是 2。<b>匹配不上就归零</b>，即「新接触点无历史可用」。这个冲量随后被求解器用于 warm starting，见第五章。</p>
+
+<!-- CH4 -->
+<h2>五、求解器：Sequential Impulse</h2>
+
+<p>全库唯一有算法分量的部分。<code>World.Step</code> 要你传两个迭代次数，这一章讲它们各自在做什么。</p>
+
+<h3>Step 的真实流程</h3>
+
+<p>先纠正一个常见误解：几乎所有资料都说 Step 分三阶段（Collide → Solve → SolveTOI），源码里是 <b>7 个动作</b>：</p>
+
+<div class="flow"><b>World.Step  —  World.cs:424</b>
+
+  <i>0.</i> if (HasNewContacts) FindNewContacts()      431-438  <b>← 在锁世界之前</b>
+  <i>1.</i> IsLocked = true                            441
+  <i>2.</i> 构造 TimeStep（Dt / 迭代次数 / DtRatio）      444-462
+  <i>3.</i> <b>ContactManager.Collide()</b>                    468
+  <i>4.</i> <b>Solve(step)</b>                                475-481
+        └─ 内部尾部又一次 FindNewContacts()         <b>888</b>
+  <i>5.</i> <b>SolveTOI(step)</b>   若 ContinuousPhysics        485-491
+  <i>6.</i> 记 _invDt0 / ClearForces / IsLocked = false  493-507
+</div>
+
+<h3>Island.Solve 的时间线</h3>
+
+<div class="flow"><b>src/Dynamics/Island.cs</b>
+
+  <i>119-153</i>  <b>速度积分</b>  v += h·InvMass·(GravityScale·Mass·g + Force)   135
+                          w += h·InverseInertia·Torque                  136
+                          阻尼（Pade 近似）v *= 1/(1 + h·damping)        145-146
+  <i>167-170</i>  <b>WarmStart()</b>  施加上一帧的累积冲量
+  <i>181-189</i>  <b>速度迭代</b> × VelocityIterations    <i>无提前退出，必跑满</i>
+  <i>192</i>      StoreImpulses()  冲量写回 manifold
+  <i>197-227</i>  <b>位置积分</b>  c += h·v;  a += h·w                        220-221
+                          前置钳制 MaxTranslation / MaxRotation         206-217
+  <i>232-249</i>  <b>位置迭代</b> × PositionIterations    <i>全收敛则 break</i>
+  <i>252-260</i>  写回 body + SynchronizeTransform
+  <i>265</i>      Report() → <b>PostSolve</b>
+  <i>267-307</i>  休眠判定
+</div>
+
+<h3>两个迭代解的不是同一个问题</h3>
+
+<table>
+<tr><th></th><th>速度迭代</th><th>位置迭代</th></tr>
+<tr><td>目标</td><td>法向相对速度 <code>vn &gt;= velocityBias</code>（<b>不再继续穿入</b>）；切向冲量落在摩擦锥内</td><td>消除<b>已经存在</b>的重叠</td></tr>
+<tr><td>收敛判据</td><td>LCP 互补条件（注释 <code>ContactSolver.cs:429</code>）</td><td><code>minSeparation &gt;= -3 * LinearSlop</code>（<code>:801</code>）</td></tr>
+<tr><td>提前退出</td><td><b>没有</b></td><td><b>有</b></td></tr>
+<tr><td>改什么</td><td><code>_velocities[]</code></td><td><code>_positions[]</code>，<b>完全不碰速度</b></td></tr>
+</table>
+
+<div class="note">
+<b>为什么位置求解器不能碰速度</b>
+如果把穿透当成误差注入速度求解器（老式 soft-constraint 做法），会给系统注入<b>伪造的动能</b> ——
+一堆箱子会自己弹开。<br><br>
+Box2D 的做法叫 <b>NGS</b>（Non-linear Gauss-Seidel）：直接位移质心（<code>ContactSolver.cs:785-789</code>），
+不产生动能。non-linear 是因为每轮都用最新位置重算 separation（<code>:749-761</code>），
+而不是沿用一开始线性化的雅可比。
+</div>
+
+<h3>钳制作用在累积冲量，不是增量</h3>
+
+<p>这是 sequential impulse 最容易看错的地方：</p>
+
+<div class="filetag">src/Dynamics/Contacts/ContactSolver.cs:402-408</div>
+<pre><code>vn = <span class="type">dot</span>(dv, normal);
+lambda = -vcp.NormalMass * (vn - vcp.VelocityBias);
+
+newImpulse = <span class="type">Math</span>.Max(vcp.NormalImpulse + lambda, <span class="num">0.0f</span>);  <span class="cmt">// 钳「累积值」</span>
+lambda     = newImpulse - vcp.NormalImpulse;                <span class="cmt">// 反解实际增量</span>
+vcp.NormalImpulse = newImpulse;</code></pre>
+
+<p>钳的是累积量，然后回推出实际增量再施加到速度上。这允许中间轮次出现<b>负</b>的 <code>lambda</code>（回撤上一轮给多了的冲量），只要累积值不为负 —— 接触只能推不能拉。</p>
+
+<p>源码注释（<code>:439-440</code>）：<i>because of the iterative nature of the solver which only requires that the accumulated impulse is clamped and not the incremental impulse</i>。</p>
+
+<div class="tip">
+<b>这个设计和 warm start 是一体的</b>
+如果钳的是增量，跨帧保存的累积值就不是一个合法初值，warm starting 无法成立。
+两个知识点是同一设计的两面。
+</div>
+
+<h3>先摩擦后法向</h3>
+
+<p>注释（<code>ContactSolver.cs:344-345</code>）：<i>Solve tangent constraints first because non-penetration is more important than friction.</i></p>
+
+<ul>
+<li>法向在后 → 法向的解不会被摩擦的后续修改污染</li>
+<li>代价：本轮摩擦上界 <code>maxFriction = friction * vcp.NormalImpulse</code>（<code>:363</code>）用的是<b>上一轮/上一帧</b>的法向冲量。这个滞后由多轮迭代抹平</li>
+<li>法向钳制单侧 <code>max(x, 0)</code>，摩擦双侧 <code>clamp(x, -max, +max)</code> —— 摩擦可以朝任一侧</li>
+</ul>
+
+<p>系数混合律：摩擦取<b>几何平均</b> <code>sqrt(f1*f2)</code>（<code>Contact.cs:105</code>），弹性取<b>最大值</b>，弹性阈值取<b>较小值</b>。</p>
+
+<h3>warm starting：跨帧复用冲量</h3>
+
+<div class="flow"><b>冲量的跨帧链条</b>
+
+  上一帧速度迭代结束
+    └─ StoreImpulses()          <b>ContactSolver.cs:696-719</b>
+         └─ 写回 manifold.Points[j]   ← 挂在 Contact 上，<i>跨帧存活</i>
+  本帧 Contact.Update
+    └─ 按 ContactId.Key 匹配继承（第四章）
+  本帧 ContactSolver.Setup
+    └─ 按 DtRatio 缩放           <b>:93-97</b>
+         DtRatio = _invDt0 * timeStep（World.cs:460），dt 不变时 = 1
+  速度迭代之前
+    └─ WarmStart()              <b>:291-299</b>  直接施加，<i>不做钳制</i>
+</div>
+
+<p><b>为什么加速收敛</b>：Gauss-Seidel 的收敛速度取决于初值离解多远。稳态堆叠场景相邻两帧的接触冲量几乎相同，用上一帧的解当初值，前几轮迭代不必从 0 重新爬到支撑重力所需的量级。</p>
+
+<div class="note">
+<b>这是所有「回滚/存档」类需求的最大障碍</b>
+warm starting 让第 N 帧的结果依赖第 N-1 帧的累积冲量，而这个冲量存在
+<code>Contact.Manifold</code> 上 —— 一个 <b>internal 字段</b>，0.6 没有公开 API 能读写它。<br><br>
+所以「保存物理世界状态并精确恢复」在这个库上不是简单任务。
+可选路径：反射、改源码、或者<b>主动关掉 warm starting</b>（<code>World.WarmStarting = false</code>），
+用多几轮迭代换掉这个隐藏状态。
+</div>
+
+<h3>Baumgarte 与关键常量</h3>
+
+<div class="filetag">src/Dynamics/Contacts/ContactSolver.cs:769-773</div>
+<pre><code><span class="cmt">// Prevent large corrections and allow slop.</span>
+<span class="kw">var</span> C = <span class="type">MathUtils</span>.Clamp(
+    <span class="type">Settings</span>.Baumgarte * (separation + <span class="type">Settings</span>.LinearSlop),
+    -<span class="type">Settings</span>.MaxLinearCorrection,
+    <span class="num">0.0f</span>);</code></pre>
+
+<table>
+<tr><th>常量</th><th>值</th><th>位置</th><th>作用</th></tr>
+<tr><td><code>Baumgarte</code></td><td>0.2</td><td><code>Settings.cs:80</code></td><td>每轮只修正 20%。注释说明取 1 会 overshoot（<code>:77-79</code>）</td></tr>
+<tr><td><code>LinearSlop</code></td><td>0.005</td><td><code>Settings.cs:38</code></td><td>容许的常驻穿透，防临界抖动</td></tr>
+<tr><td><code>MaxLinearCorrection</code></td><td>0.2</td><td><code>Settings.cs:59</code></td><td>单轮单点位移上限，防深穿透时爆炸修正</td></tr>
+<tr><td><code>ToiBaumgarte</code></td><td>0.75</td><td><code>Settings.cs:82</code></td><td>TOI 路径更激进</td></tr>
+</table>
+
+<p>三层含义叠起来看：<code>separation + LinearSlop</code> 容许 0.005 的重叠不修正；乘 0.2 每轮只消 20%；clamp 上界 0 保证只推不拉。</p>
+
+<div class="warn">
+<b>0.6 里没有 Settings.VelocityThreshold</b>
+通用资料常说「<code>Settings.VelocityThreshold = 1.0</code>」，这在 0.6 是错的 —— 全仓 <code>src/</code> 零命中。
+改成了 per-fixture 的 <code>RestitutionThreshold</code>（<code>Fixture.cs:339</code>，默认 1.0 m/s），
+两个 fixture 取<b>较小值</b>混合，生效于 <code>ContactSolver.cs:226</code>。<br><br>
+它的作用：只有法向接近速度超过阈值才注入弹性偏置，避免物体在地面上永远小幅弹跳。
+</div>
+
+<h3>官方推荐迭代次数：8 / 3</h3>
+
+<p><code>World.Step</code> 没有默认参数，XML 注释也没给推荐值。源码里能查到的权威取值是官方 Testbed 的默认配置：</p>
+
+<table>
+<tr><th>来源</th><th>velocity</th><th>position</th><th>位置</th></tr>
+<tr><td><b>Testbed 默认</b>（最权威）</td><td><b>8</b></td><td><b>3</b></td><td><code>test/Testbed.Abstractions/TestSettings.cs:19-20</code></td></tr>
+<tr><td>HelloWorld 示例（历史值）</td><td>6</td><td>2</td><td><code>test/UnitTest/HelloWorldTest.cs:75-76</code></td></tr>
+<tr><td>TOI 子步（引擎硬编码）</td><td>沿用主步</td><td>20</td><td><code>World.cs:1288-1289</code></td></tr>
+</table>
+
+<div class="tip">
+<b>一个常被搞错的成本模型</b>
+<b>迭代次数的成本正比于 contact 数量，不是 body 数量。</b>
+<code>SolveVelocityConstraints</code> 内部是 <code>for (i &lt; _contactCount)</code>，
+没有 contact 时这两个参数无论设多大都是空循环。
+</div>
+
+<!-- CH5 -->
+<h2>六、过滤、传感器与查询</h2>
+
+<h3>三层过滤，用户过滤只是其中一层</h3>
+
+<div class="filetag">src/Dynamics/ContactManager.cs:173-177</div>
+<pre><code><span class="kw">if</span> (bodyB.ShouldCollide(bodyA) == <span class="kw">false</span>                        <span class="cmt">// Body 级</span>
+ || ContactFilter?.ShouldCollide(fixtureA, fixtureB) == <span class="kw">false</span>) <span class="cmt">// Fixture 级（用户）</span>
+{ <span class="kw">return</span>; }</code></pre>
+
+<p><code>Body.ShouldCollide</code>（<code>Body.cs:1214-1226</code>）做两件事：至少一方必须是 dynamic、检查 joint 的 <code>CollideConnected</code> 抑制。</p>
+
+<h3>过滤三件套的判定顺序</h3>
+
+<div class="filetag">src/Dynamics/DefaultContactFilter.cs:9-22</div>
+<pre><code><span class="cmt">// 第一步：GroupIndex 短路</span>
+<span class="kw">if</span> (filterA.GroupIndex == filterB.GroupIndex &amp;&amp; filterA.GroupIndex != <span class="num">0</span>)
+{
+    <span class="kw">return</span> filterA.GroupIndex &gt; <span class="num">0</span>;
+}
+
+<span class="cmt">// 第二步：双向掩码互检</span>
+<span class="kw">return</span> (filterA.MaskBits &amp; filterB.CategoryBits) != <span class="num">0</span>
+    &amp;&amp; (filterA.CategoryBits &amp; filterB.MaskBits) != <span class="num">0</span>;</code></pre>
+
+<table>
+<tr><th>情况</th><th>结果</th></tr>
+<tr><td><code>GroupIndex</code> 相等且 <b>&gt; 0</b></td><td><b>无条件碰撞</b>，完全绕过 mask。用途：一台载具的多个部件必须互撞</td></tr>
+<tr><td><code>GroupIndex</code> 相等且 <b>&lt; 0</b></td><td><b>无条件不碰</b>。用途：同阵营子弹互不干扰、ragdoll 部件互不打架</td></tr>
+<tr><td><code>GroupIndex</code> 为 0</td><td>跳过第一步，走 mask</td></tr>
+<tr><td><code>GroupIndex</code> <b>不相等</b>（含 A=-3, B=+3）</td><td><b>也跳过第一步</b>，走 mask</td></tr>
+</table>
+
+<div class="warn">
+<b>两个易错点</b>
+一、<b><code>GroupIndex</code> 只在同组时生效，跨组毫无作用。</b>A=+5 与 B=+7 走的是 mask 逻辑。<br><br>
+二、<b>mask 必须双向成立</b>（逻辑 <code>&amp;&amp;</code>）：「我愿意碰你」和「你愿意碰我」都要满足。
+所以把某物体的 <code>MaskBits</code> 设为 0，它就和所有东西都不碰，无论对方 mask 多宽。
+</div>
+
+<p><code>CategoryBits</code> 注释建议只置一位（<code>Fixture.cs:284</code>），16 位意味着最多 16 个类别。</p>
+
+<h3>修改 filter 后必须走 refilter</h3>
+
+<p><code>IContactFilter</code> 的注释强调它只在 AABB 开始重叠时调用 —— <b>运行时改 filter 不会自动影响已存在的 Contact</b>。</p>
+
+<p><code>Fixture.Filter</code> 的 setter 自动调 <code>Refilter()</code>（<code>Fixture.cs:56-64</code>），它做两件事（<code>:172-202</code>）：</p>
+
+<ol>
+<li>给相关 Contact 打 <code>FilterFlag</code> → 下一帧 <code>Collide()</code> 重跑过滤并可能销毁（负责「拆」）</li>
+<li>对所有 proxy 调 <code>TouchProxy</code> → 强行推进 move buffer，使<b>新</b>的 pair 有机会产生（负责「建」）</li>
+</ol>
+
+<p>第二步不可省：否则物体没动就不发起查询，之前被过滤掉的组合永远不会重新尝试。</p>
+
+<h3>自定义过滤器</h3>
+
+<pre><code><span class="kw">public interface</span> <span class="type">IContactFilter</span>
+{
+    <span class="kw">bool</span> ShouldCollide(<span class="type">Fixture</span> fixtureA, <span class="type">Fixture</span> fixtureB);
+}</code></pre>
+
+<p>接入：<code>World.SetContactFilter(filter)</code>（<code>World.cs:215-218</code>）。默认实例是静态单例，且 <code>DefaultContactFilter</code> 类是 <code>sealed</code> —— 想在默认逻辑上叠加只能<b>组合</b>（自己实现里持有一个并转发），不能继承。</p>
+
+<p>设成 <code>null</code> 合法，等价于全部放行（<code>?.</code> 使表达式为 null，<code>null == false</code> 为 false）。</p>
+
+<h3>Sensor 与过滤是两个不同阶段</h3>
+
+<div class="note">
+<b>一句话区分</b>
+<b>过滤决定 Contact 是否被创建；sensor 决定已创建的 Contact 是否参与求解。</b><br><br>
+想要「能穿过但要知道谁穿过了」用 sensor；想要「彻底互不相干、连事件都不要」用过滤。
+</div>
+
+<table>
+<tr><th>行为</th><th>sensor</th><th>证据</th></tr>
+<tr><td>产生 Contact</td><td><b>产生</b>，路径完全相同，也受 filter 约束</td><td><code>ContactManager.cs:131-206</code> 全程无 sensor 分支</td></tr>
+<tr><td>touching 判定</td><td>不生成流形，改用 GJK 距离</td><td><code>Contact.cs:279-294</code></td></tr>
+<tr><td>BeginContact / EndContact</td><td><b>正常触发</b></td><td><code>Contact.cs:341-349</code></td></tr>
+<tr><td>PreSolve</td><td><b>不触发</b></td><td><code>Contact.cs:351</code></td></tr>
+<tr><td>进 island 求解</td><td><b>不进</b></td><td><code>World.cs:783-787</code></td></tr>
+<tr><td>参与 TOI</td><td>不参与（三处跳过）</td><td><code>World.cs:971-974</code>、<code>:1135-1140</code>、<code>:1228-1233</code></td></tr>
+</table>
+
+<h3>世界查询 API</h3>
+
+<h4>QueryAABB</h4>
+
+<p><code>World.QueryAABB(callback, aabb)</code>（<code>World.cs:562-566</code>），回调返回 <code>false</code> 终止查询、<code>true</code> 继续。</p>
+
+<div class="warn">
+<b>返回的是保守超集</b>
+查的是 <b>fat AABB 对 fat AABB</b>（<code>DynamicTree.cs:253</code> 用的 <code>node.AABB</code> 是膨胀过的）。
+所以会返回实际不与查询框相交的 fixture，多出至少 0.1 米余量。<br><br>
+<b>要精确结果必须在回调里自己再测一次</b>（<code>Fixture.TestPoint</code> 或 <code>CollisionUtils.TestOverlap</code>）。
+<code>Fixture.GetAABB</code> 的注释也直说了：<i>This AABB may be enlarge and/or stale</i>。
+</div>
+
+<h4>RayCast 回调的四种返回值</h4>
+
+<table>
+<tr><th>返回值</th><th>含义</th><th>用途</th></tr>
+<tr><td><code>-1</code></td><td>忽略此 fixture，继续</td><td>过滤掉不关心的目标</td></tr>
+<tr><td><code>0</code></td><td><b>终止</b>整条射线</td><td>只要任意一个命中</td></tr>
+<tr><td><code>fraction</code></td><td>把射线裁剪到这一点，继续找更近的</td><td><b>要最近命中</b></td></tr>
+<tr><td><code>1</code></td><td>不裁剪，继续</td><td>收集所有命中</td></tr>
+</table>
+
+<p><b><code>fraction</code> 是线段归一化参数，不是距离。</b><code>fraction * |P2 - P1|</code> 才是距离。裁剪能加速是因为每次都收缩 <code>segmentAABB</code>（<code>DynamicTree.cs:358-360</code>），后续节点被更早剔除。</p>
+
+<p>另外射线<b>忽略包含起点的形状</b>（<code>World.cs:610</code> 注释）。</p>
+
+<h4>三个 TestOverlap 不要混用</h4>
+
+<table>
+<tr><th>签名</th><th>判定内容</th></tr>
+<tr><td><code>TestOverlap(in AABB, AABB)</code></td><td>纯 AABB 相交</td></tr>
+<tr><td><code>TestOverlap(Shape, int, Shape, int, Transform, Transform, GJkProfile)</code></td><td><b>精确形状重叠</b>，走 GJK，判据 <code>Distance &lt; 10 * Epsilon</code></td></tr>
+<tr><td><code>BroadPhase.TestOverlap(proxyIdA, proxyIdB)</code></td><td>两个 proxy 的 <b>fat AABB</b> 是否相交</td></tr>
+</table>
+
+<div class="warn">
+<b>查询 API 不可重入、不可并发</b>
+<code>World.QueryAABB</code> 与 <code>RayCast</code> 共用可变的回调实例（<code>World.cs:556</code>），
+且 <code>QueryAABB</code> 末尾<b>没有</b>调 <code>Reset()</code>（<code>RayCast</code> 调了，<code>:623</code>）。
+加上 DynamicTree 的共享遍历栈，这两个 API 都不能嵌套调用或多线程使用。
+</div>
+
+<p><b>找不到的 API</b>：<code>ComputeDistance</code> 不存在。等价功能是 <code>DistanceAlgorithm.Distance</code>（<code>DistanceAlgorithm.cs:17</code>，GJK 实现，最大 20 次迭代）。<code>ShapeCast</code>（带厚度的射线）存在于 <code>DistanceAlgorithm.cs:187</code> 但<b>没有 World 级封装</b>，要自己调静态方法并遍历候选。</p>
+
+<!-- CH6 -->
+<h2>七、Island 与休眠</h2>
+
+<h3>Island 是什么，为什么要分</h3>
+
+<p>Island（岛）是<b>通过接触或关节互相连通的一组 body</b>。分岛有两个目的：</p>
+
+<table>
+<tr><th>目的</th><th>说明</th></tr>
+<tr><td><b>求解的局部性</b></td><td>两堆互不接触的箱子之间没有约束耦合，分开解等价于一起解，但每次求解的规模更小、缓存更友好</td></tr>
+<tr><td><b>休眠的单位</b></td><td>休眠必须整岛一起 —— 一堆箱子里有一个还在动，整堆都不能睡（否则动的那个会穿进睡着的那些）</td></tr>
+</table>
+
+<h3>DFS 分组规则</h3>
+
+<div class="flow"><b>World.Solve 的 island 构建  —  World.cs:710-845</b>
+
+  for (每个 body in BodyList)                        710-712  <i>← 逆创建序</i>
+    ├─ 已入岛 → skip                                715
+    ├─ 非 awake 或 disabled → skip                  720
+    ├─ <b>static → skip（不能当种子）</b>                    726
+    └─ 作为种子，压栈                                735
+
+    while (stack 非空)                              741   <i>← LIFO</i>
+      ├─ pop 一个 body，island.Add(b)                745-747
+      ├─ <b>static body 不向外传播</b>                       751-754
+      ├─ 遍历 b.ContactEdges                        761-807
+      │    ├─ 已入岛 / 未启用 / <b>未 touching</b> / sensor → skip
+      │    ├─ island.Add(contact)
+      │    └─ 对端未入岛 → 压栈
+      └─ 遍历 b.JointEdges                          811-841
+
+    island.Solve(...)                               845
+    <b>求解后清掉 static body 的入岛标记</b>                851-859
+</div>
+
+<h3>两条关键规则</h3>
+
+<div class="note">
+<b>一、static body 不传播岛</b>
+源码注释（<code>World.cs:750</code>）：<i>we don't propagate islands across static bodies</i>。<br><br>
+原因：地面是 static，如果它传播，全场所有站在地上的物体会连成<b>一个巨型岛</b> ——
+分岛的意义完全丧失，而且任何一个物体在动就会导致全场无法休眠。<br><br>
+代价是 static body 可能被多个岛引用，所以求解后要清掉它的标记
+（<code>:851-859</code>，注释 <i>Allow static bodies to participate in other islands</i>）。
+</div>
+
+<div class="note">
+<b>二、只有 touching 的 contact 进岛</b>
+<code>World.cs:777-781</code> 显式跳过 <code>IsTouching == false</code> 的 contact。<br><br>
+呼应第四章：因为 fat AABB 的存在，场上常态有一批「AABB 碰上但几何没碰」的 Contact。
+它们每帧跑窄相位，但不参与求解、不连通岛。
+</div>
+
+<h3>休眠：整岛判定</h3>
+
+<p>这是最容易搞错的地方 —— 休眠<b>不是单个 body 的决定</b>。</p>
+
+<div class="filetag">src/Dynamics/Island.cs:267-307</div>
+<pre><code><span class="kw">if</span> (allowSleep)
+{
+    <span class="kw">var</span> minSleepTime = <span class="type">Settings</span>.MaxFloat;
+
+    <span class="kw">for</span> (<span class="kw">var</span> i = <span class="num">0</span>; i &lt; BodyCount; ++i)
+    {
+        <span class="kw">var</span> b = Bodies[i];
+        <span class="kw">if</span> (b.BodyType == <span class="type">BodyType</span>.StaticBody) <span class="kw">continue</span>;   <span class="cmt">// 静态体无休眠概念</span>
+
+        <span class="kw">if</span> (!b.Flags.HasFlag(<span class="type">BodyFlags</span>.AutoSleep)              <span class="cmt">// 不允许休眠</span>
+         || b.AngularVelocity * b.AngularVelocity &gt; angTolSqr  <span class="cmt">// 或角速度超阈值</span>
+         || <span class="type">Vector2</span>.Dot(b.LinearVelocity, b.LinearVelocity) &gt; linTolSqr)
+        {
+            b.SleepTime = <span class="num">0.0f</span>;
+            minSleepTime = <span class="num">0.0f</span>;        <span class="cmt">// ← 关键：把整岛的计时器归零</span>
+        }
+        <span class="kw">else</span>
+        {
+            b.SleepTime += h;
+            minSleepTime = <span class="type">Math</span>.Min(minSleepTime, b.SleepTime);
+        }
+    }
+
+    <span class="kw">if</span> (minSleepTime &gt;= <span class="type">Settings</span>.TimeToSleep &amp;&amp; positionSolved)
+    {
+        <span class="kw">for</span> (<span class="kw">var</span> i = <span class="num">0</span>; i &lt; BodyCount; ++i)
+            Bodies[i].IsAwake = <span class="kw">false</span>;      <span class="cmt">// 整岛一起睡</span>
+    }
+}</code></pre>
+
+<div class="warn">
+<b>一个 body 不允许休眠，整岛都不能睡</b>
+只要有一个 body 满足「不允许休眠」或「速度超阈值」，<code>minSleepTime</code> 就被钉在 0，
+整岛的休眠判定永不通过。<br><br>
+所以给某个 body 设 <code>AllowSleep = false</code> 的影响范围是<b>它所在的整个岛</b>，
+而不只是它自己。玩家角色如果设了不休眠，跟它接触的所有箱子也都不会睡。
+</div>
+
+<p>另一个易忽略的条件是 <code>&amp;&amp; positionSolved</code> —— 位置迭代必须<b>收敛</b>（提前 break）才允许休眠。如果堆叠一直解不干净，物体就一直醒着。</p>
+
+<h3>两层 AllowSleep 开关</h3>
+
+<table>
+<tr><th>层级</th><th>字段</th><th>作用</th></tr>
+<tr><td><b>World 级</b></td><td><code>World.AllowSleep</code>（<code>World.cs:72-93</code>）</td><td>传给 <code>island.Solve</code>，为 false 时<b>整段休眠逻辑跳过</b>。setter 置 false 时会唤醒所有 body</td></tr>
+<tr><td><b>Body 级</b></td><td><code>BodyFlags.AutoSleep</code> / <code>Body.IsSleepingAllowed</code></td><td>参与上面的整岛判定。置 false 时<b>顺带唤醒自己</b>（<code>Body.cs:430</code>）</td></tr>
+</table>
+
+<h3>休眠的阈值</h3>
+
+<table>
+<tr><th>常量</th><th>值</th><th>位置</th></tr>
+<tr><td><code>TimeToSleep</code></td><td>0.5 秒</td><td><code>Settings.cs:87</code></td></tr>
+<tr><td><code>LinearSleepTolerance</code></td><td>0.01 m/s</td><td><code>Settings.cs:90</code></td></tr>
+<tr><td><code>AngularSleepTolerance</code></td><td>2°/s</td><td><code>Settings.cs:93</code></td></tr>
+</table>
+
+<p>注意这两个容差也是<b>米制</b>的 —— 又一个第二章尺度问题的体现。物体如果建得过大，0.01 m/s 相对而言太小，它可能永远不满足休眠条件。</p>
+
+<h3>休眠时发生什么</h3>
+
+<p><code>IsAwake = false</code> 的 setter（<code>Body.cs:442-467</code>）会：</p>
+
+<ul>
+<li>清零 <code>LinearVelocity</code> 和 <code>AngularVelocity</code></li>
+<li>清零 <code>Force</code> 和 <code>Torque</code></li>
+<li><code>SleepTime = 0</code></li>
+</ul>
+
+<div class="warn">
+<b>这个清零行为有个连带陷阱</b>
+如果你先设速度、再设 <code>IsAwake = false</code>，<b>刚设的速度会被清掉</b>。
+顺序敏感，写恢复/初始化代码时要注意。<br><br>
+反过来 <code>IsAwake = true</code> 只是置标志 + <code>SleepTime = 0</code>，不改速度。
+</div>
+
+<h3>休眠对性能的意义</h3>
+
+<p>睡着的 body 被跳过的地方：</p>
+
+<ul>
+<li><b>不作 island 种子</b>（<code>World.cs:720</code>）→ 完全不参与求解</li>
+<li><b>Collide 阶段跳过它的 contact</b>（<code>ContactManager.cs:276-283</code>）：双方都不活跃时 <code>continue</code> —— 注意是「不更新也不销毁」，窄相位都省了</li>
+</ul>
+
+<p>所以一个静止的大场景（几百个箱子堆着）在休眠后开销接近于零。这是 Box2D 能在移动端跑大场景的主要原因。</p>
+
+<div class="tip">
+<b>唤醒的触发路径</b>
+<code>SetLinearVelocity</code>/<code>SetAngularVelocity</code>（非零时）、
+<code>Apply*</code> 系列（<code>wake: true</code> 时）、<code>IsSleepingAllowed = false</code>、
+<code>BodyType</code> 切换、contact 的 touching 状态跃变（<code>Contact.cs:323-327</code>）、
+接触点销毁时（<code>ContactManager.cs:116-120</code>，非 sensor）。<br><br>
+<b>注意 <code>SetTransform</code> 不在这个列表里</b> —— 传送不唤醒（第三章）。
+</div>
+
+<!-- CH7 -->
+<h2>八、连续碰撞（CCD / TOI）</h2>
+
+<h3>要解决的问题：穿隧</h3>
+
+<p>离散仿真每帧把物体从 A 直接搬到 B。若一帧位移超过障碍物厚度，帧首在墙前、帧尾在墙后，<b>两个采样点的窄相位都算不出接触</b> —— 物体穿过了墙。</p>
+
+<div class="flow"><b>穿隧</b>
+
+  帧 N        帧 N+1
+   ●───────────────→ ●
+   子弹         │     子弹
+                │
+              薄墙        ← 两个采样点都不与墙相交，窄相位无从发现
+</div>
+
+<p>宽相位其实已经做了一层廉价的扫掠近似：<code>Fixture.Synchronize</code> 把 t1 与 t2 的 AABB <b>合并</b>后才送进 <code>MoveProxy</code>（<code>Fixture.cs:261-264</code>）。这保证「高速物体的 Contact 至少会被建立」，但窄相位在两个离散点上仍算不出接触 —— 所以还需要 TOI。</p>
+
+<h3>两级开关：ContinuousPhysics 与 IsBullet</h3>
+
+<div class="warn">
+<b>最容易误解的一点：CCD 默认就是开的</b>
+不是「设了 bullet 才有连续碰撞」。判定逻辑（<code>World.cs:992-999</code>）：
+<pre style="margin-top:10px"><code><span class="kw">var</span> collideA = bA.IsBullet || typeA != <span class="type">BodyType</span>.DynamicBody;
+<span class="kw">var</span> collideB = bB.IsBullet || typeB != <span class="type">BodyType</span>.DynamicBody;
+<span class="kw">if</span> (collideA == <span class="kw">false</span> &amp;&amp; collideB == <span class="kw">false</span>) { <span class="kw">continue</span>; }</code></pre>
+</div>
+
+<table>
+<tr><th>组合</th><th>参与 TOI</th><th>原因</th></tr>
+<tr><td>dynamic ↔ static</td><td><b>是（默认）</b></td><td>static 满足 <code>typeA != DynamicBody</code></td></tr>
+<tr><td>dynamic ↔ kinematic</td><td><b>是（默认）</b></td><td>同上</td></tr>
+<tr><td>dynamic ↔ dynamic，都非 bullet</td><td>否</td><td>两个 <code>collide</code> 都 false</td></tr>
+<tr><td>dynamic ↔ dynamic，一方 bullet</td><td>是</td><td>bullet 一侧为真</td></tr>
+</table>
+
+<p>所以「物体不会穿过地面」是<b>默认保障</b>，不需要设 bullet。<code>IsBullet</code> 的唯一作用是额外把 dynamic-vs-dynamic 纳入 TOI。</p>
+
+<p>总闸是 <code>World.ContinuousPhysics</code>（默认 <b>true</b>，<code>World.cs:165</code>）。关掉它整个 <code>SolveTOI</code> 不执行，<code>IsBullet</code> 完全失效。</p>
+
+<p><code>BodyDef.Bullet</code> 的注释本身就警告过（<code>Body.cs:79</code>）：<i>You should use this flag sparingly since it increases processing time.</i></p>
+
+<h3>代价来自三层嵌套</h3>
+
+<div class="flow"><b>SolveTOI 的开销结构</b>
+
+  <i>外层</i>  for (;;) 每轮遍历<b>整个</b> ContactList 求 minAlpha       World.cs:934-1045
+          缓存：算过的打 ToiFlag；但每次推进 body 后该 body 的
+                contact 缓存全部失效（:1307-1313）
+             │
+             ▼
+  <i>中层</i>  ComputeTimeOfImpact 单次调用                     TimeOfImpact.cs:71
+          ├─ 最多 20 次分离轴迭代
+          ├─ 每次内含一次 GJK（自身最多 20 次迭代）
+          └─ 一维求根：<b>割线法与二分法交替</b>，上限 50 次
+             │
+             ▼
+  <i>内层</i>  解一个小岛，<b>PositionIterations 硬编码 20</b>          World.cs:1288
+          且 WarmStarting = false（无法复用冲量，收敛更慢）
+             │
+             ▼
+        每轮结束再跑一次 FindNewContacts()                  World.cs:1318
+</div>
+
+<p>单次 <code>ComputeTimeOfImpact</code> 的浮点运算量比一次普通窄相位高<b>一到两个数量级</b>，而外层循环还可能对同一帧反复调用它。</p>
+
+<h3>三道限流</h3>
+
+<table>
+<tr><th>限制</th><th>值</th><th>作用</th></tr>
+<tr><td><code>MaxSubSteps</code></td><td>8（<code>Settings.cs:50</code>）</td><td>单个 contact 的 <code>ToiCount</code> 超限就跳过。注释：<i>Prevent excessive sub-stepping</i></td></tr>
+<tr><td><code>MaxToiContacts</code></td><td>32（<code>Settings.cs:55</code>）</td><td>TOI 岛容量上限，满了停止扩展</td></tr>
+<tr><td>内部迭代上限</td><td>20 / 50</td><td>分离轴迭代 20，求根 50</td></tr>
+</table>
+
+<h3>TOI 求什么</h3>
+
+<p>函数注释（<code>TimeOfImpact.cs:66-70</code>）坦承：<i>uses a swept separating axis and <b>may miss some intermediate, non-tunneling collisions</b></i> —— <b>它保证不穿隧，不保证捕获所有中间接触</b>。</p>
+
+<p>求的也不是「距离恰好为 0」（<code>TimeOfImpact.cs:97-100</code>）：</p>
+
+<pre><code>target = <span class="type">Math</span>.Max(<span class="type">Settings</span>.LinearSlop, totalRadius - <span class="num">3.0f</span> * <span class="type">Settings</span>.LinearSlop);
+tolerance = <span class="num">0.25f</span> * <span class="type">Settings</span>.LinearSlop;</code></pre>
+
+<p>故意留出 slop 余量，让后续求解器有可工作的间隙。</p>
+
+<p>返回五态（<code>ToiState</code>）：<code>Unknown</code> / <code>Failed</code> / <code>Overlapped</code> / <code>Touching</code> / <code>Separated</code>。<b>只有 <code>Touching</code> 会产生有效 TOI 时刻</b>，其余全部退化为 <code>alpha = 1.0f</code>（等于「这一帧不发生 TOI 事件」）。</p>
+
+<p>拿到 <code>minAlpha</code> 后：备份 sweep → <code>Advance</code> 推进到碰撞时刻 → 重跑 <code>Update()</code> → 若结果竟然 not touching，则<b>回滚 sweep 并禁用该 contact</b>（<code>World.cs:1060-1081</code>）。这是对数值误差的兜底。</p>
+
+<h3>性能观测</h3>
+
+<p><code>ToiProfile</code> 记录 <code>ToiCalls</code>、<code>ToiIters</code>、<code>ToiMaxIters</code>、<code>ToiRootIters</code>、<code>ToiTime</code> 等（<code>TimeOfImpact.cs:45-62</code>）。它默认是 <code>null</code>（<code>World.cs:115</code>），传 null 时连 <code>Stopwatch.GetTimestamp()</code> 都不调 —— <b>性能调查时要显式打开</b>。</p>
+
+<div class="tip">
+<b>什么时候真的需要 bullet</b>
+判断标准是几何的：<b>单帧位移是否接近或超过目标物体的厚度</b>。<br><br>
+以 60Hz、物体半径 0.45 米为例，单帧位移要超过 0.9 米才可能穿过它自己那么大的物体 ——
+即速度超过 54 米/秒。低于这个量级，bullet 是纯开销。<br><br>
+注意 <code>MaxTranslation = 2.0</code>（<code>Settings.cs:67</code>）会把单帧位移钳到 2 米，
+所以极高速物体<b>必须</b>靠 CCD 而不是单纯提高速度值。
+</div>
+
+<!-- CH8 -->
+<h2>九、生命周期与锁定规则</h2>
+
+<p>这一章是<b>实践中最容易踩的坑</b>，而且症状是崩溃或断言失败，不像前面那些是「行为不对」。</p>
+
+<h3>World 在 Step 期间是锁定的</h3>
+
+<div class="flow"><b>锁定窗口  —  World.cs</b>
+
+  Step() 开头
+    ├─ FindNewContacts()        431-438   <i>← 还没锁</i>
+    ├─ <b>IsLocked = true</b>            441
+    │
+    │   ┌──────────────────────────────────────────┐
+    │   │  Collide → Solve → SolveTOI              │
+    │   │  <b>所有回调都在这个窗口内被调用</b>            │
+    │   │  BeginContact / EndContact / PreSolve     │
+    │   │  PostSolve / QueryCallback / RayCast      │
+    │   └──────────────────────────────────────────┘
+    │
+    └─ <b>IsLocked = false</b>           505
+</div>
+
+<p>所以规则可以一句话概括：<b>在任何回调里，都不能增删物理对象。</b></p>
+
+<h3>锁定期间被禁止的完整清单</h3>
+
+<p>逐个查了所有 <code>IsLocked</code> 检查点：</p>
+
+<table>
+<tr><th>API</th><th>位置</th><th>锁定时的行为</th></tr>
+<tr><td><code>World.CreateBody</code></td><td><code>World.cs:241-245</code></td><td>断言 + <b>返回 null</b></td></tr>
+<tr><td><code>World.DestroyBody</code></td><td><code>World.cs:268-269</code></td><td>断言 + return</td></tr>
+<tr><td><code>World.CreateJoint</code></td><td><code>World.cs:319-320</code></td><td>断言 + 返回 null</td></tr>
+<tr><td><code>World.DestroyJoint</code></td><td><code>World.cs:370-372</code></td><td>断言 + return</td></tr>
+<tr><td><code>World.ShiftOrigin</code></td><td><code>World.cs:631-632</code></td><td>断言 + return</td></tr>
+<tr><td><code>Body.CreateFixture</code></td><td><code>Body.cs:633-634</code></td><td>断言 + <b>返回 null</b></td></tr>
+<tr><td><code>Body.DestroyFixture</code></td><td><code>Body.cs:695-696</code></td><td>断言 + return</td></tr>
+<tr><td><code>Body.SetTransform</code></td><td><code>Body.cs:749-750</code></td><td>断言 + return</td></tr>
+<tr><td><code>Body.SetMassData</code></td><td><code>Body.cs:999-1000</code></td><td>断言 + return</td></tr>
+<tr><td><code>Body.BodyType</code> setter</td><td><code>Body.cs:341-342</code></td><td>断言 + return</td></tr>
+<tr><td><code>Body.IsEnabled</code> setter</td><td><code>Body.cs:491</code></td><td>断言</td></tr>
+</table>
+
+<div class="warn">
+<b>Release 构建下这些是「静默失败」</b>
+每个检查点的结构都是 <code>Debug.Assert(IsLocked == false);</code> 紧跟 <code>if (IsLocked) return;</code>。<br><br>
+<b>Debug 构建</b>：断言弹出，你立刻发现问题。<br>
+<b>Release 构建</b>：<code>Debug.Assert</code> 被编译器移除，只剩 <code>return</code> ——
+你的 <code>CreateBody</code> <b>返回 null</b>、<code>DestroyBody</code> <b>什么都不做</b>，全程无异常无日志。<br><br>
+典型症状：「开发时好的，出包后子弹打不出来 / 敌人死了不消失」。
+</div>
+
+<h3>正确做法：延迟到 Step 之后</h3>
+
+<p>标准模式是在回调里<b>只记录、不执行</b>：</p>
+
+<pre><code><span class="kw">private readonly</span> <span class="type">List</span>&lt;<span class="type">Body</span>&gt; _pendingDestroy = <span class="kw">new</span> <span class="type">List</span>&lt;<span class="type">Body</span>&gt;();
+
+<span class="kw">public void</span> BeginContact(<span class="type">Contact</span> contact)
+{
+    <span class="cmt">// ✗ 不能在这里 DestroyBody</span>
+    <span class="cmt">// ✓ 只入队</span>
+    <span class="kw">if</span> (IsBullet(contact)) _pendingDestroy.Add(GetBulletBody(contact));
+}
+
+<span class="kw">public void</span> Update(<span class="kw">float</span> dt)
+{
+    _world.Step(dt, <span class="num">8</span>, <span class="num">3</span>);          <span class="cmt">// 锁定窗口在这里面</span>
+
+    <span class="kw">foreach</span> (<span class="kw">var</span> body <span class="kw">in</span> _pendingDestroy)  <span class="cmt">// 已解锁，安全</span>
+        _world.DestroyBody(body);
+    _pendingDestroy.Clear();
+}</code></pre>
+
+<h3>IDestructionListener：被动通知</h3>
+
+<p>当 body 被销毁时，挂在它上面的 fixture 和 joint 会被<b>连带销毁</b>。如果你的游戏代码持有这些对象的引用，就会变成悬空引用。</p>
+
+<p><code>IDestructionListener</code> 就是为此存在的 —— 引擎在连带销毁时通知你，让你清理自己的引用。接口有两个方法（fixture 版和 joint 版）。</p>
+
+<div class="tip">
+<b>什么时候需要它</b>
+如果你的架构是「游戏对象持有 Fixture 引用」，就需要。
+如果你只持有 Body 引用、且总是自己主动 DestroyBody，可以不用。<br><br>
+注意 joint 的连带销毁尤其隐蔽：<code>DestroyBody</code> 会销毁所有连到它的 joint，
+而那些 joint 的另一端是别的 body —— 你可能完全没想到那边的引用失效了。
+</div>
+
+<h3>销毁的正确顺序</h3>
+
+<table>
+<tr><th>操作</th><th>连带效果</th></tr>
+<tr><td><code>World.DestroyBody(b)</code></td><td>销毁 b 的所有 fixture、所有连接的 joint、所有 contact（先发 <code>EndContact</code>）、所有 broadphase proxy</td></tr>
+<tr><td><code>Body.DestroyFixture(f)</code></td><td>销毁 f 相关的 contact 与 proxy，<b>无条件</b>触发 <code>ResetMassData()</code></td></tr>
+<tr><td><code>World.DestroyJoint(j)</code></td><td>若 <code>CollideConnected == false</code>，会唤醒两端 body 并重建它们之间的 contact</td></tr>
+</table>
+
+<p>所以<b>不需要手动先删 fixture 再删 body</b> —— 直接 <code>DestroyBody</code> 即可，引擎会处理层级。</p>
+
+<h3>内存：哪些用了池</h3>
+
+<table>
+<tr><th>对象</th><th>机制</th><th>你需要做什么</th></tr>
+<tr><td><code>Contact</code></td><td>每种类型各有 <code>ContactPool&lt;T&gt;</code>，<code>Return</code> 时调 <code>Reset()</code></td><td>无</td></tr>
+<tr><td><code>Island</code> 的五个数组</td><td>每次 <code>Solve</code> 从 <code>ArrayPool</code> rent，<code>Reset</code> 时以 <code>clearArray: true</code> 归还</td><td>无</td></tr>
+<tr><td><code>DynamicTree</code> 的节点数组</td><td><code>ArrayPool</code>，靠<b>终结器</b>归还</td><td>理想情况调 <code>World.Dispose()</code></td></tr>
+<tr><td><code>BroadPhase</code> 的 buffer</td><td>同上</td><td>同上</td></tr>
+</table>
+
+<p><code>World.Dispose</code> 与 <code>ContactManager.Dispose</code> 存在。不调不会泄漏（终结器兜底），但依赖终结器归还 ArrayPool 数组不是好实践 —— 长期运行、反复创建销毁 World 的场景（比如每局一个 World）应该显式 Dispose。</p>
+
+<h3>时间步长必须固定</h3>
+
+<p>HelloWorld 示例的注释直接写了（<code>HelloWorldTest.cs:85</code>）：</p>
+
+<div class="q">
+It is generally best to keep the time step and iterations <b>fixed</b>.
+</div>
+
+<p>源码层面的证据是 <code>DtRatio</code>（<code>World.cs:460</code>）：</p>
+
+<pre><code>DtRatio = _invDt0 * timeStep;   <span class="cmt">// dt 不变时恒为 1</span></code></pre>
+
+<p>它唯一的用途是给 warm starting 的冲量做量纲换算（<code>ContactSolver.cs:93-97</code>）—— 即引擎<b>知道</b> dt 可能变，并为此打了个补丁。但这只是让冲量的量纲对上，并不能消除变步长带来的行为不一致。</p>
+
+<div class="warn">
+<b>变步长的三个后果</b>
+① <b>阻尼行为变化</b>：<code>v *= 1/(1 + h*damping)</code>（<code>Island.cs:145-146</code>）对 h 非线性，
+同样的总时间分不同步长积分，结果不同。<br><br>
+② <b>迭代收敛质量变化</b>：迭代次数固定，但 dt 越大每步要解决的误差越大，同样次数的收敛效果越差。
+大 dt 会让堆叠明显变软。<br><br>
+③ <b>穿隧风险随 dt 增大</b>：单帧位移 = v·dt，dt 翻倍就等于速度翻倍。
+</div>
+
+<p>标准做法是累加器 + 固定步长：</p>
+
+<pre><code>_accumulator += <span class="type">Time</span>.deltaTime;
+<span class="kw">while</span> (_accumulator &gt;= FixedDt)
+{
+    _world.Step(FixedDt, <span class="num">8</span>, <span class="num">3</span>);
+    _accumulator -= FixedDt;
+}</code></pre>
+
+<p>注意这个循环要加单帧上限，否则卡顿时会「追帧雪崩」—— 一帧里跑几十次 Step 反而更卡。</p>
+
+<!-- CH9 -->
+<h2>十、最小范例与对照表</h2>
+
+<h3>官方 HelloWorld 骨架</h3>
+
+<p>来自 <code>test/UnitTest/HelloWorldTest.cs</code>，加了注解：</p>
+
+<div class="filetag">test/UnitTest/HelloWorldTest.cs（节选并注解）</div>
+<pre><code><span class="cmt">// ① 创建世界，重力 -10（注意单位是 m/s²）</span>
+<span class="kw">var</span> gravity = <span class="kw">new</span> <span class="type">Vector2</span>(<span class="num">0.0f</span>, -<span class="num">10.0f</span>);
+<span class="kw">var</span> world = <span class="kw">new</span> <span class="type">World</span>(gravity);
+
+<span class="cmt">// ② 地面：static body（BodyDef 默认就是 static，所以不用设 BodyType）</span>
+<span class="kw">var</span> groundBodyDef = <span class="kw">new</span> <span class="type">BodyDef</span>();
+groundBodyDef.Position.Set(<span class="num">0.0f</span>, -<span class="num">10.0f</span>);
+<span class="kw">var</span> groundBody = world.CreateBody(groundBodyDef);
+
+<span class="kw">var</span> groundBox = <span class="kw">new</span> <span class="type">PolygonShape</span>();
+groundBox.SetAsBox(<span class="num">50.0f</span>, <span class="num">10.0f</span>);   <span class="cmt">// ← 半宽半高！实际是 100×20 米</span>
+groundBody.CreateFixture(groundBox, <span class="num">0.0f</span>);  <span class="cmt">// density=0：静态体不需要质量</span>
+
+<span class="cmt">// ③ 动态盒子</span>
+<span class="kw">var</span> bodyDef = <span class="kw">new</span> <span class="type">BodyDef</span>();
+bodyDef.BodyType = <span class="type">BodyType</span>.DynamicBody;   <span class="cmt">// ← 必须显式设，否则不会掉</span>
+bodyDef.Position.Set(<span class="num">0.0f</span>, <span class="num">4.0f</span>);
+<span class="kw">var</span> body = world.CreateBody(bodyDef);
+
+<span class="kw">var</span> dynamicBox = <span class="kw">new</span> <span class="type">PolygonShape</span>();
+dynamicBox.SetAsBox(<span class="num">1.0f</span>, <span class="num">1.0f</span>);        <span class="cmt">// 2×2 米的盒子</span>
+
+<span class="kw">var</span> fixtureDef = <span class="kw">new</span> <span class="type">FixtureDef</span>();
+fixtureDef.Shape = dynamicBox;
+fixtureDef.Density = <span class="num">1.0f</span>;                <span class="cmt">// ← 非零才有质量</span>
+fixtureDef.Friction = <span class="num">0.3f</span>;               <span class="cmt">// 不写则默认 0.2</span>
+body.CreateFixture(fixtureDef);
+
+<span class="cmt">// ④ 固定步长循环</span>
+<span class="kw">const float</span> timeStep = <span class="num">1.0f</span> / <span class="num">60.0f</span>;
+<span class="kw">for</span> (<span class="kw">var</span> i = <span class="num">0</span>; i &lt; <span class="num">60</span>; ++i)
+{
+    world.Step(timeStep, <span class="num">8</span>, <span class="num">3</span>);          <span class="cmt">// 官方 Testbed 默认迭代次数</span>
+    <span class="kw">var</span> position = body.GetPosition();     <span class="cmt">// ← 注意这是 origin 不是质心</span>
+    <span class="kw">var</span> angle = body.GetAngle();
+}</code></pre>
+
+<div class="tip">
+<b>这段代码里藏着的四个坑</b>
+① <code>SetAsBox</code> 参数是<b>半</b>宽半高 —— 新手最常见的「物体大了一倍」<br>
+② 地面不设 <code>BodyType</code> 是<b>刻意</b>的（默认 static），但动态体必须显式设<br>
+③ <code>Density = 0</code> 的 fixture 不贡献质量，静态体标配<br>
+④ 示例用的 6/2 是历史值，<b>官方 Testbed 默认是 8/3</b>
+</div>
+
+<p>上手路径与实验清单见<a href="#ch0">第零章</a>。</p>
+
+<h2>十一、与主流文献不符的地方（对照表）</h2>
+
+<p>这个库是 C++ Box2D 2.4 的手工移植，加上 0.6 自身的演进，产生了一批与常见教程/文档不一致的细节。<b>这张表是查资料时最容易被坑的地方。</b></p>
+
+<table>
+<tr><th>常见说法</th><th>0.6 实际</th><th>证据</th></tr>
+<tr><td>多边形顶点必须按 CCW 提供</td><td><b>不需要</b>，内部跑 Gift wrapping 自算凸包。CCW 是输出保证。凹顶点会被<b>静默</b>吃掉</td><td><code>PolygonShape.cs:105-161</code></td></tr>
+<tr><td><code>Settings.VelocityThreshold = 1.0</code></td><td>该常量<b>不存在</b>。改为 per-fixture 的 <code>RestitutionThreshold</code>（默认 1.0 m/s），两侧取较小值混合</td><td><code>Fixture.cs:339</code>、<code>Contact.cs:114-119</code></td></tr>
+<tr><td><code>PreSolve</code> 在约束求解前调用</td><td>在 <b>Collide 阶段</b>，<code>Contact.Update</code> 末尾，和 Begin/EndContact 同一个 <code>if</code> 块</td><td><code>Contact.cs:353</code></td></tr>
+<tr><td><code>Step</code> 分三阶段</td><td><b>7 个动作</b>。Collide 前后各有一次 <code>FindNewContacts</code></td><td><code>World.cs:431-438</code>、<code>:888</code></td></tr>
+<tr><td>接触点在 Collide 阶段创建</td><td>Collide <b>只更新和销毁</b>。创建在 <code>FindNewContacts</code></td><td><code>ContactManager.cs:239</code> vs <code>:208-211</code></td></tr>
+<tr><td>宽相位 pair 会排序去重</td><td>0.6 <b>不排序</b>。旧版的 <code>b2PairLessThan</code> 已移除，改用「双方都移动时按 id 择一」+ 上层线性扫描</td><td><code>BroadPhase.cs:246-251</code>、<code>ContactManager.cs:153-171</code></td></tr>
+<tr><td>设 <code>Bullet</code> 才有连续碰撞</td><td>dynamic-vs-static/kinematic 的 CCD <b>默认开启</b>。bullet 只是额外把 dynamic-vs-dynamic 纳入</td><td><code>World.cs:992-999</code></td></tr>
+<tr><td><code>b2Body::ResetMassData</code> 可调</td><td>0.6 里是 <b><code>private</code></b>，用户调不到。改 <code>Density</code> 后无法让质量生效，须用 <code>SetMassData</code></td><td><code>Body.cs:1042</code>（与 <code>Fixture.cs:36</code> 注释矛盾）</td></tr>
+<tr><td>Def 结构体默认值为零</td><td>用 <code>Nullable&lt;T&gt;+GetValueOrDefault</code>：<code>Friction</code> 默认 0.2、<code>MaskBits</code> 默认 0xFFFF。<b>显式写 0 与不写效果不同</b></td><td><code>Fixture.cs:282-343</code></td></tr>
+<tr><td>body 按创建顺序遍历</td><td><b>逆创建序</b>（<code>AddFirst</code> 头插）。contact、joint 同</td><td><code>World.cs:252</code></td></tr>
+<tr><td>—</td><td><code>ComputeDistance</code> 不存在；<code>ShapeCast</code> 无 World 级封装；Edge×Edge / Chain×Chain / Chain×Edge <b>未注册</b>（命中抛异常）</td><td><code>ContactManager.cs:101-102</code></td></tr>
+</table>
+
+<h2>十二、速查：易错点清单</h2>
+
+<ul class="checklist">
+<li><span class="n">1</span><span><code>SetAsBox(hx, hy)</code> 是<b>半</b>宽半高</span><span class="ln">第十章</span></li>
+<li><span class="n">2</span><span><code>BodyDef.BodyType</code> 默认 <b>static</b>，不设不会掉落</span><span class="ln">第三章</span></li>
+<li><span class="n">3</span><span>物体尺寸要落在 <b>0.1 ~ 10 米</b>，别用像素当单位</span><span class="ln">第二章</span></li>
+<li><span class="n">4</span><span><code>GetPosition()</code> 返回 <b>origin</b>，<code>LinearVelocity</code> 是<b>质心</b>速度</span><span class="ln">第三章</span></li>
+<li><span class="n">5</span><span><code>SetTransform</code> 不改速度、不唤醒、不检测重叠</span><span class="ln">第三章</span></li>
+<li><span class="n">6</span><span>回调里<b>不能</b>增删物理对象，Release 下是静默失败</span><span class="ln">第九章</span></li>
+<li><span class="n">7</span><span><code>Apply*</code> 传 <code>wake: false</code> 且物体睡着时，调用被<b>完全丢弃</b></span><span class="ln">第三章</span></li>
+<li><span class="n">8</span><span>休眠是<b>整岛</b>判定，一个 body 不睡则整岛不睡</span><span class="ln">第七章</span></li>
+<li><span class="n">9</span><span><code>IsAwake = false</code> 会<b>清零速度</b>，注意赋值顺序</span><span class="ln">第七章</span></li>
+<li><span class="n">10</span><span>Contact 存在 ≠ 正在接触，<code>IsTouching</code> 才是</span><span class="ln">第四章</span></li>
+<li><span class="n">11</span><span>改 <code>Filter</code> 必须整体读改写（struct 属性），会自动 <code>Refilter</code></span><span class="ln">第三章</span></li>
+<li><span class="n">12</span><span><code>QueryAABB</code> 返回<b>保守超集</b>，要精确得自己再测</span><span class="ln">第六章</span></li>
+<li><span class="n">13</span><span>查询 API <b>不可重入</b>、不可并发（共享遍历栈）</span><span class="ln">第四、六章</span></li>
+<li><span class="n">14</span><span>时间步长必须<b>固定</b>，累加器循环要加单帧上限</span><span class="ln">第九章</span></li>
+<li><span class="n">15</span><span>迭代成本正比于 <b>contact 数</b>，不是 body 数</span><span class="ln">第五章</span></li>
+</ul>
+
+<footer>
+源码：<code>D:\Unity\Box2DSharp-src</code> tag <code>0.6</code>（commit <code>0547ad7</code>）· 上游 <a href="https://github.com/Zonciu/Box2DSharp">Zonciu/Box2DSharp</a><br>
+<span class="verified">全部行号实测</span>。跳过未讲的部分：Joints 数学推导（5370 行）、Rope、GJK/TOI 算法细节、DebugDraw。<br><br>
+提醒：不要 <code>git checkout master</code>，那是 v3 重写版，API 完全不同。
+</footer>
+
+
+</div>
+</body>
+</html>
