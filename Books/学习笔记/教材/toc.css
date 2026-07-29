@@ -1,0 +1,50 @@
+/* 教材页侧边目录样式（由 toc.js 注入 DOM，配色复用各页的 CSS 变量） */
+.toc{
+  position:fixed;top:0;left:0;bottom:0;width:270px;
+  background:var(--panel);border-right:1px solid var(--line);
+  padding:24px 0 24px 20px;overflow:hidden;
+  display:flex;flex-direction:column;z-index:100;
+  transition:transform .2s ease;
+}
+.toc h4{
+  margin:0 0 14px;font-size:13px;color:var(--dim);
+  letter-spacing:1px;flex-shrink:0;
+}
+.toc-list{overflow-y:auto;padding-right:12px;flex:1}
+.toc-list::-webkit-scrollbar{width:6px}
+.toc-list::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.toc a{
+  display:block;color:var(--dim);text-decoration:none;
+  font-size:13.5px;line-height:1.45;padding:5px 10px;
+  border-left:2px solid transparent;border-radius:0 4px 4px 0;
+}
+.toc a.toc-h3{font-size:12.5px;padding-left:24px;opacity:.8}
+.toc a:hover{color:var(--fg);background:var(--panel2)}
+.toc a.active{
+  color:var(--accent);border-left-color:var(--accent);
+  background:var(--panel2);
+}
+.toc-toggle{
+  position:fixed;top:14px;left:286px;z-index:101;
+  background:var(--panel2);color:var(--dim);
+  border:1px solid var(--line);border-radius:6px;
+  width:32px;height:32px;cursor:pointer;font-size:15px;
+  transition:left .2s ease;
+}
+.toc-toggle:hover{color:var(--accent);border-color:var(--accent)}
+
+/* 有目录时正文右移；:has 不支持时退化为不移动，仍可用折叠按钮 */
+body:has(.toc) .wrap{margin-left:300px}
+body.toc-hidden .toc{transform:translateX(-100%)}
+body.toc-hidden .toc-toggle{left:14px}
+body.toc-hidden .wrap{margin-left:auto}
+
+/* 窄屏默认收起，语义反转 */
+@media (max-width:1200px){
+  .toc{transform:translateX(-100%)}
+  .toc-toggle{left:14px}
+  body:has(.toc) .wrap{margin-left:auto}
+  body.toc-hidden .toc{transform:none}
+  body.toc-hidden .toc-toggle{left:286px}
+  body.toc-hidden .wrap{margin-left:300px}
+}

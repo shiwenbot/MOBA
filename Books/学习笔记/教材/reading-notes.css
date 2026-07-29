@@ -89,3 +89,5 @@ li{margin:8px 0}
 footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
 .verified{color:var(--good);font-size:13px}
 .unverified{color:var(--warn);font-size:13px}
+
+/* 侧边目录样式见 toc.css（各页单独引用） */
