@@ -126,6 +126,55 @@ public const float MaxTranslation = 2.0f * LengthUnitsPerMeter;</code></pre>
   </div>
 </section>
 
+<section id="four-layer-object-model">
+  <h2>Box2D 为什么是 World / Body / Fixture / Shape 四层，不是两层？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>src/Dynamics/Fixture.cs:13-17</code>、<code>src/Dynamics/Body.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>新手直觉：「直接给 Body 一个形状不就行了？」——为什么要中间夹个 Fixture</li>
+    <li>Shape 管几何，Fixture 管「几何 + 装在谁身上 + 表面性质」</li>
+    <li>分离是为了<b>让 Shape 可复用</b></li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    一个箱子被拆成四个零件，像搭积木：<code>World</code>（舞台：重力、<code>Step</code>、谁和谁碰）→ <code>Body</code>（一个「东西」：在哪、速度、多重，但<b>没有形状</b>）→ <code>Fixture</code>（给 Body 装的装备：把 Shape 钉在 Body 上 + 表面性质）→ <code>Shape</code>（纯几何，可脱离世界单独存在）。
+  </p>
+  <p>
+    为什么不直接 Body + Shape 两层：因为<b>形状和表面性质是两件事，要分开</b>。Shape 只管「长什么样」（一个半径 0.5 的圆），Fixture 管「这个圆装在谁身上、摩擦多少、弹力多少、是不是 sensor」。分开的收益是 <b>同一个 Shape 可被多个 Fixture 共享复用</b>——100 个一样的球只存一份几何，但各有独立的摩擦弹力。源码里 <code>Fixture.Create</code> 会 <code>Shape = def.Shape.Clone()</code>（<code>Fixture.cs:118</code>），所以传进来的 Shape 是被拷贝的，可以是临时对象、可以复用。
+  </p>
+  <p>
+    最直白的链路：<code>World → Body → (Shape + FixtureDef) → Fixture 装到 Body 上</code>。Body 在被装上 Fixture 之前，<b>它不知道自己是圆是方</b>。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Fixture.cs:13-17 —— 这层存在的理由（类头注释）</p>
+  <pre><code>A fixture is used to attach a shape to a body for collision detection.
+A fixture inherits its transform from its parent.
+Fixtures hold additional non-geometric data such as friction, collision filters, etc.
+@warning you cannot reuse fixtures.</code></pre>
+  <p class="code-caption">建立四层对象的伪代码</p>
+  <pre><code>World world = new World(gravity);            // 1. 搭舞台
+
+Body body = world.CreateBody(bodyDef);       // 2. 造个东西
+bodyDef.BodyType = Dynamic;                  //    告诉它「你会动」
+
+PolygonShape shape = new PolygonShape();     // 3. 画个形状
+shape.SetAsBox(0.5f, 0.5f);                  //    1×1 方块
+
+FixtureDef fd = new FixtureDef();            // 4. 配装备
+fd.Shape = shape;
+fd.Density = 1.0f;  fd.Friction = 0.3f;
+fixture = body.CreateFixture(fd);            //    装上去 → body 这才有形状</code></pre>
+  <p><small>引用：<code>Fixture.cs:13-17,118</code>；BodyType 默认值见 <code>Body.cs:73</code>（默认 Static）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    World 管全局调度，Body 管运动身份证（但无形状），Fixture 把 Shape 钉到 Body 上并带上表面性质，Shape 是纯几何可复用。夹一层 Fixture 的唯一理由：<b>形状和表面性质是两件事，分开才能复用几何</b>。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
