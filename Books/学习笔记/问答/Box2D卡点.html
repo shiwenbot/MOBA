@@ -802,6 +802,86 @@ world.RayCast((fixture, point, normal, fraction) =&gt; {
   </div>
 </section>
 
+<section id="world-lock-and-lifecycle">
+  <h2>世界锁定（IsLocked）—— 为什么回调里不能销毁物体？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>World.cs:67,241,268,319,370,441,505</code>、<code>Body.cs:341-345</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Step 期间世界锁定（<code>:441</code> 上锁、<code>:505</code> 解锁），含所有四个碰撞回调</li>
+    <li>锁定时 CreateBody/DestroyBody/CreateFixture/DestroyFixture/切BodyType/SetTransform <b>静默失败或断言崩</b></li>
+    <li>经典坑：BeginContact 里销毁物体 → 回调里<b>只记标记，Step 外再处理</b></li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>World.IsLocked</code>（<code>:67</code> 只读）在 <code>Step</code> 执行期间为 true（<code>:441</code> 上锁 → <code>:505</code> 解锁）。所有改世界结构的方法开头都查锁：<b>Debug 下 <code>Debug.Assert</code> 报警</b>；<b>Release 下 <code>return null/false</code> 静默失败</b>——代码以为成功了其实啥没干，最阴险（不报错）。禁止的操作：CreateBody（:241）、DestroyBody（:268）、CreateFixture（:319）、DestroyFixture（:370）、切 BodyType（Body.cs:341-345）、SetTransform（:631）。
+  </p>
+  <p>
+    <b>关键：四个碰撞回调（Begin/End/Pre/Post）全在锁定期内</b>——因为它们都在 Step 内部触发（Begin/End/Pre 在 Collide 阶段、Post 在 Solve 阶段）。所以「回调里不能销毁物体」的根因就是世界锁定。
+  </p>
+  <p>
+    <b>经典坑：BeginContact 里销毁物体</b>。弹球「球进洞→消失」错误写法：回调里直接 <code>world.DestroyBody(ball)</code> → 锁定静默失败/断言崩。<b>正确模式：回调里只记标记，Step 外处理</b>——存一个 <code>_ballToDestroy</code> 标志，主循环 Step 之后调 DestroyBody（此时世界已解锁）。
+  </p>
+  <p>
+    <b>另一个坑：回调里遍历 ContactList</b>。Collide 本身正在遍历/修改 ContactList，回调里再遍历 → 迭代器失效崩。<b>解法：回调只处理当前参数传进来的那个 contact，需要全局信息记下 Step 外查</b>。
+  </p>
+  <p>
+    <b>对本项目的提醒</b>：<code>RestoreSnapshot</code>（<code>ClearBodies</code> 销毁重建所有 body）<b>不能在 Step 期间调</b>——否则 DestroyBody 被静默忽略、body 没销毁、状态全乱。回滚重放时确保每个 Step 独立调用、中间世界解锁，别把「恢复+多帧Step」塞进一个锁定期。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">World.cs:241-242 —— CreateBody 查锁（Release 静默失败）</p>
+  <pre><code>public Body CreateBody(in BodyDef def)
+{
+    Debug.Assert(IsLocked == false);   // Debug 下断言
+    if (IsLocked) return null;         // Release 下静默失败！
+    ...
+}</code></pre>
+  <p class="code-caption">World.cs:441,505 —— Step 期间上锁/解锁</p>
+  <pre><code>public void Step(...) {
+    ...
+    IsLocked = true;    // :441 ← Step 开始上锁
+    ...                 // Collide / Solve / 所有回调全在这期间
+    IsLocked = false;   // :505 ← Step 结束解锁
+}</code></pre>
+  <p class="code-caption">正确模式：回调记标记，Step 外处理</p>
+  <pre><code>private bool _ballShouldBeDestroyed;
+private Body _ballToDestroy;
+
+void BeginContact(Contact contact) {
+    if (球撞到洞) {
+        _ballShouldBeDestroyed = true;   // ✅ 回调里只记标记
+        _ballToDestroy = ballBody;
+    }
+}
+void AfterStep() {   // Step 之后，世界已解锁
+    if (_ballShouldBeDestroyed) {
+        world.DestroyBody(_ballToDestroy);   // ✅ 此时安全
+        _ballShouldBeDestroyed = false;
+    }
+}</code></pre>
+  <p><small>引用：<code>World.cs:67</code>（IsLocked）、<code>:241,268,319,370</code>（四处查锁）、<code>:441,505</code>（Step 上锁解锁）、<code>:631</code>（SetTransform 查锁）、<code>Body.cs:341-345</code>（切 BodyType 查锁）。</small></p>
+
+  <h3>锁定规则速查</h3>
+  <table>
+    <tr><th>时机</th><th>世界状态</th><th>能做什么</th></tr>
+    <tr><td>Step 之外（主循环）</td><td><b>解锁</b></td><td>随便 CreateBody/DestroyBody/改结构</td></tr>
+    <tr><td>Step 内部</td><td><b>锁定</b></td><td>只能读、只能改 body 运动状态（位置/速度）</td></tr>
+    <tr><td>四个碰撞回调</td><td><b>锁定</b>（在 Step 内）</td><td>只能读、记标记；❌ 不能改结构、不能遍历 ContactList</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 弹球项目底线</span>
+    球进洞/出界/撞特殊物体要消失：全用「回调记标记 + Step 外处理」模式。别在回调里 DestroyBody/CreateBody，Release 下会静默失败、Debug 下断言崩。RestoreSnapshot 必须在 Step 之外调。
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Step 期间（含所有回调）世界锁定，改结构（Create/Destroy/切类型/SetTransform）会静默失败或断言崩。回调里只能读和记标记，销毁/创建放 Step 外。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
