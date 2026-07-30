@@ -498,6 +498,116 @@ if (overlap == false) { Destroy(c); continue; }            // 不重叠才销毁
   </div>
 </section>
 
+<section id="contact-lifecycle-and-collide">
+  <h2>Contact、Collide 是啥？接触的创建/销毁分别在哪发生？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>ContactManager.cs:260-296</code>、<code>World.cs:434,888,1318</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Contact = 数据对象（一行记录）；Collide = 动作（遍历这些记录的方法）</li>
+    <li>反直觉：<code>Collide</code> <b>从不创建</b> Contact，只更新/销毁；创建全在 <code>FindNewContacts</code></li>
+    <li>睡眠优化：双方都睡则 Contact 冻结（不更新也不销毁）</li>
+    <li><code>FindNewContacts</code> 一个 Step 最多调 3 次</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>Contact vs Collide 是两层概念</b>：<code>Contact</code> 是<b>数据对象</b>（记录「fixtureA 和 fixtureB 值得关注」，挂在一棵链表 <code>ContactList</code> 上，含 Manifold/IsTouching/Flags）；<code>Collide</code> 是 <code>ContactManager</code> 的一个<b>方法</b>（遍历 ContactList，逐个决定更新还是销毁）。类比图书馆：Contact = 登记本上一行借书记录，Collide = 管理员每天巡查一遍登记本。
+  </p>
+  <p>
+    <b>关键反直觉：创建和销毁在两个不同方法。</b>创建全在 <code>FindNewContacts</code>（走 <code>BroadPhase.UpdatePairs</code>，胖框重叠就建 → 所以会有幽灵 Contact）；<code>Collide</code>（<code>ContactManager.cs:260-296</code>）<b>从不创建</b>，只做三件事：① 带过滤标记的重过滤失败 → <code>Destroy</code>；② 双方都睡/都 static → <code>continue</code>（冻结，省窄相位）；③ 胖框不再重叠 → <code>Destroy</code>；还重叠则 <code>contact.Update</code>。
+  </p>
+  <p>
+    <b>睡眠优化</b>：双方都不活跃时 <code>continue</code>——<b>既不更新也不销毁</b>，连窄相位都省。睡着的 body 上挂的 Contact 全部冻结。这是睡眠的性能收益之一。
+  </p>
+  <p>
+    <b>FindNewContacts 一个 Step 最多 3 次</b>：<code>:434</code>（Step 开头，锁世界前，处理上帧遗留）、<code>:888</code>（Solve 尾，求解让物体移动可能产生新接触）、<code>:1318</code>（SolveTOI 每轮，CCD 子步位移）。因为 Step 内部物体会移动，每次移动都可能产生新候选对，不重找会漏检快速物体。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Collide 只更新/销毁，从不创建（ContactManager.cs:260-296 节选）</p>
+  <pre><code>// 双方都不活跃 → continue（冻结）
+if (activeA == false && activeB == false) { continue; }
+
+var overlap = BroadPhase.TestOverlap(proxyIdA, proxyIdB);
+if (overlap == false) { Destroy(c); continue; }   // 胖框不重叠才销毁
+c.Update(ContactListener);                          // 还重叠 → 更新</code></pre>
+  <p class="code-caption">contact.Update vs Collide vs FindNewContacts 的层级</p>
+  <pre><code>FindNewContacts()  ──创建──→ Contact 挂进 ContactList
+Collide()          ──遍历──→ 每个 Contact 决定 Destroy / 冻结 / Update
+contact.Update()   ──单个──→ 算真实几何 + 判 IsTouching + 派发事件</code></pre>
+  <p><small>引用：<code>ContactManager.cs:260-296</code>（Collide 三件事）、<code>World.cs:434,888,1318</code>（FindNewContacts 三处调用）、<code>Island.cs</code>（睡眠优化见第七章）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Contact=数据，Collide=遍历它的动作。创建全在 FindNewContacts（胖框重叠就建），销毁全在 Collide（胖框不重叠/过滤失败才销）。双方都睡则冻结。FindNewContacts 一个 Step 最多 3 次（开头/Solve尾/TOI每轮）。
+  </div>
+</section>
+
+<section id="four-callback-timing">
+  <h2>四个回调的真实时机？PreSolve/PostSolve 到底啥意思？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>Contact.cs:339-355</code>、<code>Island.cs:481</code>、<code>ContactManager.cs:223</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>通用说法「PreSolve 在求解前调用」<b>是错的</b>——它其实在 Collide 阶段</li>
+    <li>Begin/End/Pre 三个挤在 <code>Contact.Update</code> 里；只有 PostSolve 在 Solve 阶段</li>
+    <li>Solve = 算冲量。PreSolve=求解前干预（改参数，拿不到冲量）；PostSolve=求解后反馈（拿冲量做音效/震屏）</li>
+    <li>Sensor 不发 PreSolve/PostSolve；EndContact 有两个触发点</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>真相：三个回调挤在同一个地方，只有 PostSolve 在求解后。</b>Begin/End/PreSolve 都在 <code>Contact.Update</code>（<code>Contact.cs:339-355</code>）末尾，而 <code>Update</code> 是在 <b>Collide 阶段</b>（碰撞检测）被调的。<b>通用说法「PreSolve 在约束求解前」是错的</b>——它其实在碰撞检测阶段，和 Begin/EndContact 同一个地方。只有 <code>PostSolve</code>（<code>Island.cs:481</code> 的 <code>Report</code>）真在 Solve 阶段（位置迭代之后、休眠判定之前）。
+  </p>
+  <p>
+    <b>PreSolve/PostSolve 里的 Solve = 求解 = 算冲量。</b>所以 PreSolve = 求解<b>前</b>的干预点（能拿到接触点/法线/当前几何，<b>可改参数</b>，但<b>拿不到冲量</b>，因为还没算——用途：传送带改摩擦为 0、特殊挡板改弹力）；PostSolve = 求解<b>后</b>的反馈点（<b>能拿到冲量值</b>「撞了多狠」——用途：按冲量做音效/震屏/伤害）。类比撞车：PreSolve=即将撞、还没撞开（能看角度但不知撞多狠）；PostSolve=撞完了（知道撞多猛）。
+  </p>
+  <p>
+    <b>触发条件</b>：Begin/End 是<b>边沿触发</b>（IsTouching 跃变瞬间，碰一下触发一次）；PreSolve 是<b>电平触发</b>（每帧只要真碰着就触发，持续）；PostSolve 求解后每个被解的 contact。<b>Sensor 不发 PreSolve/PostSolve</b>（<code>sensor==false &amp;&amp; touching</code> 才发 Pre；sensor 不求解所以没 Post）——sensor 只有 Begin/End。
+  </p>
+  <p>
+    <b>EndContact 有两个触发点</b>：① 状态跃变（<code>Contact.cs:344</code>，IsTouching true→false）；② Contact 被销毁时（<code>ContactManager.cs:223</code>）。第二个是为了覆盖「球碰墙→墙被销毁」这种没经历跃变的情况——写 Begin 加 buff/End 移 buff 时，销毁物体也能正确移除。
+  </p>
+  <p>
+    <b>回调里不能改世界</b>：Begin/End/Pre 都在 Collide 阶段、<b>世界锁定期间</b>触发，不能 CreateBody/DestroyBody/CreateFixture（断言失败或被忽略）。想在碰撞时销毁物体（球进洞消失），正确做法是回调里<b>记标记</b>，Step 结束后再处理。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Contact.cs:339-355 —— 三个回调挤在 Update 里（Collide 阶段）</p>
+  <pre><code>if (wasTouching == false &amp;&amp; touching) listener.BeginContact(this);   // 边沿：false→true
+if (wasTouching && touching == false) listener.EndContact(this);     // 边沿：true→false
+if (sensor == false &amp;&amp; touching) listener.PreSolve(this, oldManifold); // 电平：持续 + 非sensor</code></pre>
+  <p class="code-caption">Island.cs:481 —— 只有 PostSolve 在 Solve 阶段</p>
+  <pre><code>private void Report(ContactVelocityConstraint[] constraints) {
+    ...
+    ContactListener.PostSolve(c, impulse);   // ← 求解后，能拿到冲量
+}</code></pre>
+  <p class="code-caption">ContactManager.cs:223 —— EndContact 第二个触发点（Contact 销毁时）</p>
+  <pre><code>// Contact 被 Destroy 时，补一个 EndContact 防止「还在碰」的错觉
+ContactListener?.EndContact(c);</code></pre>
+  <p><small>引用：<code>Contact.cs:339-355</code>（Begin/End/Pre 派发）、<code>Island.cs:481</code>（PostSolve 在 Report）、<code>ContactManager.cs:223</code>（EndContact 第二点）、<code>:260-296</code>（Collide 阶段=世界锁定）。</small></p>
+
+  <h3>弹球项目实战用法</h3>
+  <table>
+    <tr><th>想做的</th><th>用哪个回调</th><th>为什么</th></tr>
+    <tr><td>球撞挡板加分</td><td><code>BeginContact</code></td><td>边沿触发，碰一下加一次</td></tr>
+    <tr><td>特殊挡板让球加速</td><td><code>PreSolve</code></td><td>求解前改接触参数（弹力调高 / 摩擦为 0）</td></tr>
+    <tr><td>撞墙力度反馈（音效/震屏）</td><td><code>PostSolve</code></td><td>拿冲量值判断撞多猛</td></tr>
+    <tr><td>球进入得分区</td><td><code>BeginContact</code>（区设 sensor）</td><td>进入瞬间触发，sensor 只发 Begin/End</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 回调里不能改世界</span>
+    Begin/End/Pre 都在世界锁定期间触发，不能 CreateBody/DestroyBody/CreateFixture。球进洞要消失：回调里<b>记标记</b>，Step 结束后处理。
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Begin/End/Pre 在 Collide 阶段（通用说法「PreSolve 求解前」是错的）；只有 PostSolve 在 Solve 后。Pre=求解前改参数（拿不到冲量），Post=求解后拿冲量做特效。Begin/End 边沿触发，Pre 持续触发，sensor 不发 Pre/Post，EndContact 有两触发点。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
