@@ -344,6 +344,63 @@ public float Radius { get; internal set; }</code></pre>
   </div>
 </section>
 
+<section id="mass-chain-and-density-pitfall">
+  <h2>质量从哪来？为什么运行时改 Density 不生效？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>Body.cs:997,1042-1106</code>、<code>Fixture.cs:36,222-225</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>质量 = 密度 × 几何，Body 累加所有 Fixture；不是你直接给的</li>
+    <li>Static/Kinematic 质量恒 0；Density=0 的 Fixture 不贡献质量但仍参与碰撞；FixedRotation 靠惯量置零</li>
+    <li>坑：<code>ResetMassData</code> 在 0.6 是 <code>private</code>，运行时改 Density 质量不变 → 用 <code>SetMassData</code> 绕过</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    质量链路：<code>Fixture.Density + Shape 几何 → Shape.ComputeMass → Fixture.GetMassData → Body.ResetMassData 累加所有 Fixture → _mass/InvMass/_inertia</code>。即<b>质量是密度和形状算出来的，Body 把身上所有 Fixture 的质量加起来</b>。
+  </p>
+  <p>
+    三个关键行为（对着 <code>Body.cs:1042-1106</code>）：① Static/Kinematic 在 <code>:1052-1059</code> 直接 return，质量恒 0；② <code>Density==0</code> 的 Fixture 在 <code>:1067-1070</code> 被 <code>continue</code> 跳过——<b>仍参与碰撞（Shape 还在），只是不贡献质量</b>（静态体 fixture 通常这么建）；③ <code>FixedRotation</code> 不是开关挡旋转，而是把 <code>_inertia=0</code>（<code>:1092-1096</code>），所有角速度增量被乘 0 抹掉。
+  </p>
+  <p>
+    <b>0.6 的坑：运行时改 Density 不生效。</b><code>Fixture.Density</code> 注释（<code>Fixture.cs:36</code>）写着「要调 <code>b2Body::ResetMassData</code> 更新质量」，但 <code>Body.ResetMassData</code> 在 0.6 是 <code>private</code>（<code>Body.cs:1042</code>），<b>你调不到</b>。质量重算只在四个内部时机自动发生：切 <code>BodyType</code>、切 <code>IsFixedRotation</code>、<code>CreateFixture</code>（density&gt;0）、<code>DestroyFixture</code>。<b>运行时改 Density，质量纹丝不动。</b>
+  </p>
+  <p>
+    绕过方案：用 public 的 <code>SetMassData</code>（<code>Body.cs:997</code>）直接给定质量数据，绕开 density 链路：<code>body.SetMassData(new MassData { Mass = 2.0f, ... })</code>。弹球项目里不同材质的球，运行时换质量<b>别动 Density，用 SetMassData</b>；或一开始就建好不同 density 的 fixture。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Body.cs:1052-1059 —— Static/Kinematic 质量恒 0，提前返回</p>
+  <pre><code>if (_type == BodyType.StaticBody || _type == BodyType.KinematicBody)
+{
+    Sweep.C0 = Transform.Position;
+    Sweep.C = Transform.Position;
+    Sweep.A0 = Sweep.A;
+    return;            // ← 静态/运动学体没有质量这回事
+}</code></pre>
+  <p class="code-caption">Body.cs:1067-1070 —— Density=0 的 Fixture 被跳过</p>
+  <pre><code>foreach (var f in Fixtures)
+{
+    if (f.Density.Equals(0.0f)) { continue; }   // ← 仍参与碰撞，不贡献质量
+    f.GetMassData(out var massData);
+    _mass += massData.Mass;
+    ...
+}</code></pre>
+  <p class="code-caption">Body.cs:1042 —— ResetMassData 是 private（这就是坑）</p>
+  <pre><code>/// the mass and you later want to reset the mass.
+/// 重置质量数据
+private void ResetMassData()      // ← 上游 C++ 是 public，0.6 移植时收窄了
+{
+    ...
+}</code></pre>
+  <p><small>引用：<code>Body.cs:997</code>（<code>SetMassData</code> public 入口）、<code>:1042</code>（<code>ResetMassData</code> private）、<code>:1052-1059</code>（Static/Kinematic 返回）、<code>:1067-1070</code>（Density=0 跳过）、<code>:1092-1096</code>（FixedRotation 惯量置零）、<code>Fixture.cs:36,222-225</code>。</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 弹球项目要点</span>
+    运行时换球的质量，<b>别改 Density（不生效）</b>，用 <code>SetMassData</code> 直接给。或者一开始就把不同 density 的 fixture 建好。Quality 的唯一 public 写入口是 <code>SetMassData</code>。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
