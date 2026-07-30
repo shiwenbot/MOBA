@@ -351,6 +351,96 @@ private void ResetMassData()      // ← 上游 C++ 是 public，0.6 移植时�
   </div>
 </section>
 
+<section id="dynamic-aabb-tree-and-pairs">
+  <h2>动态 AABB 树怎么工作？物体动了之后会发生什么？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>DynamicTree.cs:137-200</code>、<code>BroadPhase.cs:79-83,117-164</code>、<code>Settings.cs:29,34</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>两相分工：宽相位用 AABB 筛候选（便宜），窄相位才算真实几何（贵）—— 为的是 O(n²) → O(log n)</li>
+    <li>动态树 = 框套框的二叉树；fatAABB 故意做大（四周+0.1 + 运动方向×4）</li>
+    <li>MoveProxy 返回 false（还在胖框里）→ 树不动、不进 move buffer —— 这是宽相位省开销的核心</li>
+    <li>更新之后：move buffer 里的物体去查树 → 产出 pair → 创建 Contact → 每帧 Collide 算真实几何</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>动态 AABB 树解决「几千个会动的 AABB 如何快速查重叠」。</b>它是一棵二叉树，每个节点装一个 AABB：<b>叶子</b>装真实物体，<b>内部节点</b>装「包住它两个孩子的框」。从根往下查时，和某子树不重叠就整棵剪掉 → 查询 O(log n) 而非 O(n²)。
+  </p>
+  <p>
+    <b>物体在动怎么不崩：三机制配合。</b>① 物体进树时存的不是真实框，而是<b>故意做大的 fatAABB</b>（四周各 +<code>AABBExtension=0.1</code>）；② 每帧 <code>MoveProxy</code> 检查物体还在不在胖框里——<b>在、且没大得离谱就 <code>return false</code>，树完全不动</b>（源码 <code>:176-189</code>）；③ 只有 <code>return true</code>（真需要更新）的物体才进 <code>moveBuffer</code>，每帧<b>只遍历 move buffer 去查树配对</b>。收益：<b>静止和小幅运动的物体几乎零开销</b>——这就是 1000 个静止箱子不耗 CPU 的原因。
+  </p>
+  <p>
+    还有个 <code>AABBMultiplier=4.0</code>（<code>:154-171</code>）：把这一帧位移 ×4 <b>朝运动方向单向拉伸</b>胖框，预测未来几帧位置（单向是因为反方向物体不会去，拉了浪费体积）。<code>CreateProxy</code>（首次进树，无位移）只用 <code>AABBExtension</code>；<code>MoveProxy</code>（已知位移）两者都用。
+  </p>
+  <p>
+    <b>更新之后发生什么（完整链条）</b>：物体动了 → <code>MoveProxy</code> 判定 → 不在胖框里 → 更新树 + 进 move buffer → <code>UpdatePairs</code> 用<b>胖框</b>查树产出 pair（<b>注意：用胖框查，所以会多报</b>）→ pair 经同body/重复/过滤检查后创建 <code>Contact</code> → Contact 每帧被 <code>Collide</code> 算真实几何 → 真碰了 <code>IsTouching=true</code> 进求解，没碰 <code>IsTouching=false</code> 挂着。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">DynamicTree.cs:176-189 —— 动得不多就别更新树（宽相位省开销核心）</p>
+  <pre><code>if (treeAABB.Contains(aabb))      // 树里存的胖框，还包得住物体当前真实框吗？
+{
+    if (hugeAABB.Contains(treeAABB))   // 胖框没大得离谱（物体曾快跑现在睡了）
+    {
+        return false;                  // ← 树完全不动！
+    }
+}
+RemoveLeaf(proxyId);
+proxyNode.AABB = fatAABB;
+InsertLeaf(proxyId);
+return true;                      // ← 只有真需要更新才返回 true → 进 moveBuffer</code></pre>
+  <p class="code-caption">BroadPhase.cs:79-83 —— 只有返回 true 才进 move buffer</p>
+  <pre><code>var buffer = _tree.MoveProxy(proxyId, aabb, displacement);
+if (buffer) { BufferMove(proxyId); }</code></pre>
+  <p><small>引用：<code>DynamicTree.cs:145-152</code>（fatAABB 四周+0.1）、<code>:154-171</code>（AABBMultiplier×4 单向拉伸）、<code>:176-189</code>（MoveProxy 判定）、<code>BroadPhase.cs:79-83</code>（move buffer）、<code>:117-164</code>（UpdatePairs）、<code>Settings.cs:29,34</code>（两常量）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    动态树 = 框套框的二叉树（O(log n) 查询）。物体动得不多（还在胖框里）→ 树不动、不进 move buffer，这就是宽相位省开销的核心。更新之后：move buffer 查树产 pair → 建 Contact → 每帧算真实几何定 IsTouching。
+  </div>
+</section>
+
+<section id="contact-exists-not-touching">
+  <h2>Contact 存在 ≠ 正在接触——为什么场上会有一批「幽灵 Contact」？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>ContactManager.cs:289-294</code>、<code>Contact.cs:298</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>两个「碰」：fatAABB 重叠决定 Contact <b>在不在</b>；真实形状决定 <code>IsTouching</code></li>
+    <li>单向包含：真碰 → 胖框必重叠；但胖框重叠 → 真形状不一定碰</li>
+    <li>因为胖框比真形状大 0.1，场上常态有「挂着但没真碰」的幽灵 Contact</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    「碰」这个词太模糊，Box2D 里其实是<b>两个不同判定</b>：<b>① fatAABB 重叠</b>（胖框比真形状大 0.1）决定 <b>Contact 对象是否存在</b>；<b>② 真实形状接触</b>（窄相位 Manifold.PointCount&gt;0）决定 <code>IsTouching</code>。两者<b>单向包含</b>：真碰了胖框必重叠（真形状在胖框里），但胖框重叠真形状不一定碰。
+  </p>
+  <p>
+    <b>后果：场上会常态存在一批 <code>IsTouching == false</code> 的「幽灵 Contact」——它们只是「胖框碰上了，真实形状还差一点」。</b>这批每帧跑窄相位算真实几何，但<b>不参与求解、不触发 BeginContact/EndContact</b>，是「预备役」，等真碰了才激活。
+  </p>
+  <p>
+    <b>为什么不销毁它们：</b>留着养着有持续窄相位开销；但「没真碰就销毁、真碰再建」会让物体反复轻微分离/接触时 Contact 反复建销（对象池 churn + 线性去重扫描），反而更贵。Box2D 选前者——<b>宁可养预备役也不反复建销</b>。
+  </p>
+  <p>
+    <b>影响写代码两处</b>：① <code>BeginContact</code>/<code>EndContact</code> 只在 <code>IsTouching</code> <b>跃变</b>时触发（上一帧没碰+这帧碰了），不是「Contact 创建=BeginContact」——球靠近墙（幽灵 Contact 存在）时<b>不会</b>触发，要等真碰；② 求解器只碰 <code>IsTouching==true</code> 的 Contact，幽灵 Contact 不进 island（第七章）。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">ContactManager.cs:289-294 —— Contact 存在取决于胖框重叠</p>
+  <pre><code>var overlap = BroadPhase.TestOverlap(proxyIdA, proxyIdB);  // 胖框重叠？
+if (overlap == false) { Destroy(c); continue; }            // 不重叠才销毁
+// 还重叠 → Contact 继续存活（不管真形状碰没碰）</code></pre>
+  <p class="code-caption">Contact.cs:298 —— IsTouching 取决于真实形状</p>
+  <pre><code>touching = Manifold.PointCount > 0;   // 真实几何有没有接触点</code></pre>
+  <p><small>引用：<code>ContactManager.cs:289-294</code>（Contact 存在=胖框重叠）、<code>Contact.cs:298</code>（IsTouching=真实形状）、<code>Settings.cs:29</code>（AABBExtension=0.1，胖框比真形状大这么多）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    两个「碰」：fatAABB 重叠决定 Contact 在不在，真实形状决定 IsTouching。胖框比真形状大 0.1，所以场上常态有一批「挂着但没真碰」的幽灵 Contact，不求解不触发事件，只为避免反复建销。<code>BeginContact</code> 只在 IsTouching 跃变时触发，监听它判断「球撞墙」是对的。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
