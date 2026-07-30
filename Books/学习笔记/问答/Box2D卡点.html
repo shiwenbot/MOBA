@@ -722,6 +722,86 @@ c += h * v;</code></pre>
   </div>
 </section>
 
+<section id="filter-and-query">
+  <h2>碰撞过滤的三层 + GroupIndex/mask 怎么用？查询 API（QueryAABB/RayCast）怎么用？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>ContactManager.cs:173-177</code>、<code>DefaultContactFilter.cs:9-22</code>、<code>World.cs:560-625</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>三层过滤：① Body 级（至少一个 Dynamic + 关节）② Fixture 级（GroupIndex 短路 + mask 双向互检）③ Sensor 检查</li>
+    <li>GroupIndex 跨组无效；mask 必须<b>双向 AND</b>（MaskBits=0 则和所有东西不碰）</li>
+    <li>QueryAABB 返回<b>保守超集</b>（胖框对胖框，多 0.1 米余量），callback 里要精确测；RayCast 四种返回值，要最近就返回 fraction</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>三层过滤</b>（<code>ContactManager.cs:173-177</code>）：① <code>Body.ShouldCollide</code>（至少一个 Dynamic + 关节 CollideConnected）；② <code>ContactFilter.ShouldCollide</code>（<b>用户唯一能控制</b>的，GroupIndex + mask）；③ Sensor 检查（sensor 不参与求解）。
+  </p>
+  <p>
+    <b>第②层内部两步</b>（<code>DefaultContactFilter.cs:9-22</code>）：<b>GroupIndex 短路优先</b>——同组且 &gt;0 无条件碰（绕过 mask）；同组且 &lt;0 无条件不碰（<b>本项目玩家用的就是这条</b>）；同组=0 或<b>不相等</b>才走 mask。然后 <b>mask 双向互检</b>：<code>(A.Mask &amp; B.Category)!=0 && (A.Category &amp; B.Mask)!=0</code>，逻辑 AND，双向都要满足。
+  </p>
+  <p>
+    <b>两个易错点</b>：① <b>GroupIndex 跨组无效</b>——A=+5 与 B=+7 都正但「不相等」，走 mask，不会无条件碰（必须数值相等才算同组）；② <b>mask 双向 AND</b>——某物体 MaskBits=0 就和所有东西不碰，无论对方 mask 多宽。
+  </p>
+  <p>
+    <b>运行时改 filter 必须 refilter</b>（<code>Fixture.cs:56-64</code> setter 自动调）：filter 只在 AABB 开始重叠时调用，运行时改不影响已存在 Contact。Refilter 做「打 FilterFlag 下帧重过滤（拆）+ TouchProxy 强推 moveBuffer 使新 pair 产生（建）」。本项目在 CreateFixture 时就设好 GroupIndex，不涉及运行时改。
+  </p>
+  <p>
+    <b>sensor vs filter 是两阶段</b>：filter 决定 Contact <b>是否创建</b>（创建阶段）；sensor 决定已创建 Contact <b>是否求解</b>（求解阶段）。要「穿过但知道谁穿过」用 sensor；要「彻底互不相干连事件都不要」用 filter。
+  </p>
+  <p>
+    <b>QueryAABB</b>（<code>World.cs:562</code>）：给矩形框，callback 返回 false 终止/true 继续。<b>⚠️ 返回保守超集</b>——查的是 fatAABB 对 fatAABB，会返回真实不和查询框相交的 fixture（多 ≥0.1 米余量）。<b>精确结果必须在 callback 里再测一次</b>（<code>fixture.TestPoint</code> 或精确 TestOverlap）。<code>Fixture.GetAABB</code> 注释：<i>may be enlarged and/or stale</i>。
+  </p>
+  <p>
+    <b>RayCast</b>（<code>World.cs:608</code>）：给线段，callback <b>四种返回值</b>：-1 忽略继续；0 终止整条射线；fraction 裁剪到这一点继续找更近（<b>要最近命中用这个</b>，裁剪能加速——收缩 segmentAABB）；1 不裁剪继续收集全部。<b>fraction 是归一化参数不是距离</b>，真实距离 = fraction × 线段长度；同射线内 fraction 越小越近。<b>射线忽略包含起点的形状</b>（起点在球自己内部不会撞到自己，:610）。
+  </p>
+  <p>
+    <b>三个 TestOverlap 别混</b>：<code>TestOverlap(AABB,AABB)</code> 纯 AABB 相交；<code>TestOverlap(Shape,Shape,Transform...)</code> <b>精确形状重叠</b>（走 GJK）；<code>BroadPhase.TestOverlap(idA,idB)</code> 两 proxy 的 fatAABB。要精确判碰用 Shape 版。
+  </p>
+  <p>
+    <b>查询 API 不可重入不可并发</b>：QueryAABB 和 RayCast 共用可变回调实例（<code>World.cs:556</code>）+ DynamicTree 共享遍历栈。不能嵌套调用、不能多线程。本项目单线程跑物理，暂无影响，但别在查询 callback 里再查询。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">DefaultContactFilter.cs:9-22 —— GroupIndex 短路 + mask 双向互检</p>
+  <pre><code>// 第一步：GroupIndex 短路
+if (filterA.GroupIndex == filterB.GroupIndex && filterA.GroupIndex != 0)
+{
+    return filterA.GroupIndex &gt; 0;   // 同组+正→碰；同组+负→不碰
+}
+// 第二步：mask 双向互检
+return (filterA.MaskBits &amp; filterB.CategoryBits) != 0
+    && (filterA.CategoryBits &amp; filterB.MaskBits) != 0;</code></pre>
+  <p class="code-caption">World.cs:562 —— QueryAABB（返回保守超集，callback 里要精确测）</p>
+  <pre><code>public void QueryAABB(in IQueryCallback callback, in AABB aabb)
+{
+    _treeQueryCallback.Set(ContactManager, in callback);
+    ContactManager.BroadPhase.Query(_treeQueryCallback, aabb);  // ← 查胖框对胖框
+}</code></pre>
+  <p class="code-caption">RayCast callback 四种返回值</p>
+  <pre><code>// 要最近命中：返回 closestFraction 让射线裁短，只找比这更近的
+world.RayCast((fixture, point, normal, fraction) =&gt; {
+    if (fraction &lt; closestFraction) { closestFraction = fraction; closestFixture = fixture; }
+    return closestFraction;   // -1忽略/0终止/fraction裁剪/1不裁
+}, point1, point2);</code></pre>
+  <p><small>引用：<code>ContactManager.cs:173-177</code>（三层调用）、<code>DefaultContactFilter.cs:9-22</code>（核心算法）、<code>Body.cs:1214-1230</code>（Body级）、<code>Fixture.cs:56-64</code>（Refilter）、<code>World.cs:560-625</code>（QueryAABB/RayCast）。</small></p>
+
+  <h3>弹球项目分层示例</h3>
+  <table>
+    <tr><th>你想要的</th><th>用什么</th><th>怎么设</th></tr>
+    <tr><td>玩家互不碰（本项目现状）</td><td>GroupIndex = -1（所有玩家同组）</td><td>同组负数</td></tr>
+    <tr><td>球碰挡板/墙</td><td>mask</td><td>双向 mask 都置对方 category 位</td></tr>
+    <tr><td>球穿过得分区加分</td><td>sensor</td><td>得分区 fixture <code>IsSensor=true</code></td></tr>
+    <tr><td>检测球进了哪个洞</td><td>QueryAABB + TestPoint</td><td>洞位置查小框，callback 精确测</td></tr>
+    <tr><td>预测球先撞到什么</td><td>RayCast 返回 fraction</td><td>找最近命中</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    三层过滤（Body/Fixture用户/Sensor），用户层=GroupIndex短路优先 + mask双向AND（跨组无效、双向AND）。QueryAABB返回保守超集要callback精确测，RayCast四返回值要最近就返回fraction裁剪。sensor管是否创建Contact，filter管是否求解。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
