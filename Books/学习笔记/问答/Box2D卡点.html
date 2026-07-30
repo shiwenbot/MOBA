@@ -77,6 +77,55 @@ vcp.NormalImpulse = newImpulse;</code></pre>
   </div>
 </section>
 
+<section id="unit-scale-first-pitfall">
+  <h2>为什么「单位尺度」是第一个必须知道的坑？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>src/Common/Settings.cs:11,29,36-47,67,80</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Box2D 的内部容差全部<b>假设 1 单位 = 1 米</b>写死了（MKS）</li>
+    <li>钥匙：<code>LinearSlop</code> 的「双重要求」</li>
+    <li>尺寸太大 / 太小，崩法相反——而且症状都<b>不像尺度问题</b></li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    整个库的容差常量都以「米」为量纲硬编码。核心是 <code>LinearSlop = 0.005 米</code>，它被设计成必须<b>同时</b>满足两个相反的要求：<b>数值上显著</b>（不能被浮点误差淹没，否则求解器分不清接触了没、会抖）和<b>视觉上不显著</b>（不能大到肉眼看到缝）。
+  </p>
+  <p>
+    这两个要求<b>同时成立的唯一条件</b>，就是物体尺寸在米量级：物体 1 米时，0.005 相对它是 0.5%（看不见）且本身足够大（浮点误差 ~1e-7 淹不掉）。一旦偏离米制，两个要求就一起崩。
+  </p>
+  <p>
+    <b>尺寸太大</b>（典型：用像素当单位，角色 50 单位）：① <code>LinearSlop</code> 相对变得无意义（万分之一），临界状态反复抖；② <code>-9.8</code> 作用在"50 米角色"上像慢动作，人会去调重力到 -300 掉进下一个坑；③ <code>MaxTranslation=2.0</code> 变致命钳制——"每帧 5 像素"被理解成"每帧 5 米"，跑快被<b>静默限速</b>，不报错。
+  </p>
+  <p>
+    <b>尺寸太小</b>（典型：0.05 单位的小弹珠）：① <code>PolygonRadius=0.01</code> 占体积 20%，方块间有肉眼可见的缝；② <code>LinearSlop</code> 占 10%，明显互嵌；③ 最阴险——<code>PolygonShape.Set</code> 焊接距离平方小于 <code>(0.5*LinearSlop)²</code> 的顶点，小物体顶点被<b>直接焊掉</b>，形状静默退化。
+  </p>
+  <p>
+    反推的安全区间：<b>0.1 ~ 10 米</b>（弹珠到卡车，Box2D 就是按这个调的）。<b>正确做法不是改 <code>LengthUnitsPerMeter</code></b>（它是 <code>const</code>，且派生常量是乘法链、相对关系精心调过），而是<b>物理世界用米、渲染时乘缩放系数</b>：<code>screenPos = physicsPos * 32f</code>。Unity 默认单位就是米，不乱缩放天然对齐。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Settings.cs —— 核心常量（全部 × LengthUnitsPerMeter，即 × 米）</p>
+  <pre><code>public const float LengthUnitsPerMeter = 1.0f;
+
+/// A small length used as a collision and constraint tolerance. Usually it is
+/// chosen to be numerically significant, but visually insignificant.
+public const float LinearSlop = 0.005f * LengthUnitsPerMeter;
+
+/// The radius of the polygon/edge shape skin. This should not be modified...
+public const float PolygonRadius = 2.0f * LinearSlop;
+
+public const float MaxLinearCorrection = 0.2f * LengthUnitsPerMeter;
+public const float MaxTranslation = 2.0f * LengthUnitsPerMeter;</code></pre>
+  <p><small>引用：<code>Settings.cs:11,36-38,44-47,59,67</code>；顶点焊接见 <code>PolygonShape.cs:83-84</code>（阈值 <code>(0.5*LinearSlop)²</code>）；静默限速见 <code>Island.cs:206-217</code>。</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 为什么是「第一个」坑</span>
+    尺度错误的症状（抖动、穿透、堆不稳、重力手感不对、速度被限）<b>看起来都不像尺度问题</b>——你会去调迭代次数、调 <code>Baumgarte</code>、调重力，全治不了根。它是唯一一个「一开始定错、后面全部要重做」的决策，所以必须在写第一行代码前搞定。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
