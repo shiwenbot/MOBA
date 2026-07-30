@@ -294,6 +294,56 @@ public enum BodyType
   </div>
 </section>
 
+<section id="radius-two-semantics">
+  <h2>Radius 在四种 Shape 上为什么有两种意思？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>Shape.cs:15</code>、<code>CircleShape.cs:16-20</code>、<code>Settings.cs:44-46</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Circle.Radius = 真实几何半径（能改）；其他三种 = 0.01 的碰撞 skin（改不了）</li>
+    <li>基类 <code>Shape.Radius</code> 是 <code>public get / internal set</code>，Circle 用 <code>new</code> 重新暴露成 public</li>
+    <li>多边形之间总有 0.01 缝 —— 连回第二章尺度坑</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>Radius</code> 字段四种 Shape 都有（继承自基类），但含义两极：
+  </p>
+  <ul>
+    <li>
+      <b>CircleShape</b>：<code>Radius</code> 是<b>真实几何半径</b>。<code>Radius=0.5</code> 就是半径 0.5 的圆，随便改。它是<b>唯一</b>能直接设的——因为 <code>CircleShape.cs:16-20</code> 用 <code>public new float Radius</code> 覆盖基类，重新暴露 public setter。
+    </li>
+    <li>
+      <b>Polygon / Edge / Chain</b>：<code>Radius</code> 不是形状的一部分，而是<b>一层「皮肤厚度」skin</b>，值钉死在 <code>PolygonRadius = 2*LinearSlop = 0.01</code>。<b>改不了</b>——基类 <code>Shape.cs:15</code> 是 <code>public float Radius { get; internal set; }</code>，外部读得到写不了，这三个 Shape 没像 Circle 那样覆盖。
+    </li>
+  </ul>
+  <p>
+    这层 skin 的作用：让多边形/线段边缘「厚」一点，为连续碰撞（CCD）留缓冲（源码注释：<i>Making this smaller means polygons will have an insufficient buffer for continuous collision</i>）。
+  </p>
+  <p>
+    <b>实际后果：多边形之间会留约 0.01 单位的可见缝隙，这是设计如此不是 bug。</b>因为两个方块「贴在一起」时其实是 skin 接 skin。连回第二章尺度坑：物体 1 米大时 0.01 缝是 1% 看不见；物体 0.05 大时这条缝占 20%，肉眼可见的占五分之一体积的缝。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">Shape.cs:15 —— 基类 Radius 只读不可写</p>
+  <pre><code>/// Radius of a shape. For polygonal shapes this must be b2_polygonRadius...
+public float Radius { get; internal set; }</code></pre>
+  <p class="code-caption">CircleShape.cs:16-20 —— 用 new 覆盖，重新暴露成可改</p>
+  <pre><code>public new float Radius
+{
+    get => base.Radius;
+    set => base.Radius = value;
+}</code></pre>
+  <p class="code-caption">PolygonShape.cs:30 / EdgeShape.cs:33 —— 构造时写死成 skin</p>
+  <pre><code>Radius = Settings.PolygonRadius;   // = 2 * LinearSlop = 0.01，钉死</code></pre>
+  <p><small>引用：<code>Shape.cs:13-15</code>、<code>CircleShape.cs:16-20</code>、<code>Settings.cs:44-46</code>、<code>PolygonShape.cs:30</code>、<code>EdgeShape.cs:33</code>。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Radius 两种身份：Circle=真实半径（可改，<code>new</code> 覆盖基类）；其他三种=0.01 的碰撞 skin（改不了，<code>internal set</code>）。skin 导致多边形之间总有缝，物体越小缝占比越大（第二章尺度坑）。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
