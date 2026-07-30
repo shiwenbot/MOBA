@@ -608,6 +608,120 @@ ContactListener?.EndContact(c);</code></pre>
   </div>
 </section>
 
+<section id="step-seven-actions">
+  <h2>World.Step 不是三阶段，是 7 个动作？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>World.cs:424-507</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>通用说法 Collide → Solve → SolveTOI <b>不完整</b>，源码是 7 个动作</li>
+    <li>FindNewContacts 在<b>锁世界之前</b>（创建接触不能在锁定状态）</li>
+    <li>收尾记 <code>_invDt0</code> 给下一帧 warm starting 的 DtRatio 用</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    源码 <code>World.Step</code>（<code>:424</code>）是 <b>7 个动作</b>：0. <code>if(HasNewContacts) FindNewContacts()</code>（<b>锁世界前</b>，因为创建接触不能在锁定状态）；1. <code>IsLocked=true</code>；2. 构造 TimeStep（Dt/迭代次数/DtRatio，<code>:444-462</code>）；3. <code>ContactManager.Collide()</code>（第四章，更新/销毁 Contact）；4. <code>Solve(step)</code>（本章重头戏，内部尾部又一 FindNewContacts）；5. <code>SolveTOI</code> 若开 CCD；6. 记 <code>_invDt0</code> + <code>ClearForces</code> + <code>IsLocked=false</code>。
+  </p>
+  <p>
+    <b>HasNewContacts 标志</b>由 <code>SetTransform</code> 末尾设（第三章）——手动搬物体 → 下一帧 Step 开头先找新接触。<b>动作 6 的 <code>_invDt0</code></b> 把这帧的 1/dt 存下，下一帧算 <code>DtRatio = _invDt0 * timeStep</code>（dt 不变则 =1，warm starting 冲量原样复用；dt 变了按比例缩放）。
+  </p>
+  <p>
+    这些「杂活」不影响理解主流程，但调试关键：Step 过程中改世界会崩（因为 IsLocked）；改的力没生效（因为 ClearForces 每帧清）。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">World.cs:431-441 —— FindNewContacts 在锁世界之前</p>
+  <pre><code>if (HasNewContacts) {
+    ContactManager.FindNewContacts();   // ← 先找接触
+    HasNewContacts = false;
+}
+IsLocked = true;                        // ← 再锁世界</code></pre>
+  <p><small>引用：<code>World.cs:424-507</code>（Step 全流程）、<code>:460</code>（DtRatio）、<code>:493-507</code>（收尾）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Step = 7 动作：FindNewContacts（锁世界前）→ 锁 → 构造TimeStep → Collide → Solve（内部又一FindNewContacts）→ SolveTOI → 记_invDt0/ClearForces/解锁。
+  </div>
+</section>
+
+<section id="island-solve-timeline">
+  <h2>Island.Solve 内部到底干了什么？速度迭代和位置迭代有啥区别？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>Island.cs:119-260</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>6 步：速度积分 → Setup → WarmStart → 速度迭代×N → 位置积分 → 位置迭代×M → 写回</li>
+    <li>速度迭代管「别再穿了」（改速度）；位置迭代管「把已穿的分开」（改位置，<b>不碰速度</b>）</li>
+    <li>速度迭代<b>没</b>提前退出；位置迭代<b>有</b>（收敛就 break）—— 所以默认 Vel=8 但 Pos=3</li>
+    <li>MaxTranslation 钳制在位置积分前（第二章「像素当单位被静默限速」的机制）</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <code>Island.Solve</code>（<code>:119-260</code>）把「一帧物理推进」拆成 <b>6 个有序步骤</b>：
+  </p>
+  <ul>
+    <li><b>① 速度积分（:119-153）</b>：回答「没障碍的话速度多少」。<code>v += h·(重力+力)</code>（<code>:135</code>，力在这里才从 Force 字段真正积分生效）+ 扭矩 + Pade 近似阻尼 <code>v *= 1/(1+h·damping)</code>。<b>完全不考虑碰撞</b>——算出的速度可能让物体穿进别人，那是 ④ 解决的。</li>
+    <li><b>②③ Setup + WarmStart（:167-189）</b>：组织求解器数据；若 <code>WarmStarting</code> 开则施加上一帧累积冲量当起点（前面学过，关掉就跳过）。</li>
+    <li><b>④ 速度迭代×VelocityIterations（:181-189）</b>：<b>你调 Vel Iters 的地方</b>。每轮算冲量让法向相对速度满足「不再继续穿入」。<b>注释 :180 明说无提前退出、必跑满</b>。只改 <code>Velocities[]</code>。Vel=1 塔塌的根源就在这——只跑 1 轮，接触耦合没传开，冲量算不准。<code>StoreImpulses</code>（:192）把冲量写回 Manifold 供下帧 warm starting。</li>
+    <li><b>⑤ 位置积分（:197-227）</b>：用 ④ 的速度推位置 <code>c += h·v</code>。但<b>前置 MaxTranslation 钳制</b>（:206-217）：单帧位移 &gt; 2.0 米就把速度按比例压下——这就是第二章「像素当单位被静默限速」的机制。</li>
+    <li><b>⑥ 位置迭代×PositionIterations（:232-249）</b>：<b>你调 Pos Iters 的地方</b>。直接位移消除已有穿透（NGS，Non-linear Gauss-Seidel）。<b>完全不碰速度</b>——若用速度修正穿透会给系统注入假动能（箱子自己弹飞）。<b>有提前退出</b>（收敛就 break，<code>positionSolved=true</code>）——所以默认 Pos=3 够。</li>
+    <li><b>收尾（:252-260）</b>：把临时数组 <code>Positions[]</code>/<code>Velocities[]</code> 写回 body + <code>SynchronizeTransform</code>。这就是「迭代对画面不可见」的原因——没写回 body 前，画面不动。</li>
+  </ul>
+
+  <h3>证据</h3>
+  <p class="code-caption">Island.cs:135-136 —— 速度积分（力在这里才生效）</p>
+  <pre><code>v += h * b.InvMass * (b.GravityScale * b.Mass * gravity + b.Force);
+w += h * b.InverseInertia * b.Torque;
+v *= 1.0f / (1.0f + h * b.LinearDamping);   // Pade 近似阻尼</code></pre>
+  <p class="code-caption">Island.cs:181-189 —— 速度迭代（无提前退出，必跑满）</p>
+  <pre><code>for (var i = 0; i &lt; step.VelocityIterations; ++i)   // ← Vel Iters
+{
+    contactSolver.SolveVelocityConstraints();        // 只改 Velocities[]
+}
+contactSolver.StoreImpulses();   // 写回 Manifold 供下帧 warm starting</code></pre>
+  <p class="code-caption">Island.cs:206-217 —— MaxTranslation 钳制（位置积分前）</p>
+  <pre><code>var translation = h * v;
+if (Vector2.Dot(translation, translation) &gt; Settings.MaxTranslationSquared)
+{
+    var ratio = Settings.MaxTranslation / translation.Length();
+    v *= ratio;   // ← 静默限速！速度太快被压下来
+}
+c += h * v;</code></pre>
+  <p class="code-caption">Island.cs:232-249 —— 位置迭代（有提前退出，不碰速度）</p>
+  <pre><code>for (var i = 0; i &lt; step.PositionIterations; ++i)   // ← Pos Iters
+{
+    var contactsOkay = contactSolver.SolvePositionConstraints();  // 只改 Positions[]
+    if (contactsOkay && jointsOkay) { positionSolved = true; break; }  // ← 有提前退出
+}</code></pre>
+  <p><small>引用：<code>Island.cs:119-260</code>（全流程）、<code>:135-145</code>（速度积分+阻尼）、<code>:181-192</code>（速度迭代+StoreImpulses）、<code>:206-217</code>（MaxTranslation 钳制）、<code>:232-249</code>（位置迭代+提前退出）。</small></p>
+
+  <h3>速度迭代 vs 位置迭代（核心对照）</h3>
+  <table>
+    <tr><th></th><th>速度迭代（④）</th><th>位置迭代（⑥）</th></tr>
+    <tr><td>解的问题</td><td>法向相对速度 ≥ bias（<b>不再继续穿入</b>）</td><td>消除<b>已经存在</b>的穿透</td></tr>
+    <tr><td>改什么</td><td><code>Velocities[]</code></td><td><code>Positions[]</code>（<b>不碰速度</b>）</td></tr>
+    <tr><td>收敛判据</td><td>LCP 互补条件</td><td><code>minSeparation ≥ -3·LinearSlop</code></td></tr>
+    <tr><td>提前退出</td><td><b>没有</b>，必跑满</td><td><b>有</b>，收敛就 break</td></tr>
+    <tr><td>默认次数</td><td>8</td><td>3</td></tr>
+  </table>
+
+  <h3>实验对照（前面 Vel=1 实验的代码位置）</h3>
+  <table>
+    <tr><th>你做的</th><th>对应代码</th><th>发生了什么</th></tr>
+    <tr><td>Vel=1 塔塌</td><td>④ 只跑 1 轮</td><td>接触耦合没传开，冲量算不准，撑不住重力</td></tr>
+    <tr><td>Vel=1 + Warm 开 → 弹球</td><td>③ WarmStart 复用错误冲量</td><td>over-correct 被跨帧放大</td></tr>
+    <tr><td>关 Warm → 软塌</td><td>③ 跳过，④ 每帧从 0 爬</td><td>撑不住重力</td></tr>
+    <tr><td>默认 Vel=8 稳</td><td>④ 跑 8 轮收敛</td><td>冲量准了</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    Island.Solve = 速度积分（力生效）→ Setup/WarmStart → 速度迭代（算冲量改速度，无提前退出）→ 位置积分（MaxTranslation 钳制）→ 位置迭代（直接位移消穿透，不碰速度，有提前退出）→ 写回 body。速度迭代管「别再穿」，位置迭代管「分开已穿的」，两个独立旋钮。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
