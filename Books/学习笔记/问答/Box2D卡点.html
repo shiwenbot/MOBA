@@ -175,6 +175,73 @@ fixture = body.CreateFixture(fd);            //    装上去 → body 这才有�
   </div>
 </section>
 
+<section id="bodytype-and-terms">
+  <h2>三种 BodyType 各是干嘛？默认是 Static 这个坑？island 种子、CCD 又是啥？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>Body.cs:14-17,73,336-395,1214-1220</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Static = 环境、Kinematic = 自走平台、Dynamic = 真物体</li>
+    <li>碰撞至少要一个 Dynamic；不显式设 BodyType 默认是 Static（静默失效，不报错）</li>
+    <li>两个术语：island 种子 = 分岛算法的起点；CCD = 连续碰撞检测，防高速穿墙</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    源码注释（<code>Body.cs:14-17</code>）是最好的一手定义：
+    <b>Static</b>（质量零、速度恒零、只能手动搬，用于墙/地面/台面边框）、
+    <b>Kinematic</b>（质量零、<b>速度你设</b>、引擎按你设的速度推它走，用于移动平台/传送带/旋转搅拌器）、
+    <b>Dynamic</b>（质量正、受重力/力、能被冲量推动，球/箱子/玩家，90% 用这个）。
+  </p>
+  <p>
+    <b>关键规则：碰撞至少要有一个 Dynamic。</b>源码 <code>Body.cs:1214-1220</code> 的 <code>ShouldCollide</code> 第一句就是
+    <code>if (_type != DynamicBody && other._type != DynamicBody) return false;</code>。
+    所以 Dynamic↔任何都碰；Static↔Static、Static↔Kinematic、Kinematic↔Kinematic 全部<b>不碰</b>。两个 Kinematic 平台互穿。
+  </p>
+  <p>
+    <b>第一个必踩的坑：默认是 Static。</b><code>BodyDef.BodyType</code> 默认 <code>StaticBody</code>（<code>Body.cs:73</code>，枚举 0 值）。
+    不显式设，<b>物体不会掉落，而且不报任何错</b>——你会以为重力设错了、World 坏了，其实是 Static 不受重力。典型 debug 盲区。
+  </p>
+  <p>
+    两个术语澄清（它们是第七、八章内容，这里只为看懂行为对照表）：
+  </p>
+  <ul>
+    <li>
+      <b>island（岛）种子</b>：Box2D 求解前先把「互相接触/连着」的物体分成一组组（岛），从某个物体开始顺着接触关系往外爬。
+      <b>这个起点物体叫「种子」。</b>Static 不传播岛（否则地面会把全场站着的物体连成一个巨型岛），所以只有 Kinematic/Dynamic 能当种子。
+    </li>
+    <li>
+      <b>CCD（Continuous Collision Detection，连续碰撞检测）</b>：防止高速物体「穿墙」——一帧移动 5 米、墙只有 0.1 米厚时，
+      帧间会跳过墙，引擎插值出帧内轨迹来检测。<b>Dynamic 默认不开 CCD（贵），只有打 <code>IsBullet=true</code> 才开</b>；Static/Kinematic 总有。
+    </li>
+  </ul>
+
+  <h3>证据</h3>
+  <p class="code-caption">Body.cs:14-17 —— 枚举注释（三种类型的一手定义）</p>
+  <pre><code>/// static:    zero mass, zero velocity, may be manually moved
+/// kinematic: zero mass, non-zero velocity set by user, moved by solver
+/// dynamic:   positive mass, non-zero velocity determined by forces, moved by solver
+public enum BodyType
+{
+    StaticBody = 0,
+    ...</code></pre>
+  <p class="code-caption">Body.cs:1214-1220 —— 碰撞至少要一个 Dynamic</p>
+  <pre><code>internal bool ShouldCollide(Body other)
+{
+    // At least one body should be dynamic.
+    if (_type != BodyType.DynamicBody && other._type != BodyType.DynamicBody)
+    {
+        return false;
+    }
+    ...</code></pre>
+  <p><small>引用：<code>Body.cs:14-17</code>（类型定义）、<code>:73</code>（默认 Static）、<code>:1214-1220</code>（至少一个 Dynamic）、<code>:336-395</code>（切换代价：销毁接触点+重建，不适合每帧切；锁定期间禁止）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">行为对照</span>
+    Static=环境（墙/地面，手动搬）｜Kinematic=自走平台（你设速度，引擎推着走）｜Dynamic=真物体（受力受重力，90% 用这个）。碰撞至少要一个 Dynamic；默认 Static 是静默坑。island 种子=分岛起点，CCD=防高速穿墙（Dynamic 要打 IsBullet）。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
