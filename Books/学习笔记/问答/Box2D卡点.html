@@ -242,6 +242,58 @@ public enum BodyType
   </div>
 </section>
 
+<section id="four-shapes">
+  <h2>四种 Shape 各是什么？怎么选？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>src/Collision/Shapes/{Circle,Polygon,Edge,Chain}Shape.cs</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>Circle=圆 / Polygon=凸多边形(≤8顶点) / Edge=线段 / Chain=折线地形</li>
+    <li><code>SetAsBox(hx,hy)</code> 参数是<b>半</b>宽半高 —— <code>SetAsBox(1,1)</code> 建的是 2×2</li>
+    <li>Chain 内部就是一串 EdgeShape，靠幽灵顶点让接缝不绊物体</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    四种 Shape 一句话：<b>CircleShape</b>（一个圆，<code>Radius</code> 默认 0 要自己设，是<b>唯一</b>能直接设 Radius 的）；<b>PolygonShape</b>（凸多边形，必须凸、顶点 ≤ 8，<code>SetAsBox</code> 参数是<b>半</b>宽半高）；<b>EdgeShape</b>（单线段，无内部、<code>TestPoint</code> 恒 false、零质量，双面或单面）；<b>ChainShape</b>（折线/闭环地形，单面碰撞、不能自相交）。
+  </p>
+  <p>
+    弹球项目怎么选：球用 <code>CircleShape</code>；方形挡板/台面边框用 <code>PolygonShape + SetAsBox</code>；直线斜坡用 <code>EdgeShape</code>；曲线地形用 <code>ChainShape</code>。
+  </p>
+  <p>
+    ChainShape 的内部实现：它就是一串 EdgeShape 的集合。<code>GetChildEdge</code>（<code>ChainShape.cs:124-137</code>）取出的每段 EdgeShape <b>恒为 <code>OneSided = true</code></b>，且 <code>Vertex0/Vertex3</code>（幽灵顶点）从相邻段自动取。这正是<b>为什么物体滑过 ChainShape 接缝不会被「绊住」</b>——每段都知道自己的邻居在哪。
+  </p>
+  <p>
+    ChildCount：Circle/Polygon/Edge 都是 1，<b>只有 ChainShape 是 <code>Count - 1</code></b>（点数减 1 = 线段数）。因为内部是 N-1 个 EdgeShape，碰撞检测时要遍历 child。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">PolygonShape.cs:8-14 —— 凸多边形的限制（类头注释）</p>
+  <pre><code>/// A solid convex polygon. ...
+/// Polygons have a maximum number of vertices equal to b2_maxPolygonVertices.</code></pre>
+  <p class="code-caption">CircleShape —— Radius 默认 0，是真实几何半径</p>
+  <pre><code>public CircleShape()
+{
+    ShapeType = ShapeType.Circle;
+    Radius = 0.0f;        // ← 建完必须设，否则是半径 0 的点
+    Position.SetZero();
+}</code></pre>
+  <p class="code-caption">ChainShape.GetChildEdge —— 每段恒单面 + 自动取邻居</p>
+  <pre><code>edge = new EdgeShape {
+    Vertex1 = Vertices[index],
+    Vertex2 = Vertices[index + 1],
+    OneSided = true,                                    // ← 恒为单面
+    Vertex0 = index > 0 ? Vertices[index-1] : PrevVertex,   // 自动取邻居
+    Vertex3 = index < Count-2 ? Vertices[index+2] : NextVertex
+};</code></pre>
+  <p><small>引用：<code>PolygonShape.cs:8-14</code>（凸、≤8）、<code>CircleShape.cs:21</code>（Radius 默认 0）、<code>Settings.cs:24</code>（<code>MaxPolygonVertices=8</code>）、<code>ChainShape.cs:9-15</code>（单面、不能自相交）、<code>ChainShape.cs:124-137</code>（GetChildEdge 复用幽灵顶点）。</small></p>
+
+  <div class="callout tip">
+    <span class="callout-title">一句话</span>
+    四种 Shape = 圆 / 凸多边形 / 线段 / 折线。SetAsBox 是半宽半高；Chain 是一串 Edge，靠幽灵顶点让接缝不绊物体；只有 Chain 的 ChildCount ≠ 1。
+  </div>
+</section>
+
 </main>
 </body>
 </html>
