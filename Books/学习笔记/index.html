@@ -37,7 +37,7 @@
       </tr>
       <tr>
         <td><a href="问答/Box2D卡点.html">Box2D · 卡点</a></td>
-        <td>求解器「算 8 轮」是累加还是迭代收敛；帧 vs 迭代的颗粒度；累积冲量账本 vs 推动物体的增量；Vel Iters=1 为何塔塌（warm starting 开关对照）；为什么单位尺度是第一个坑（MKS 硬编码 / LinearSlop 双重要求 / 太大太小崩法相反 / 物理米-渲染像素分离）；World/Body/Fixture/Shape 四层为何不是两层（形状 vs 表面性质分离 → Shape 可复用）；三种 BodyType（Static=环境/Kinematic=自走/Dynamic=真物体）+ 默认 Static 静默坑 + 碰撞至少要一个 Dynamic + island 种子/CCD 两术语；四种 Shape（Circle/Polygon凸≤8/Edge线段/Chain折线）+ SetAsBox半宽半高 + Chain内部是一串单面Edge靠幽灵顶点不绊物体；质量链路（密度×几何→Fixture→Body累加）+ Static/Kinematic质量恒0 + Density=0仍碰撞不贡献质量 + FixedRotation靠惯量置零 + 运行时改Density不生效坑（ResetMassData是private，用SetMassData绕过）；动态AABB树（框套框O(logn)+fatAABB故意做大+MoveProxy动得不多就不更新树+只查moveBuffer）+ 更新后产pair建Contact每帧算真实几何；Contact存在≠正在接触（fatAABB重叠决定在不在/真实形状决定IsTouching/场上常态有幽灵Contact只为避免反复建销/BeginContact只在跃变时触发）</td>
+        <td>求解器「算 8 轮」是累加还是迭代收敛；帧 vs 迭代的颗粒度；累积冲量账本 vs 推动物体的增量；Vel Iters=1 为何塔塌（warm starting 开关对照）；为什么单位尺度是第一个坑（MKS 硬编码 / LinearSlop 双重要求 / 太大太小崩法相反 / 物理米-渲染像素分离）；World/Body/Fixture/Shape 四层为何不是两层（形状 vs 表面性质分离 → Shape 可复用）；三种 BodyType（Static=环境/Kinematic=自走/Dynamic=真物体）+ 默认 Static 静默坑 + 碰撞至少要一个 Dynamic + island 种子/CCD 两术语；四种 Shape（Circle/Polygon凸≤8/Edge线段/Chain折线）+ SetAsBox半宽半高 + Chain内部是一串单面Edge靠幽灵顶点不绊物体；质量链路（密度×几何→Fixture→Body累加）+ Static/Kinematic质量恒0 + Density=0仍碰撞不贡献质量 + FixedRotation靠惯量置零 + 运行时改Density不生效坑（ResetMassData是private，用SetMassData绕过）；动态AABB树（框套框O(logn)+fatAABB故意做大+MoveProxy动得不多就不更新树+只查moveBuffer）+ 更新后产pair建Contact每帧算真实几何；Contact存在≠正在接触（fatAABB重叠决定在不在/真实形状决定IsTouching/场上常态有幽灵Contact只为避免反复建销/BeginContact只在跃变时触发）；pair产生与去重（UpdatePairs五步只查moveBuffer用胖框查/三道去重防线不自配对·双方都动按id择一·上层线性查重/pair顺序非规范化→ContactList头插→求解顺序→浮点累加→帧同步隐患）</td>
         <td class="status">📖 进行中</td>
       </tr>
     </tbody>

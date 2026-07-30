@@ -401,6 +401,63 @@ if (buffer) { BufferMove(proxyId); }</code></pre>
   </div>
 </section>
 
+<section id="pair-generation-and-dedup">
+  <h2>pair 怎么产生？怎么去重？对帧同步有什么隐患？</h2>
+  <p class="meta">2026-07-30 · 相关：<code>BroadPhase.cs:117-164,240-251</code>、<code>ContactManager.cs:153-171,191</code></p>
+
+  <h3>线索</h3>
+  <ul>
+    <li>UpdatePairs 五步：只查 moveBuffer、用<b>胖框</b>查（所以会多报）</li>
+    <li>去重三道防线：不自配对 / 双方都动按 id 择一 / 上层线性查重</li>
+    <li>⚠️ pair 顺序<b>非规范化</b> → ContactList 头插 → 求解顺序 → 浮点累加顺序 → 影响确定性</li>
+  </ul>
+
+  <h3>核心理解</h3>
+  <p>
+    <b>pair 产生（UpdatePairs 五步，<code>BroadPhase.cs:117-164</code>）</b>：① 重置 pair 缓冲；② <b>遍历 moveBuffer</b>（只有「动了的」物体，静止的不参与），拿每个物体的 <b>fatAABB 去查树</b>，每查到一个重叠叶子就产出一个 pair；③ 把 pair 派发给上层 <code>AddPairCallback</code>；④ 清掉 moveBuffer 里物体的 Moved 标记；⑤ 重置 moveBuffer。关键②的注释（<code>:134</code>）明说必须用胖框查——否则会漏掉「现在没碰、马上要碰」的对，这正是幽灵 Contact 的来源。
+  </p>
+  <p>
+    <b>去重三道防线</b>（pair 会重复产生：A 查到 B，B 又查到 A，必须去重）：
+  </p>
+  <ul>
+    <li><b>防线①（<code>QueryCallback:240-243</code>）</b>：不自配对——<code>proxyId == queryProxyId</code> 跳过。</li>
+    <li>
+      <b>防线②（<code>:246-251</code>）最精妙</b>：双方都在 moveBuffer 时，按 id 择一。<code>if (moved && proxyId &gt; queryProxyId) return true;</code>
+      ——约定「只让 id 小的那次报」。A(id=5)查到B(id=8)→5&lt;8→报；B(id=8)查到A(id=5)→8&gt;5→跳过。一次循环 (A,B) 只报一次。<b>条件必须是双方都动</b>：对方没动就只有我查到它这一种，无重复，直接报。
+    </li>
+    <li><b>防线③（<code>ContactManager:153-171</code>）</b>：跨帧去重——pair 交到上层后线性扫 ContactList 查「已有 Contact 吗」，有则丢弃。源码留有「用哈希表优化」的 TODO，现在是线性 O(n)。</li>
+  </ul>
+  <p>
+    <b>⚠️ 对帧同步的关键隐患：pair 顺序非规范化。</b>pair 报告顺序由三个因素决定：<b>moveBuffer 插入顺序、树遍历栈顺序（LIFO 实际先访问 Child2）、树当前形状</b>——<b>不按 proxyId 字典序</b>。给定相同输入可复现，但同样两个物体在不同树形状下可能以不同顺序被报告。而 <code>ContactList</code> 是 <code>AddFirst</code> 头插（<code>ContactManager.cs:191</code>），pair 顺序直接变成 Contact 顺序 → <b>求解顺序</b> → <b>浮点累加顺序</b>。浮点加法不满足交换律，求解顺序一变，误差累积就不同 → 几帧后位置发散。这就是「<b>物体创建顺序影响数值结果</b>」的完整机制链。
+  </p>
+
+  <h3>证据</h3>
+  <p class="code-caption">BroadPhase.cs:117-164 —— UpdatePairs 五步（节选关键②）</p>
+  <pre><code>for (var j = 0; j &lt; _moveCount; ++j)        // 只遍历 moveBuffer（动了的）
+{
+    _queryProxyId = _moveBuffer[j];
+    var fatAABB = _tree.GetFatAABB(_queryProxyId);
+    _tree.Query(this, fatAABB);              // 用胖框查树，产出 pair
+}
+// 注释 :134 —— We have to query the tree with the fat AABB so that
+//                we don't fail to create a pair that may touch later.</code></pre>
+  <p class="code-caption">BroadPhase.cs:240-251 —— 去重防线①②</p>
+  <pre><code>public bool QueryCallback(int proxyId)
+{
+    if (proxyId == _queryProxyId) return true;     // ① 不自配对
+
+    var moved = _tree.WasMoved(proxyId);
+    if (moved && proxyId &gt; _queryProxyId) return true;  // ② 双方都动按 id 择一
+    ...
+}</code></pre>
+  <p><small>引用：<code>BroadPhase.cs:117-164</code>（UpdatePairs）、<code>:134</code>（必须用胖框查）、<code>:240-251</code>（去重①②）、<code>ContactManager.cs:153-171</code>（去重③线性查重）、<code>:191</code>（ContactList AddFirst 头插）。</small></p>
+
+  <div class="callout warn">
+    <span class="callout-title">⚠️ 帧同步隐患</span>
+    pair 顺序由 moveBuffer 顺序 + 树形状 + 遍历栈决定，<b>非规范化</b>。ContactList 头插 → pair 顺序变求解顺序变浮点累加顺序。<b>物体创建/移动顺序不同 → 数值结果发散</b>。做 bit-exact 回滚/重放时这是隐患（第零章 v6 存档读档实验撞上的就是这类问题）。
+  </div>
+</section>
+
 <section id="contact-exists-not-touching">
   <h2>Contact 存在 ≠ 正在接触——为什么场上会有一批「幽灵 Contact」？</h2>
   <p class="meta">2026-07-30 · 相关：<code>ContactManager.cs:289-294</code>、<code>Contact.cs:298</code></p>
