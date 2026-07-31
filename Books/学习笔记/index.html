@@ -72,6 +72,26 @@
         <td class="status">✓ 完成</td>
       </tr>
       <tr>
+        <td><a href="教材/Source同步一-属性同步讲解.html">Source 同步（一）属性同步</a></td>
+        <td>SendTable/RecvTable 声明式框架为何存在（版本兼容 &gt; 省事）；量化与位数；<b>SPROP_CHANGES_OFTEN 优化的是元数据不是数据</b>（含 fish.cpp 那个"优化破坏顺序"的坑）；SendProxy 做 per-client 过滤兼反作弊；EHANDLE 序列号解决槽位复用；CNetworkVar 靠指针算术零开销反查宿主；<b>脏标记精确到字节偏移，超 19 个降级为全量</b>；忘用 CNetworkVar 的静默不同步 bug 与编译期防线；客户端侧为何<b>不</b>用 CNetworkVar</td>
+        <td class="status">✓ 完成</td>
+      </tr>
+      <tr>
+        <td><a href="教材/Source同步二-客户端预测讲解.html">Source 同步（二）客户端预测</a></td>
+        <td><b>共用 gamemovement.cpp 是预测正确的必要条件而非优化</b>；CUserCmd 与 command_number；输入用冗余而非重传（对比 KCP 的 ARQ）；m_bFirstTimePredicted 与"一枪五响"问题的三层解法（含<b>服务端反向剔除接收者</b>）；<b>共享确定性随机数：种子=hash(命令种子, 调用点字符串, 附加种子)</b>，为何用名字而非顺序；预测边界（其他玩家/视角/血量/武器逻辑各自的妥协）；站在移动平台上时预测与插值的正面冲突</td>
+        <td class="status">✓ 完成</td>
+      </tr>
+      <tr>
+        <td><a href="教材/Source同步三-回滚与误差修正讲解.html">Source 同步（三）回滚与误差修正</a></td>
+        <td><b>本系列核心。</b>纠正"平滑修正"的错误说法 —— 实际是<b>双轨：模拟状态瞬间硬拉回 + 摄像机眼位线性平滑 0.1s</b>；三份数据（活体/权威态/90 份中间态）与打包布局；<b>字段四分类决策表</b>（A完整同步/B纯本地/C纯展示/D预测但不可比）与漏 B、漏 D 的不同症状；NOERRORCHECK 只屏蔽报错不屏蔽回滚；三段式误差判定（含 64 单位上限为何存在）；<b>容差必须从压缩格式反推</b>（0.0625 = 两倍量化步长）；PreEntityPacketReceived 那四行的互补恢复；<b>重放是异常处理不是主循环</b>（cl_pred_optimize 2）；回滚后必须补做的副作用清单</td>
+        <td class="status">✓ 完成</td>
+      </tr>
+      <tr>
+        <td><a href="教材/Source同步四-插值与延迟补偿讲解.html">Source 同步（四）插值与延迟补偿</a></td>
+        <td>纠正 interpolatortypes.h 与实体插值无关的常见混淆；<b>插值延迟完整公式含 +1 tick 余量，netgraph 显示值比实际小一个 tick</b>；可增长环形缓冲与三点 Hermite；<b>角度必须 slerp 且禁用 Hermite、循环量要判环绕、位置 Hermite 要夹逼</b>；外插的关键判据（区分"网络卡了"与"物体停了"）；<b>倒带量 = 网络延迟 + 插值延迟 ← 时间债闭环的代码证据</b>；服务端复刻客户端公式自算 m_fLerpTime 防作弊 + 200ms 双路校验；<b>骨骼必须一起倒带、不刷缓存等于白做</b>；墙后击杀的数学必然性与"两种不公平选哪个"；三套机制统一视角与 Unity 生态对照（NGO 缺预测回滚与延迟补偿）</td>
+        <td class="status">✓ 完成</td>
+      </tr>
+      <tr>
         <td><a href="教材/Box2D讲解.html">Box2DSharp 0.6</a></td>
         <td><b>含第零章学习路径</b>（Testbed 实验清单 / 小项目 v1-v6 / 不用读什么）；物理引擎心智模型、单位尺度、对象模型、碰撞管线、Sequential Impulse 求解器、Island 与休眠、CCD、锁定规则、与主流文献不符的对照表</td>
         <td class="status">✓ 完成</td>
@@ -80,7 +100,7 @@
   </table>
 </div>
 
-<p class="index-last-updated">最后更新：<span id="last-updated">2026-07-29</span></p>
+<p class="index-last-updated">最后更新：<span id="last-updated">2026-07-30</span></p>
 </main>
 </body>
 </html>

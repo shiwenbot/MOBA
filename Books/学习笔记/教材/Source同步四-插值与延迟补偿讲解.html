@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source 网络同步（四）插值与延迟补偿 —— 时间债的闭环</title>
+<link rel="stylesheet" href="reading-notes.css">
+<link rel="stylesheet" href="toc.css">
+<script src="toc.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="Source同步一-属性同步讲解.html">一 · 属性同步</a>
+    <a href="Source同步二-客户端预测讲解.html">二 · 客户端预测</a>
+    <a href="Source同步三-回滚与误差修正讲解.html">三 · 回滚与修正</a>
+    <a class="cur" href="Source同步四-插值与延迟补偿讲解.html">四 · 插值与延迟补偿</a>
+  </div>
+  <h1>Source 网络同步（四）插值与延迟补偿</h1>
+  <div class="sub">
+    Source SDK 2013 源码阅读 · 网络同步四部曲第四篇（终）<br>
+    <code>game/client/interpolatedvar.h</code> · <code>game/server/player_lagcompensation.cpp</code>
+  </div>
+</header>
+
+<p>前两篇讲的是<b>本地玩家</b>：预测让你的输入立即生效，回滚保证正确性。</p>
+
+<p>这一篇讲另外两个方向：<b>其他玩家在你屏幕上怎么才不抖（插值，把时间往后推）</b>，以及<b>你开枪时服务端怎么判定命中（延迟补偿，把时间倒带）</b>。</p>
+
+<div class="note">
+<b>为什么这两个必须放在一篇里讲</b>
+它们是<b>同一笔时间债的两面</b>。<br><br>
+插值为了平滑，让你看到的敌人比真实位置<b>旧 100ms</b>。如果服务端按"当前真实位置"判定命中，你瞄准的地方永远是空的 —— <b>永远打不中</b>。<br><br>
+所以延迟补偿必须把这 100ms <b>原样还回来</b>。代码里有直接证据（§7），插值时间是延迟补偿公式里的一个加数。<br><br>
+<b>这就是我在第一篇说的"闭环"。只做预测不做这两个，游戏是不可玩的。</b>
+</div>
+
+<h2>一、纠正一个常见混淆</h2>
+
+<p><code>public/interpolatortypes.h</code> <b>和实体插值无关</b>。它是 Faceposer/SFM 的表情曲线（Catmull-Rom、Kochanek-Bartels、B-Spline），只被 <code>expressionsample.h</code> 和 <code>movieobjects/dmelog.h</code> 引用。</p>
+
+<p>实体插值的类型标志在 <code>game/client/interpolatedvar.h:30-37</code>。<b>两者名字相似但完全是两个系统</b>，网上不少资料把它们混为一谈（我一开始也是）。</p>
+
+<h2>二、为什么远程实体必须插值</h2>
+
+<p>服务端只在每个 tick 结束时发快照（TF2 约 66Hz = 15ms），客户端渲染帧率独立且远高于此（144fps ≈ 6.9ms）。</p>
+
+<p>直接把最新快照的值贴给远程实体的后果：</p>
+
+<div class="flow"><b>不插值 vs 插值</b>
+
+  <b>不插值</b>（直接用最新快照）
+  快照:  A────────B────────C
+  渲染:  AAA      BBB      CCC     <span class="cmt">同一值渲染 2-3 帧不动</span>
+         └─ 卡住 ─┘└ 瞬移 ┘
+  <b>结果：20Hz 级别的抽帧跳动，无论本地多少帧</b>
+
+  <b>插值</b>（渲染过去某一时刻）
+  快照:  A────────B────────C
+  目标:       ↑ 渲染时间 = 当前 - 延迟
+  渲染:  A·a·a·b·B·b·b·c·C          <span class="cmt">连续</span>
+  <b>结果：平滑，代价是看到的是过去</b>
+</div>
+
+<p>更糟的是网络抖动会让快照间隔忽长忽短，跳动幅度也随之不均。</p>
+
+<p>核心一行：</p>
+
+<div class="filetag">game/client/interpolatedvar.h:810</div>
+<pre><code><span class="kw">float</span> targettime = currentTime - interpolation_amount;</code></pre>
+
+<p><b>客户端渲染的远程实体，永远是过去某个时刻的状态。</b>这样手上总有目标时间前后各一个真实采样点，可以连续插值。</p>
+
+<h2>三、插值延迟的实际公式（比流传版本多一层）</h2>
+
+<div class="filetag">game/client/cdll_bounded_cvars.cpp:134</div>
+<pre><code><span class="kw">return</span> <span class="type">MAX</span>( cl_interp-&gt;<span class="type">GetFloat</span>(),
+            cl_interp_ratio-&gt;<span class="type">GetFloat</span>() / pUpdateRate-&gt;<span class="type">GetFloat</span>() );</code></pre>
+
+<p><b>是取大，不是相加。</b>默认 <code>cl_interp = 0.1</code>、<code>cl_interp_ratio = 2.0</code>、<code>cl_updaterate = 66</code>：</p>
+
+<p><code>max(0.1, 2/66) = max(0.1, 0.0303) = 0.1</code> 秒</p>
+
+<p><b>这就是为什么竞技玩家要把 <code>cl_interp</code> 设成 0</b> —— 让 ratio 项生效，把延迟从 100ms 降到 30ms。</p>
+
+<p>但还没完，最终值要再加服务端 tick 余量：</p>
+
+<div class="filetag">game/client/c_baseentity.cpp:5937</div>
+<pre><code><span class="kw">return</span> <span class="type">AdjustInterpolationAmount</span>( <span class="kw">this</span>,
+    <span class="type">TICKS_TO_TIME</span>( <span class="type">TIME_TO_TICKS</span>( <span class="type">GetClientInterpAmount</span>() ) + serverTickMultiple ) );</code></pre>
+
+<p><code>serverTickMultiple</code> 通常是 <b>1</b>（alternate ticks 时为 2）。<b>无条件多加一个 tick 的余量</b> —— 宁可多延迟也不冒"采样点还没到就要插值"的风险。</p>
+
+<div class="warn">
+<b>netgraph 显示的数字比实际值小一个 tick</b>
+<code>vgui_netgraphpanel.cpp:771</code> 显示的 <code>lerp: xx ms</code> <b>不含</b>这个 +1 tick 余量。<br><br>
+所以你在游戏里看到的插值延迟数字，<b>比真实值小 15ms</b>（66 tick）。这是个典型的"显示值 ≠ 实际值"陷阱。
+</div>
+
+<p>完整公式：</p>
+
+<div class="flow"><b>插值延迟的完整计算</b>
+
+  base   = MAX( cl_interp', cl_interp_ratio' / cl_updaterate' )
+             <span class="cmt">cl_interp'       = MAX( cl_interp, sv_min / updaterate )</span>
+             <span class="cmt">cl_interp_ratio' = clamp( ratio, sv_client_min, sv_client_max )</span>
+
+  delay  = TICKS_TO_TIME( TIME_TO_TICKS( base ) + <b>1</b> )    ← <b>+1 tick 余量</b>
+
+  target = curtime - delay
+</div>
+
+<h3>3.1 cl_interp_ratio 的语义</h3>
+
+<p>"我要缓冲几个快照间隔"。</p>
+
+<ul>
+<li><code>ratio = 2</code>：留两个更新周期余量，<b>能容忍丢一个包</b>而插值不断流</li>
+<li><code>ratio = 1</code>：只留一个周期，<b>任何丢包立刻断流</b></li>
+</ul>
+
+<p>这是"延迟"和"抗丢包"的直接权衡，也是竞技玩家和普通玩家配置分歧的根源。</p>
+
+<h3>3.2 本地玩家走另一条路</h3>
+
+<div class="filetag">game/client/c_baseentity.cpp:5925-5928</div>
+<pre><code><span class="cmt">// 可预测/客户端创建的实体</span>
+<span class="kw">return</span> TICK_INTERVAL * serverTickMultiple;   <span class="cmt">// 只有一个 tick</span></code></pre>
+
+<p><b>自己的身体不能被延后，那是预测的地盘。</b>三套机制在这里划清了边界。</p>
+
+<h2>四、历史采样怎么存</h2>
+
+<p>不是固定环形数组，是<b>可增长的环形缓冲</b> <code>CSimpleRingBuffer</code>（<code>interpolatedvar.h:304-429</code>）：</p>
+
+<ul>
+<li>初始容量 4，增长步长 16</li>
+<li><code>AddToHead()</code> 插到头部，<b>索引 0 恒为最新</b>，越大越旧</li>
+<li>每条 entry 存 <code>{ changetime, 值 }</code></li>
+</ul>
+
+<p>保留多少个点<b>不是固定数字，是按时间窗口裁剪</b>：</p>
+
+<div class="filetag">game/client/interpolatedvar.h:1057</div>
+<pre><code><span class="type">RemoveEntriesPreviousTo</span>( currentTime - interpolation_amount
+                          - EXTRA_INTERPOLATION_HISTORY_STORED );</code></pre>
+
+<p><code>EXTRA_INTERPOLATION_HISTORY_STORED = 0.05f</code>，多留 50ms 余量。裁剪时刻意保留目标时刻之前的 <b>3 个</b>采样（因为 Hermite 需要三点），所以稳态下典型是 3-5 个点。</p>
+
+<h3>4.1 选点与插值系数</h3>
+
+<p>从最新往旧遍历，找到第一个 <code>changetime <= targettime</code> 的作为 <code>older</code>，前一个作为 <code>newer</code>：</p>
+
+<div class="filetag">game/client/interpolatedvar.h:846-847</div>
+<pre><code>pInfo-&gt;frac = ( targettime - older_time ) / ( newer_time - older_time );
+pInfo-&gt;frac = <span class="type">MIN</span>( pInfo-&gt;frac, <span class="num">2.0f</span> );   <span class="cmt">// 上限 2.0</span></code></pre>
+
+<p>若还能再往旧取到第 3 个点且未设 <code>INTERPOLATE_LINEAR_ONLY</code>，就走三点 Hermite。</p>
+
+<h2>五、不同数据类型需要不同插值方式</h2>
+
+<p>这一节的三个案例都是"朴素线性插值会出错"的典型，值得单独记。</p>
+
+<h3>5.1 角度的 360° 环绕 —— 用四元数 slerp</h3>
+
+<p><code>QAngle</code> 的线性插值被特化为四元数 slerp（<code>mathlib.h:661</code>，注释 "Specialization for interpolating euler angles via quaternions"）。</p>
+
+<p><b>这样 350° → 10° 走 20° 短弧，而不是欧拉数值上倒退 340°。</b></p>
+
+<p>而角度的 <b>Hermite 被显式禁用</b>：</p>
+
+<div class="filetag">game/client/lerp_functions.h:104-108</div>
+<pre><code><span class="kw">inline</span> <span class="type">QAngle</span> <span class="type">Lerp_Hermite</span>&lt;<span class="type">QAngle</span>&gt;( <span class="kw">float</span> t, ... )
+{
+    <span class="cmt">// Can't do hermite with QAngles, get discontinuities,
+    // just do a regular interpolation</span>
+    <span class="kw">return</span> <span class="type">Lerp</span>( t, p1, p2 );
+}</code></pre>
+
+<p><b>原因</b>：Hermite 要用前一点估切线（速度），而角度的环绕会让"速度"算出天文数字 —— 350° 到 10° 看起来是 -340° 的位移，切线完全错。</p>
+
+<h3>5.2 动画周期的循环 —— LoopingLerp</h3>
+
+<p><code>m_flCycle</code> 是 0→1 循环量。用 0.5 作为"是否跨越环绕点"的判据：</p>
+
+<div class="filetag">game/client/lerp_functions.h:22-29</div>
+<pre><code><span class="kw">if</span> ( <span class="type">fabs</span>( flTo - flFrom ) &gt;= <span class="num">0.5f</span> )
+{
+    <span class="kw">if</span> (flFrom &lt; flTo) flFrom += <span class="num">1.0f</span>;
+    <span class="kw">else</span>               flTo   += <span class="num">1.0f</span>;
+}</code></pre>
+
+<p><b>0.9 → 0.1 被理解成 0.9 → 1.1（继续前进），而不是倒退 0.8。</b></p>
+
+<p>而且是否走 looping <b>由序列本身是否循环动态决定</b>（<code>c_baseanimating.cpp:4472</code>）：</p>
+
+<pre><code>m_iv_flCycle.<span class="type">SetLooping</span>( <span class="type">IsSequenceLooping</span>( <span class="type">GetSequence</span>() ) );</code></pre>
+
+<h3>5.3 位置用 Hermite，但要夹逼</h3>
+
+<p>位置是连续物理量，三点 Hermite 能沿运动曲线走出带速度连续性的弧线，比纯线性的折线更贴近真实轨迹。</p>
+
+<p><b>但 Hermite 会过冲</b>，所以每个分量事后都过 <code>Lerp_Clamp</code>。注释里有个生动的记录（<code>interpolatedvar.h:1452-1455</code>）：<code>m_flCycle</code> 曾被 Hermite 甩到 <b>la-la land</b>。</p>
+
+<div class="tip">
+<b>Unity 落地：三类量三种处理</b>
+<table>
+<tr><th>数据类型</th><th>正确做法</th><th>错误做法的症状</th></tr>
+<tr><td>位置</td><td><code>Vector3.Lerp</code> 或三点 Hermite + clamp</td><td>Hermite 不夹逼 → 转向时过冲</td></tr>
+<tr><td>旋转</td><td><b><code>Quaternion.Slerp</code></b>，绝不插欧拉角</td><td>过 ±180° 时<b>整个转一圈</b></td></tr>
+<tr><td>循环量<br><span class="cmt">（动画周期、进度条）</span></td><td>先判断是否跨环绕点</td><td>0.9→0.1 时<b>倒着播</b></td></tr>
+</table>
+第二条最常见。<b>Unity 里 <code>Vector3.Lerp(eulerAngles)</code> 是新手最经典的坑之一</b>，而它在网络插值里出现的概率极高，因为你拿到的往往是压缩后的角度值。
+</div>
+
+<h3>5.4 外插：门槛设得很高</h3>
+
+<p>当目标时间已经晚于所有采样时才考虑外插，且四个条件全满足（<code>interpolatedvar.h:1002-1006</code>）。最关键的一条：</p>
+
+<pre><code><span class="type">CInterpolationContext</span>::<span class="type">GetLastTimeStamp</span>() &lt;= m_LastNetworkedTime</code></pre>
+
+<p>代码用一大段注释解释（<code>:1008-1021</code>）：<b>只有当整个连接都没收到新数据（服务器在 choke）才外插。</b></p>
+
+<p>如果服务器还在正常发包、只是<b>这个实体</b>不再更新，说明它<b>真的停下了</b> —— 此时外插会造成"物体飘出去又被拽回来"。</p>
+
+<p>外插量上限 <code>cl_extrapolate_amount</code> 默认 <b>0.25 秒</b>。而且 <code>CInterpolationContext</code> 构造时<b>默认关闭</b>外插，必须显式开启 —— fail-safe 设计。</p>
+
+<div class="tip">
+<b>这个判据值得照抄</b>
+<b>"没数据"和"数据说它没动"是两件完全不同的事。</b><br><br>
+Unity 里做外插时，要能区分"网络卡了"和"这个物体停下了"。区分方法就是 Source 这招：看<b>整个连接</b>的最后收包时间，而不是看<b>这个实体</b>的最后更新时间。
+</div>
+
+<p>另外超过 <b>0.5 秒</b>没收包，整个插值系统停摆（<code>c_baseentity.cpp:3231-3239</code>）。</p>
+
+<h2>六、延迟补偿：把时间倒带</h2>
+
+<p>文件 <code>game/server/player_lagcompensation.cpp</code>（约 875 行），接口只有 3 个虚函数。</p>
+
+<h3>6.1 完整流程</h3>
+
+<div class="flow"><b>一次开枪的服务端处理</b>
+
+<b>第 0 步 · 持续录像</b>
+  每帧为每个玩家追加一条 LagRecord
+  <span class="cmt">FrameUpdatePostEntityThink，:245-342</span>
+
+<b>第 1 步 · 客户端在自己的时间线开枪</b>
+  屏幕上的对手是"过去"的（插值延迟）
+  开火写进 CUserCmd，带 tick_count + viewangles
+
+<b>第 2 步 · 武器代码主动开启补偿</b>  ← <b>不是框架自动的！</b>
+  StartLagCompensation( pPlayer, pPlayer-&gt;GetCurrentCommand() );
+  ...  FireBullets / 射线检测  ...
+  FinishLagCompensation( pPlayer );
+  <span class="cmt">全树约 20 处这样的配对</span>
+
+<b>第 3 步 · 算出倒带到哪一刻</b>  ← §7 详讲
+
+<b>第 4 步 · 把其他玩家搬回去</b>
+  跳过自己 → WantsLagCompensationOnEntity 过滤
+  → BacktrackPlayer()：改写 origin/angles/bbox/<b>动画状态</b>
+  原值记进 m_RestoreData
+
+<b>第 5 步 · 在倒带后的世界做射线检测</b>
+  命中判定自然打在"客户端当时看到的位置"
+
+<b>第 6 步 · 恢复</b>
+  <span class="cmt">只在"当前值仍等于我们改成的值"时才还原</span>
+</div>
+
+<p><b>第 2 步值得强调</b>：延迟补偿<b>不是自动的</b>，每把武器要显式包裹射线检测。这意味着<b>漏了就没有补偿</b>，而症状是"这把枪特别难打中人"。</p>
+
+<p><b>第 6 步的谨慎</b>很有代表性：射线检测过程中游戏逻辑可能合法地又改动了玩家（击退、死亡），这时新值优先，<b>不能覆盖</b>。</p>
+
+<h3>6.2 LagRecord 存什么</h3>
+
+<pre><code>m_fFlags            <span class="cmt">// LC_ALIVE</span>
+m_vecOrigin, m_vecAngles
+m_vecMinsPreScaled, m_vecMaxsPreScaled   <span class="cmt">// 碰撞盒</span>
+m_flSimulationTime  <span class="cmt">// ★ 索引键</span>
+m_masterSequence, m_masterCycle          <span class="cmt">// ↓ 完整动画姿态</span>
+m_layerRecords[]                         <span class="cmt">// 叠加层</span>
+m_flPoseParameters[]</code></pre>
+
+<p><b>历史窗口 = <code>sv_maxunlag</code></b>，默认 1.0 秒，<b>上限也是 1.0</b>。每帧从尾部剔除过期记录。</p>
+
+<div class="warn">
+<b>为什么必须有上限</b>
+没有上限的话，一个 ping 3 秒的玩家能让服务端把所有人倒带 3 秒 —— 等于在别人的"三秒前"射击，<b>对被打的一方完全不可理解</b>。同时历史缓冲的内存和遍历成本也会失控。<br><br>
+超出这个延迟的玩家，补偿被截断，只能自己"打提前量"。
+</div>
+
+<h2>七、倒带时刻的计算 —— 时间债的直接证据</h2>
+
+<p>这是整个系列最关键的一段代码：</p>
+
+<div class="filetag">game/server/player_lagcompensation.cpp:389-402</div>
+<pre><code>correct += nci-&gt;<span class="type">GetLatency</span>( FLOW_OUTGOING );          <span class="cmt">// ① 网络单程延迟</span>
+<span class="kw">int</span> lerpTicks = <span class="type">TIME_TO_TICKS</span>( player-&gt;m_fLerpTime );  <span class="cmt">// ② 客户端插值量</span>
+correct += <span class="type">TICKS_TO_TIME</span>( lerpTicks );                 <span class="cmt">// ★ 加上插值延迟</span>
+correct = <span class="type">clamp</span>( correct, <span class="num">0.0f</span>, sv_maxunlag.<span class="type">GetFloat</span>() );
+<span class="kw">int</span> targettick = cmd-&gt;tick_count - lerpTicks;</code></pre>
+
+<p><b>倒带量 = 网络延迟 + 插值延迟。</b></p>
+
+<p>这就是我在第一篇说的"插值欠下的时间债必须由延迟补偿来还"—— <b>代码层面的直接证据</b>。服务端倒带时不只减去网络延迟，还要再减去客户端插值造成的额外延迟，两笔加起来才是"玩家开枪那一刻真正看到的画面"。</p>
+
+<h3>7.1 服务端不信任客户端上报的插值量</h3>
+
+<p><code>cl_interp</code> 是 <code>FCVAR_USERINFO</code> —— <b>玩家能改</b>。如果服务端照着客户端说的倒带，把 <code>cl_interp</code> 调到 0.5 就能打"半秒前"的敌人。</p>
+
+<p>所以服务端<b>用完全复制客户端逻辑的方式自己重算一遍</b>：</p>
+
+<div class="filetag">game/server/player.cpp:3510</div>
+<pre><code><span class="kw">this</span>-&gt;m_fLerpTime = <span class="type">MAX</span>( flLerpAmount, flLerpRatio / <span class="kw">this</span>-&gt;m_nUpdateRate );</code></pre>
+
+<p>同文件 <code>:3479-3482</code> 的注释坦承这是在重复客户端的代码。而且会用 <code>sv_client_min/max_interp_ratio</code> 夹逼。</p>
+
+<h3>7.2 两条路径互相校验（反作弊防线）</h3>
+
+<div class="filetag">game/server/player_lagcompensation.cpp:405-412</div>
+<pre><code><span class="kw">float</span> deltaTime = correct - <span class="type">TICKS_TO_TIME</span>(gpGlobals-&gt;tickcount - targettick);
+<span class="kw">if</span> ( <span class="type">fabs</span>( deltaTime ) &gt; <span class="num">0.2f</span> )
+    targettick = gpGlobals-&gt;tickcount - <span class="type">TIME_TO_TICKS</span>( correct );</code></pre>
+
+<p>优先信任客户端上报的 <code>tick_count</code>，但如果它与"按延迟推算的 tick"相差超过 <b>200ms</b>，判定客户端在撒谎或时钟严重失准，<b>回退到纯延迟推算</b>。</p>
+
+<p>否则客户端可以伪造 <code>tick_count</code> 任意倒带。</p>
+
+<div class="tip">
+<b>可以带走的安全模式</b>
+<b>客户端上报的任何"时间"都是不可信输入。</b>正确做法是：<br>
+① 服务端<b>自己也能算</b>一份（哪怕要复制客户端代码）<br>
+② 客户端值只在<b>合理区间内</b>被采纳<br>
+③ 超出区间就<b>回退到服务端自算值</b><br><br>
+不要简单地拒绝或截断 —— 那会让高延迟的诚实玩家受损。要的是"信任但验证"。
+</div>
+
+<h2>八、边界情况：倒带会遇到的麻烦</h2>
+
+<h3>8.1 目标中途死过 —— 整个倒带放弃</h3>
+
+<div class="filetag">game/server/player_lagcompensation.cpp:473-477</div>
+<pre><code><span class="kw">if</span> ( !(record-&gt;m_fFlags &amp; LC_ALIVE) )
+{
+    <span class="cmt">// player most be alive, lost track</span>
+    <span class="kw">return</span>;
+}</code></pre>
+
+<p>"目标在这段时间里死过"就不补偿，<b>避免复活尸体作为靶子</b>。</p>
+
+<h3>8.2 传送/换队 —— 靠位移突变检测</h3>
+
+<p>相邻记录 2D 位移超过 <code>sv_lagcompensation_teleport_dist</code>（默认 <b>64</b> 单位）就判定 "lost track" 并放弃倒带。</p>
+
+<p>换队通常伴随死亡+重生，会被 <code>LC_ALIVE</code> 拦住。</p>
+
+<h3>8.3 倒带后的位置被占了 —— sv_unlag_fixstuck</h3>
+
+<p>A 被搬回 1 秒前的位置，但那里<b>现在站着 B</b> —— A 就卡在实体内部。</p>
+
+<p><code>sv_unlag_fixstuck</code> 默认 <b>0（关闭）</b>。开启后会先 trace 探测，若 startsolid 就尝试把挡路的那个玩家也倒带（带防递归保护），否则沿路径 trace 到能到达的最远点，还留 5% 余量避免贴面卡住。</p>
+
+<p><b>默认关闭说明 Valve 认为"轻微卡住"比"补偿位置被改得不准"危害更小。</b></p>
+
+<h3>8.4 骨骼必须一起倒带 —— 最关键的一条</h3>
+
+<p>Source 的 hitbox 是<b>跟着骨骼跑的</b>，而骨骼由 sequence + cycle + pose parameters 求解得出。</p>
+
+<p><b>光把 origin 搬回去不够 —— 姿势不对，hitbox 位置就不对。</b>一个正在跑动、腿部大幅摆动、上半身转向的玩家，其 hitbox 分布与站立姿势差别很大。</p>
+
+<p>而骨骼求解结果是<b>缓存</b>的，所以改完动画状态必须让缓存失效：</p>
+
+<div class="filetag">game/server/player_lagcompensation.cpp:748-749</div>
+<pre><code><span class="kw">if</span> ( sv_lagflushbonecache.<span class="type">GetBool</span>() )
+    pPlayer-&gt;<span class="type">InvalidateBoneCache</span>();</code></pre>
+
+<div class="warn">
+<b>如果不刷缓存会怎样</b>
+服务端会拿着<b>上一帧算好的骨骼</b>去做命中检测 —— <b>你把模型搬回了过去，hitbox 却留在现在。</b><br><br>
+补偿等于白做，还会产生"明显打中却不掉血"或反之的诡异结果。这个 convar 默认 1，正常绝不该关。
+</div>
+
+<p>动画插值这里也复刻了周期环绕问题（§5.2 的服务端版），而且更保守：<b>sequence 变化时禁止插值</b>（"can't interpolate across a sequence or order change"），pose parameter 干脆不插值只取最近的。</p>
+
+<p>调试工具：<code>sv_showlagcompensation</code> 可以画出补偿后的 hitbox。</p>
+
+<h2>九、固有不公平：墙后击杀</h2>
+
+<h3>9.1 成因</h3>
+
+<p>两段延迟叠加。射手 S 的屏幕上，目标 T 的位置是 <code>S的当前时间 − 网络延迟 − 插值延迟</code>。服务端倒带的正是这个总量。</p>
+
+<p>假设 S ping 100ms、插值 100ms → 服务端回到 <b>200ms 前</b>做判定。</p>
+
+<div class="flow"><b>墙后击杀的时间线</b>
+
+  <b>T 的视角</b>（T 是预测的，处于"未来"）
+  t=0ms    在开阔处
+  t=150ms  <b>已经进掩体了</b>
+  t=200ms  "我明明在掩体后面！"  ← 收到死亡
+
+  <b>S 的视角</b>（看到的 T 落后 200ms）
+  t=200ms  屏幕上 T 还在开阔处 → 开枪 → 准星对上了
+
+  <b>服务端裁决</b>
+  倒带 200ms：<b>T 确实在开阔处，S 确实瞄准了</b> → 判定命中
+</div>
+
+<p><b>这不是 bug，是补偿模型的数学必然。</b>两个玩家对"现在"的定义不同，而服务端必须选一个。Source 选了射手的。</p>
+
+<h3>9.2 Valve 为什么接受这个取舍</h3>
+
+<p>对比另一种选择 —— <b>完全不补偿</b>，服务端只按"当前真实位置"判定：</p>
+
+<p>那么 S 必须瞄准 T 在 200ms 后的位置。也就是说，<b>每个玩家都必须手动打提前量，且提前量随自己的 ping 实时变化</b>。ping 越高越难，高 ping 玩家几乎无法命中移动目标 —— 游戏对他们直接不可玩。</p>
+
+<table>
+<tr><th></th><th>伤害谁</th><th>代价性质</th></tr>
+<tr><td><b>不补偿</b></td><td><b>射手</b></td><td>与 ping 成正比，<b>持续的、每一枪都有的</b>技能税。高 ping 玩家永久劣势</td></tr>
+<tr><td><b>补偿</b></td><td><b>被射者</b></td><td>偶发的"墙后击杀"，且<b>分摊到所有人</b>（每个人既是射手也是被射者）</td></tr>
+</table>
+
+<p>后者把不公平从"<b>系统性歧视高延迟玩家</b>"转成了"<b>偶发的、双向对称的判定争议</b>"。</p>
+
+<p>而且它保住了最重要的一条主观体验：<b>准星对上了就该命中。</b>这是 FPS 手感的基石，一旦破坏，游戏就不成立了。</p>
+
+<p>所以代价被<b>限制</b>（<code>sv_maxunlag</code> 1 秒上限、锥形剪枝）而非消除。</p>
+
+<h3>9.3 一个常被误解的点</h3>
+
+<p><b>延迟补偿只作用于玩家。</b>世界几何、门、平台<b>都不倒带</b> —— 所以你的子弹是在"过去的玩家位置"和"现在的世界"之间做检测。</p>
+
+<p>TF2 为 Passtime 的球单独手写了一套并行实现，其注释直言 <code>// it would be better if all entities could opt-in to this</code>。<b>这个架构局限 Valve 自己也知道。</b></p>
+
+<h2>十、三套机制的统一视角</h2>
+
+<table>
+<tr><th>机制</th><th>方向</th><th>谁的时间被改</th><th>关键量</th></tr>
+<tr><td>客户端预测</td><td><b>提前</b></td><td>本地玩家</td><td>一个 tick</td></tr>
+<tr><td>远程实体插值</td><td><b>延后</b></td><td>其他实体</td><td><code>max(cl_interp, ratio/updaterate)</code> + 1 tick</td></tr>
+<tr><td>服务端延迟补偿</td><td><b>倒带</b></td><td>服务端上的其他玩家</td><td><code>网络延迟 + 插值延迟</code>，夹在 <code>[0, sv_maxunlag]</code></td></tr>
+</table>
+
+<p>三者共同目标：<b>让每个玩家都感觉自己在一个零延迟的世界里。</b></p>
+
+<p>代价是 —— 这是整个系列最重要的一句话：</p>
+
+<div class="warn">
+<b>没有单一的"现在"</b>
+服务端和每个客户端对同一时刻的世界状态有<b>各自不同、且都"正确"</b>的版本。<br><br>
+<b>所有网络 FPS 的判定争议都源于这个根本事实。</b>不是实现缺陷，是分布式系统 + 光速有限的必然结果。<br><br>
+理解这一点之后，你就不会再试图"消除"不公平，而是转向"选择哪种不公平更能接受"。
+</div>
+
+<h2>十一、Unity 生态对照</h2>
+
+<h3>11.1 三套机制在 Unity 里的对应</h3>
+
+<table>
+<tr><th>Source</th><th>NGO / Mirror</th><th>要不要自己写</th></tr>
+<tr><td>属性同步 + 脏标记</td><td><code>NetworkVariable</code> / <code>SyncVar</code></td><td>❌ 内置，但粒度只到变量级</td></tr>
+<tr><td>远程实体插值</td><td><code>NetworkTransform</code> 的 <code>Interpolate</code> 开关</td><td>⚠ 内置但可控性差，讲究的项目要自己写</td></tr>
+<tr><td>客户端预测 + 回滚</td><td><b>无</b></td><td>✅ <b>完全自己写</b></td></tr>
+<tr><td>服务端延迟补偿</td><td><b>无</b></td><td>✅ <b>完全自己写</b></td></tr>
+</table>
+
+<p><b>后两项是 Unity 网络生态最大的空缺。</b>这也是为什么严肃的 FPS 项目往往要么用 Photon Quantum/Fusion（自带预测回滚），要么自己造一套。</p>
+
+<h3>11.2 延迟补偿在 Unity 里怎么做</h3>
+
+<pre><code><span class="cmt">// 1. 每个 tick 记录所有玩家的碰撞体状态</span>
+<span class="kw">struct</span> <span class="type">LagSnapshot</span> {
+    <span class="kw">public double</span> ServerTime;
+    <span class="kw">public</span> <span class="type">Vector3</span> Position;
+    <span class="kw">public</span> <span class="type">Quaternion</span> Rotation;
+    <span class="kw">public</span> <span class="type">Vector3</span>[] BonePositions;   <span class="cmt">// 如果用骨骼 hitbox</span>
+    <span class="kw">public bool</span> IsAlive;              <span class="cmt">// ★ 别忘了这个</span>
+}
+
+<span class="cmt">// 2. 开枪时倒带</span>
+<span class="kw">double</span> rewindTo = serverTime - (latency + clientInterpDelay);   <span class="cmt">// ★ 两笔都要减</span>
+rewindTo = <span class="type">Math</span>.<span class="type">Clamp</span>(rewindTo, serverTime - MaxUnlag, serverTime);
+
+<span class="kw">foreach</span> (<span class="kw">var</span> target <span class="kw">in</span> targets) {
+    <span class="kw">if</span> (!target.<span class="type">TryGetSnapshotAt</span>(rewindTo, <span class="kw">out var</span> snap)) <span class="kw">continue</span>;
+    <span class="kw">if</span> (!snap.IsAlive) <span class="kw">continue</span>;                    <span class="cmt">// 死过就放弃</span>
+    target.<span class="type">ApplyRewind</span>(snap);                        <span class="cmt">// 临时移动 Collider</span>
+}
+<span class="type">Physics</span>.<span class="type">SyncTransforms</span>();                              <span class="cmt">// ★★ 关键！等价于刷骨骼缓存</span>
+<span class="cmt">// … Physics.Raycast …</span>
+<span class="kw">foreach</span> (<span class="kw">var</span> target <span class="kw">in</span> targets) target.<span class="type">RestoreRewind</span>();</code></pre>
+
+<p><b><code>Physics.SyncTransforms()</code> 那一行是 Unity 版的 <code>InvalidateBoneCache()</code>。</b>Unity 的物理场景状态不会在你改 <code>transform</code> 后立刻更新，不调它 <code>Raycast</code> 打的还是旧位置 —— <b>和 §8.4 的坑一模一样</b>。</p>
+
+<h3>11.3 值得直接借鉴的三点</h3>
+
+<ol>
+<li><b>以时间戳而非帧号为索引键。</b>帧率会变，时间不会。</li>
+<li><b>倒带前做有效性校验</b>：位移突变（传送）、存活状态。校验失败就放弃补偿而不是硬倒带。</li>
+<li><b>务必让物理/骨骼缓存失效。</b>这是最容易漏且症状最诡异的一条。</li>
+</ol>
+
+<h3>11.4 插值自己写的话</h3>
+
+<p>关键是三件事：</p>
+
+<ul>
+<li><b>延迟量要能配置</b>，并且遵循 <code>max(固定值, ratio/updaterate)</code> 这个模式 —— 让它随 updaterate 自适应</li>
+<li><b>旋转用 Slerp</b>，循环量单独处理（§5.3 那张表）</li>
+<li><b>外插要能区分"网络卡了"和"物体停了"</b>（§5.4）</li>
+</ul>
+
+<h2>十二、读完后自测</h2>
+
+<div class="q"><b>Q1</b> 为什么插值和延迟补偿必须放在一起理解？它们是什么关系？</div>
+<div class="q"><b>Q2</b> 插值延迟的完整公式是什么？为什么 netgraph 显示的数字比实际小一个 tick？</div>
+<div class="q"><b>Q3</b> <code>cl_interp_ratio = 2</code> 和 <code>= 1</code> 的实际差别是什么？为什么竞技玩家要把 <code>cl_interp</code> 设成 0？</div>
+<div class="q"><b>Q4</b> 本地玩家的插值量为什么和远程实体不同？</div>
+<div class="q"><b>Q5</b> 为什么角度不能用 Hermite 插值？为什么欧拉角线性插值会出错？</div>
+<div class="q"><b>Q6</b> <code>LoopingLerp</code> 用什么判据判断"跨越了环绕点"？0.9 → 0.1 会被理解成什么？</div>
+<div class="q"><b>Q7</b> 外插的四个条件里最关键的是哪一条？它区分的是哪两种情况？为什么这个区分重要？</div>
+<div class="q"><b>Q8</b> 倒带时刻 = ？ 为什么要加上插值延迟？这一条为什么是整个系列的关键？</div>
+<div class="q"><b>Q9</b> 服务端为什么不信任客户端上报的 <code>m_fLerpTime</code>？不做校验会有什么作弊向量？</div>
+<div class="q"><b>Q10</b> 两条路径互相校验（200ms 阈值）防的是什么？为什么不简单地拒绝或截断客户端值？</div>
+<div class="q"><b>Q11</b> 为什么骨骼必须一起倒带？不刷骨骼缓存的后果是什么？</div>
+<div class="q"><b>Q12</b> <code>sv_maxunlag</code> 为什么必须有上限？目标中途死亡/传送时怎么处理？</div>
+<div class="q"><b>Q13</b> "墙后击杀"是怎么产生的？Valve 为什么接受它而不选择"完全不补偿"？两种方案的代价分别落在谁身上？</div>
+<div class="q"><b>Q14</b> 延迟补偿只作用于什么？世界几何倒带吗？这带来什么局限？</div>
+<div class="q"><b>Q15</b> 三套机制的时间方向各是什么？"没有单一的现在"这句话是什么意思？</div>
+<div class="q"><b>Q16</b> 在 Unity 里做延迟补偿，哪一行代码等价于 Source 的 <code>InvalidateBoneCache()</code>？漏了会怎样？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>game/client/interpolatedvar.h</code>（环形缓冲、GetInterpolationInfo、外插条件与限幅、历史裁剪）；<code>cdll_bounded_cvars.cpp</code>（插值量公式、convar 定义与边界）；<code>c_baseentity.cpp</code>（GetInterpolationAmount、+1 tick 余量、外插上下文、0.5 秒停摆）；<code>lerp_functions.h</code>（QAngle Hermite 禁用、LoopingLerp）；<code>mathlib.h:661</code>（四元数 slerp 特化）；<code>player_lagcompensation.cpp</code> 全文关键段（LagRecord、倒带公式、LC_ALIVE、传送检测、fixstuck、骨骼缓存）；<code>player.cpp:3479-3515</code>（服务端重算 m_fLerpTime）；<code>vgui_netgraphpanel.cpp:771</code>。<b>TF2 分支归属已用 git 核实</b>。</p>
+<p><span class="unverified">⚠ 未核实</span>：<b>具体游戏的实际 tick rate</b> —— 代码只有 <code>DEFAULT_TICK_INTERVAL (0.015)</code>，"TF2 66Hz"来自公开资料非本仓库；<code>TICK_INTERVAL</code> 实际取 <code>gpGlobals-&gt;interval_per_tick</code>，由闭源引擎设定。<b><code>cl_updaterate</code> / <code>cl_cmdrate</code> / <code>sv_minupdaterate</code> / <code>sv_client_min/max_interp_ratio</code> 全部在闭源引擎中定义</b>，SDK 只通过 <code>FindVar()</code> 引用，<b>无法给出默认值</b>；<code>sv_client_min_interp_ratio == -1</code> 表示"不约束"是从判断代码反推。<b>§9 墙后击杀的成因分析与取舍理由：代码中没有任何注释讨论这个权衡</b>，该节是基于时间计算逻辑的推导 + 领域通行解释，属分析而非代码事实（Valve 官方 Source Multiplayer Networking 文档有相关论述，但不在本仓库）。<code>player_lagcompensation.cpp:258</code> 有一处 <code>int flDeadtime = curtime - sv_maxunlag</code> 的 float→int 截断，字面如此，但<b>未实测</b>其对窗口长度的实际影响，也不确定是有意为之还是笔误。稳态采样点"3-5 个"是按裁剪逻辑推算，未运行时实测。</p>
+<p>上一篇：<a href="Source同步三-回滚与误差修正讲解.html" style="color:var(--accent)">（三）回滚与误差修正</a>　｜　<a href="Source同步一-属性同步讲解.html" style="color:var(--accent)">回到第一篇</a></p>
+<p>相关：<a href="网络层三-KCP讲解.html" style="color:var(--accent)">Fantasy 网络层（三）KCP</a>（传输层视角）</p>
+</footer>
+
+</div>
+</body>
+</html>

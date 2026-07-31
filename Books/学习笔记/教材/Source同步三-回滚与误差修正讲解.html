@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source 网络同步（三）回滚与误差修正 —— 预测错了怎么办</title>
+<link rel="stylesheet" href="reading-notes.css">
+<link rel="stylesheet" href="toc.css">
+<script src="toc.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="Source同步一-属性同步讲解.html">一 · 属性同步</a>
+    <a href="Source同步二-客户端预测讲解.html">二 · 客户端预测</a>
+    <a class="cur" href="Source同步三-回滚与误差修正讲解.html">三 · 回滚与修正</a>
+    <a href="Source同步四-插值与延迟补偿讲解.html">四 · 插值与延迟补偿</a>
+  </div>
+  <h1>Source 网络同步（三）回滚与误差修正</h1>
+  <div class="sub">
+    Source SDK 2013 源码阅读 · 网络同步四部曲第三篇 · <b>本系列最核心的一篇</b><br>
+    <code>game/shared/predictioncopy.cpp</code> · <code>game/client/prediction.cpp</code> · <code>game/shared/predictable_entity.h</code>
+  </div>
+</header>
+
+<p>预测一定会错。网络有丢包、服务端有你不知道的信息、其他玩家在动。<b>这一篇讲错了之后怎么办 —— 而 Source 的答案比"拉回正确位置"精妙得多。</b></p>
+
+<div class="note">
+<b>先纠正一个常见的错误说法</b>
+很多资料（包括我最初的理解）说 Source 是"平滑修正预测误差"。<b>这个说法不准确。</b><br><br>
+实际是<b>双轨</b>：模拟状态<b>瞬间硬拉回</b>，摄像机眼位<b>平滑追赶</b>。两者并存。你的碰撞盒立刻在正确位置，但眼睛还"留在"错误位置，然后在 0.1 秒内追上去。<br><br>
+这是本篇最重要的一条，§4 详讲。
+</div>
+
+<h2>一、三份数据：理解一切的地图</h2>
+
+<p>读这套代码前必须先分清<b>同一个实体的三份数据</b>。搞混了后面全看不懂。</p>
+
+<table>
+<tr><th>名称</th><th>存哪</th><th>是什么</th><th>内存布局</th></tr>
+<tr><td><b>活体</b><br>live object</td><td>对象自身的成员变量</td><td>当前正在渲染/模拟的值</td><td>C++ 类布局</td></tr>
+<tr><td><b>权威态</b><br>original / pristine</td><td><code>m_pOriginalData</code>，一块堆内存</td><td>服务端最新快照解包后的值</td><td><b>紧凑打包</b></td></tr>
+<tr><td><b>中间态</b><br>intermediate</td><td><code>m_pIntermediateData[90]</code></td><td>每条命令跑完后的存档</td><td><b>紧凑打包</b></td></tr>
+</table>
+
+<div class="filetag">game/client/c_baseentity.cpp:5182-5200（AllocateIntermediateData）</div>
+<pre><code>m_pOriginalData = <span class="kw">new unsigned char</span>[ allocsize ];
+<span class="kw">for</span> ( <span class="kw">int</span> i = <span class="num">0</span>; i &lt; MULTIPLAYER_BACKUP; i++ )
+    m_pIntermediateData[ i ] = <span class="kw">new unsigned char</span>[ allocsize ];</code></pre>
+
+<p><code>MULTIPLAYER_BACKUP = 90</code>，另有一个特殊 slot 号 <code>SLOT_ORIGINALDATA = -1</code> 用来指代权威态 —— 存取函数靠它分流。</p>
+
+<h3>1.1 为什么中间态用"打包布局"而不是 memcpy 整个对象</h3>
+
+<p>一个 <code>C_TFPlayer</code> 有几 KB，但真正参与预测的字段只有几百字节。<b>90 份 × 几百字节可以接受；90 份完整对象拷贝不行。</b></p>
+
+<p>所以每个字段记<b>两套偏移</b>：</p>
+
+<div class="filetag">public/datamap.h:266</div>
+<pre><code>fieldOffset[<span class="num">2</span>]   <span class="cmt">// [0] = 在对象里的偏移，[1] = 在打包缓冲里的偏移</span></code></pre>
+
+<p>对应两个常量 <code>PC_DATA_NORMAL</code> / <code>PC_DATA_PACKED</code>。拷贝时告诉拷贝器"源用哪套、目标用哪套"。</p>
+
+<div class="tip">
+<b>C# 里怎么做</b>
+用一个 <code>struct</code> 装参与预测的字段，<code>struct[]</code> 或 <code>NativeArray&lt;T&gt;</code> 做环形缓冲。C# 的 struct 天然是紧凑布局，<b>不需要手工算偏移</b> —— 这块比 C++ 简单得多。<br><br>
+容量怎么定：<code>能容忍的最大延迟 ÷ tick 间隔</code>，再取二的幂方便掩码取模。tick 30、容忍 500ms → 15 → 取 32。
+</div>
+
+<h2>二、CPredictionCopy：一个类干三件事</h2>
+
+<p>这个类的名字有误导性。<b>它不是"拷贝类"，是"遍历字段表并对每个字段做三件事之一或全部"的类</b>：比较、拷贝、描述。</p>
+
+<p>构造时三个开关<b>互相独立</b>（<code>predictioncopy.cpp:64-86</code>）：<code>counterrors</code> / <code>reporterrors</code> / <code>performcopy</code>。</p>
+
+<p>误差检测那次调用传的是 <code>copydata = false</code> —— <b>只比不拷</b>：</p>
+
+<div class="filetag">game/client/c_baseentity.cpp:4692-4708（PostNetworkDataReceived）</div>
+<pre><code><span class="kw">void</span> *predicted_state_data = <span class="type">GetPredictedFrame</span>( commands_acknowledged - <span class="num">1</span> );
+<span class="kw">const void</span> *original_state_data = <span class="type">GetOriginalNetworkDataObject</span>();
+<span class="type">CPredictionCopy</span> errorCheckHelper( PC_NETWORKED_ONLY,
+    predicted_state_data, PC_DATA_PACKED,
+    original_state_data,  PC_DATA_PACKED,
+    counterrors, reporterrors, copydata <span class="cmt">/* = false */</span> );</code></pre>
+
+<p>两个操作数：</p>
+<ul>
+<li><b>左</b>：中间态 slot <code>commands_acknowledged - 1</code> —— "客户端预测命令 N 跑完时的状态"</li>
+<li><b>右</b>：权威态 —— "服务端说命令 N 跑完应该是什么"</li>
+</ul>
+
+<p>两边都是 <code>PC_DATA_PACKED</code>，<b>同构内存块比对</b>，字段偏移完全一致。</p>
+
+<h3>2.1 三种过滤模式</h3>
+
+<p>判据是字段有没有 <code>FTYPEDESC_INSENDTABLE</code> 标记：</p>
+
+<div class="filetag">game/shared/predictioncopy.cpp:1050-1056</div>
+<pre><code><span class="kw">if</span> ( m_nType == PC_NON_NETWORKED_ONLY &amp;&amp; ( flags &amp; FTYPEDESC_INSENDTABLE ) )
+    <span class="kw">continue</span>;
+<span class="kw">if</span> ( m_nType == PC_NETWORKED_ONLY &amp;&amp; !( flags &amp; FTYPEDESC_INSENDTABLE ) )
+    <span class="kw">continue</span>;</code></pre>
+
+<table>
+<tr><th>模式</th><th>用在哪</th><th>用了几处</th></tr>
+<tr><td><code>PC_EVERYTHING</code></td><td>存档、恢复起点、初始化</td><td>多处</td></tr>
+<tr><td><code>PC_NETWORKED_ONLY</code></td><td>存权威态、<b>误差比对</b></td><td>2 处</td></tr>
+<tr><td><code>PC_NON_NETWORKED_ONLY</code></td><td><b>只 1 处</b>，但那一处是整套设计最精妙的一步</td><td>1 处（§5.2）</td></tr>
+</table>
+
+<h2>三、两张表为什么不能合并</h2>
+
+<p>SendTable 说"什么要发给客户端"，PredictionData 说"什么要存档回滚"。<b>这两个集合有交集，但都不包含另一个。</b></p>
+
+<h3>3.1 四类字段</h3>
+
+<p>这是本篇最有实用价值的一张表。<b>你在 Unity 里做同步系统时，每个字段都要归类。</b></p>
+
+<table>
+<tr><th>类别</th><th>发给客户端</th><th>参与回滚</th><th>参与比对</th><th>Source 实例</th></tr>
+<tr><td><b>A 完整同步</b></td><td>✓</td><td>✓</td><td>✓</td><td><code>m_nTickBase</code>、<code>m_vecOrigin</code></td></tr>
+<tr><td><b>B 纯本地预测态</b></td><td>✗</td><td>✓</td><td>—</td><td><code>m_nButtons</code>、<code>m_flStepSoundTime</code></td></tr>
+<tr><td><b>C 纯展示</b></td><td>✓</td><td>✗</td><td>—</td><td>渲染颜色 <code>m_clrRender</code></td></tr>
+<tr><td><b>D 预测但不可比</b></td><td>✓</td><td>✓</td><td><b>✗</b></td><td><code>m_flCycle</code>、<code>m_nSequence</code></td></tr>
+</table>
+
+<p>声明方式的差别：</p>
+
+<div class="filetag">game/client/c_baseplayer.cpp:382, 403</div>
+<pre><code><span class="type">DEFINE_PRED_FIELD</span>( m_nTickBase, FIELD_INTEGER, FTYPEDESC_INSENDTABLE ),  <span class="cmt">// A</span>
+<span class="type">DEFINE_FIELD</span>( m_nButtons, FIELD_INTEGER ),                              <span class="cmt">// B（无 flag）</span></code></pre>
+
+<div class="warn">
+<b>关键：交集靠手写标记维护，没有任何工具自动同步</b>
+<code>FTYPEDESC_INSENDTABLE</code> 是程序员<b>手写</b>在 <code>DEFINE_PRED_FIELD</code> 第三个参数里的。<br><br>
+<b>标错了，误差检测就会去比服务端从未发送过的字段，产生永久性的假误差。</b>这是 Source 预测系统最经典的一类 bug 来源。
+</div>
+
+<h3>3.2 B 类和 D 类是最容易漏的，后果完全不同</h3>
+
+<p><b>漏了 B</b>（该进预测表没进）→ 重放时本地状态被服务端快照覆盖 → <b>脚步声重复播放、计时器错乱</b>。</p>
+
+<p><b>漏了 D</b>（该标"不比对"没标）→ 动画周期永远对不上 → <b>每帧都判定预测失败</b> → 每帧都触发平滑修正和插值重置 → <b>画面持续抖动</b>。</p>
+
+<p>第二种尤其阴险：症状是"移动手感很糟"，但根因在动画字段上，<b>排查方向完全错位</b>。</p>
+
+<h3>3.3 D 类为什么还要参与回滚</h3>
+
+<p>既然 <code>m_flCycle</code>（动画周期）永远和服务端对不上，为什么不干脆从预测表里删掉？</p>
+
+<p><b>因为回滚和比对是两件事。</b></p>
+
+<p><code>FTYPEDESC_NOERRORCHECK</code> 只屏蔽"报错"，不屏蔽"回滚"—— 那道闸只挡在比较函数前面：</p>
+
+<div class="filetag">game/shared/predictioncopy.cpp:190-200</div>
+<pre><code><span class="kw">bool</span> <span class="type">CPredictionCopy</span>::<span class="type">CanCheck</span>( <span class="kw">void</span> )
+{
+    <span class="kw">if</span> ( m_pCurrentField-&gt;flags &amp; FTYPEDESC_NOERRORCHECK )
+        <span class="kw">return false</span>;
+    <span class="kw">return true</span>;
+}</code></pre>
+
+<p>如果把 <code>m_flCycle</code> 从预测表删掉，重放 5 条命令时它不会被恢复到起点，而是<b>从当前值继续推进 5 次</b> —— 重放本身不自洽。<b>同一条命令跑两遍得到不同结果，这比"和服务端不一致"更糟。</b></p>
+
+<div class="tip">
+<b>一句话总结这个区分</b>
+<b>参与回滚保证客户端内部自洽，不参与比对是承认跨端无法一致。</b>两个目标独立，所以用两个开关表达。<br><br>
+Unity 里对应两个 attribute 参数：<code>[Predicted(Networked = true, NoErrorCheck = true)]</code>。
+</div>
+
+<h3>3.4 NOERRORCHECK 的三类用途 —— 一份坦白的技术债清单</h3>
+
+<p><b>类别一：动画状态（两端天然不同步）</b></p>
+
+<div class="filetag">game/client/c_baseanimating.cpp:214-226</div>
+<pre><code><span class="type">DEFINE_PRED_FIELD</span>( m_nSequence, ..., FTYPEDESC_INSENDTABLE | FTYPEDESC_NOERRORCHECK ),
+<span class="type">DEFINE_PRED_FIELD</span>( m_flCycle, ..., FTYPEDESC_INSENDTABLE | FTYPEDESC_NOERRORCHECK ),</code></pre>
+
+<p><b>类别二：客户端主动做了不同的事</b>。<code>m_angNetworkAngles</code> —— 上一篇讲过视角每帧被强制覆盖，既然客户端故意不采用预测值，比较它毫无意义。</p>
+
+<p><b>类别三：明知有 bug，先屏蔽掉</b>。最诚实的一批 —— 三个武器计时字段全标了，配套注释见第二篇 §6.4。</p>
+
+<h2>四、双轨修正：本篇的核心</h2>
+
+<h3>4.1 模拟状态：瞬间硬拉回</h3>
+
+<p><code>RestoreOriginalEntityState</code>（<code>prediction.cpp:1162-1185</code>）用 <code>PC_EVERYTHING</code> 直接覆盖活体数据。<b>零平滑。</b></p>
+
+<p>为什么必须瞬间：<b>后续预测必须从正确起点开始</b>，否则误差累积失控。如果起点是"平滑过渡中的中间值"，下一帧预测的结果会更错，越滚越大。</p>
+
+<h3>4.2 摄像机眼位：平滑追赶</h3>
+
+<p>误差被记下来（<code>c_baseplayer.cpp:2641-2660</code>）：</p>
+
+<pre><code><span class="kw">if</span> ( !<span class="type">IsAlive</span>() ) <span class="kw">return</span>;          <span class="cmt">// 死亡时不平滑</span>
+<span class="type">GetPredictionErrorSmoothingVector</span>( vOldDelta );
+m_vecPredictionError = vDelta + vOldDelta;   <span class="cmt">// ★ 累加未衰减完的旧误差</span>
+m_flPredictionErrorTime = gpGlobals-&gt;curtime;</code></pre>
+
+<p><b>误差是累加的</b>：新误差叠加到"上次尚未衰减完的剩余部分"上，然后重置计时器。<b>连续误判不会互相截断</b>，视觉上是连续的一段追赶。</p>
+
+<p>平滑曲线简单到意外 —— <b>全部逻辑就这几行</b>：</p>
+
+<div class="filetag">game/client/c_baseplayer.cpp:2715-2738</div>
+<pre><code><span class="kw">float</span> errorAmount = ( gpGlobals-&gt;curtime - m_flPredictionErrorTime )
+                     / cl_smoothtime.<span class="type">GetFloat</span>();
+<span class="kw">if</span> ( errorAmount &gt;= <span class="num">1.0f</span> ) { vOffset.<span class="type">Init</span>(); <span class="kw">return</span>; }
+errorAmount = <span class="num">1.0f</span> - errorAmount;
+vOffset = m_vecPredictionError * errorAmount;</code></pre>
+
+<p><b>纯线性衰减。</b>没有 ease-in/out，没有 smoothstep，没有指数衰减。<code>offset = error × (1 - elapsed/duration)</code>。</p>
+
+<p>时长 <code>cl_smoothtime</code> 默认 <b>0.1 秒</b>，范围钳在 0.01–2.0。</p>
+
+<h3>4.3 偏移量施加在哪 —— 双轨的实证</h3>
+
+<div class="filetag">game/shared/baseplayer_shared.cpp:1630-1636</div>
+<pre><code><span class="type">Vector</span> vSmoothOffset;
+<span class="type">GetPredictionErrorSmoothingVector</span>( vSmoothOffset );
+eyeOrigin += vSmoothOffset;   <span class="cmt">// ★ 只加在渲染用的眼位上</span></code></pre>
+
+<p><code>GetAbsOrigin()</code>（碰撞与后续预测用的位置）<b>一点没动</b>。</p>
+
+<div class="flow"><b>双轨修正</b>
+
+  预测错了 50 单位
+       │
+       ├─→ <b>模拟轨</b>：GetAbsOrigin() 瞬间 = 服务端值
+       │              <span class="cmt">碰撞、后续预测立刻正确</span>
+       │
+       └─→ <b>视觉轨</b>：eyeOrigin = GetAbsOrigin() + offset
+                      <span class="cmt">offset 从 50 线性降到 0，历时 0.1s</span>
+
+  <b>玩家看到：镜头平滑追上去
+  物理感受：碰撞盒已经在对的地方</b>
+</div>
+
+<h3>4.4 为什么视角不能瞬间拉回</h3>
+
+<p>按严重程度排：</p>
+
+<ol>
+<li><b>画面跳动。</b>人眼对<b>摄像机</b>的单帧不连续位移极度敏感 —— 比对场景中物体的同等位移敏感得多。</li>
+<li><b>误判频繁时呈持续抖动。</b>弱网下每个包都可能带误差，逐帧跳动累积成"镜头发抖"。</li>
+<li><b>触发晕动症。</b>摄像机不连续位移是第一人称/VR 公认的晕动症诱因。</li>
+<li><b>误差被放大感知。</b>0.1 秒的线性追赶几乎不可察觉；同样幅度的瞬变非常难受。<b>同一个数值，平滑与否决定它是"看不见"还是"很难受"。</b></li>
+</ol>
+
+<h3>4.5 三段式误差判定</h3>
+
+<p><code>CheckError</code>（<code>prediction.cpp:128-199</code>）只关心<b>一个</b>字段 —— 位置：</p>
+
+<pre><code><span class="kw">if</span> (len &gt; MAX_PREDICTION_ERROR )        { len = <span class="num">0</span>; }   <span class="cmt">// &gt; 64 单位：视为传送，完全忽略</span>
+<span class="kw">else if</span> ( len &gt; MIN_PREDICTION_EPSILON ) {                 <span class="cmt">// &gt; 0.5 单位：记录误差</span>
+    player-&gt;<span class="type">NotePredictionError</span>( delta );
+}
+<span class="cmt">// 0.5 以内：什么也不做</span></code></pre>
+
+<p><b>上限那一档很重要</b>：传送、复活、被推入传送门<b>不是预测错误</b>。若按误差处理会产生一段长达 64+ 单位的诡异漂移 —— 镜头缓慢追赶一个传送距离，非常怪。所以直接放弃平滑，让位置瞬间到位。</p>
+
+<div class="tip">
+<b>Unity 落地：三档判定都要有</b>
+<ul>
+<li><b>下限</b>（忽略）：小于量化精度的差异，不算错</li>
+<li><b>中间</b>（平滑）：正常的预测误差</li>
+<li><b>上限</b>（放弃平滑）：传送、复活、重生 —— 这些是<b>合法的位置突变</b>，不该被当成误差平滑</li>
+</ul>
+少了上限那一档，你的传送会变成"镜头缓慢飞过去"。
+</div>
+
+<h2>五、重放的完整机制</h2>
+
+<h3>5.1 浮点容差：必须从传输格式反推</h3>
+
+<p>比较用绝对差，默认容差是 <b>0</b>（精确按位相等），只有显式用 <code>_TOL</code> 变体才有容差。</p>
+
+<p>关键实例：</p>
+
+<table>
+<tr><th>字段</th><th>容差</th><th>怎么来的</th></tr>
+<tr><td><code>m_vecNetworkOrigin</code></td><td><b>0.0625</b> = <code>2.0f / (1 &lt;&lt; 5)</code></td><td><b>两倍量化步长</b></td></tr>
+<tr><td><code>m_vecViewOffset</code></td><td>0.25</td><td>经验值</td></tr>
+<tr><td><code>m_vecBaseVelocity</code></td><td>0.05</td><td>经验值</td></tr>
+</table>
+
+<p><b>坐标容差的推导</b>：网络传输时坐标量化到 1/32 精度（第一篇 <code>SPROP_COORD</code>），所以服务端值经过量化-反量化后与客户端全精度浮点<b>天然差最多 1/32</b>。容差取 2/32，把量化噪声完全排除在误差判定外。</p>
+
+<div class="warn">
+<b>这条能直接用</b>
+<b>容差不是拍脑袋，是从你的压缩格式反推的。</b><br><br>
+Unity 里如果你把坐标量化到 0.01，误差容差就必须 ≥ 0.02。<br>
+填 0.001 → <b>永久假误差</b>（每帧都判失败）；<br>
+填 1.0 → <b>漏掉真误差</b>（明显错位却不修正）。
+</div>
+
+<h3>5.2 那四行代码：网络包到达之前</h3>
+
+<p>这是整套机制里我认为最精妙的一步。</p>
+
+<div class="filetag">game/client/c_baseentity.cpp:4613-4639（PreEntityPacketReceived）</div>
+<pre><code><span class="kw">bool</span> copyintermediate = ( commands_acknowledged &gt; <span class="num">0</span> );
+<span class="kw">if</span> ( copyintermediate )
+{
+    <span class="type">RestoreData</span>( ..., commands_acknowledged - <span class="num">1</span>, PC_NON_NETWORKED_ONLY );
+    <span class="type">RestoreData</span>( ..., SLOT_ORIGINALDATA,        PC_NETWORKED_ONLY );
+}
+<span class="kw">else</span>
+    <span class="type">RestoreData</span>( ..., SLOT_ORIGINALDATA, PC_EVERYTHING );</code></pre>
+
+<p><b>两次恢复，来源不同，字段集互补：</b></p>
+
+<ul>
+<li>第一次：从<b>预测存档</b>恢复<b>非网络化</b>字段 —— 服务端对这些一无所知，客户端预测结果就是唯一真相，<b>必须保留</b></li>
+<li>第二次：从<b>权威态</b>恢复<b>网络化</b>字段 —— 这些即将被新包覆盖，先退回上一个权威值作干净底座</li>
+<li><code>else</code> 分支：服务端没确认任何新命令，无所谓哪个更可信，整体退回权威态</li>
+</ul>
+
+<p>原始注释把结果说得很清楚：</p>
+
+<div class="filetag">game/client/c_baseentity.cpp:4633-4637</div>
+<pre><code><span class="cmt">// At this point the entity has original network data restored as of the last
+// time the networking was updated, and it has any intermediate predicted
+// values properly copied over. Unpacked and OnDataChanged will fill in any
+// changed, networked fields.</span></code></pre>
+
+<div class="tip">
+<b>这是 PC_NON_NETWORKED_ONLY 存在的唯一理由</b>
+整个代码库只在这一处用它。<b>Unity 落地时这是最容易漏的一步</b>：做回滚不能一股脑全恢复，得区分"服务端管的"和"只有本地知道的"，<b>后者绝不能被服务端快照覆盖</b>。<br><br>
+漏了的症状：脚步声重复播放、连击计时错乱、技能 CD 跳变。
+</div>
+
+<h3>5.3 一个周期里保存/恢复各几次</h3>
+
+<div class="flow"><b>单帧时序（收到包 + 有误差）</b>
+
+  <b>解包前</b>
+   ① RestoreData( 预测 N,   NON_NETWORKED_ONLY )   <span class="cmt">恢复：捞回本地字段</span>
+   ② RestoreData( 权威态,   NETWORKED_ONLY )       <span class="cmt">恢复：网络字段回退</span>
+
+  <b>解包后（每包一次）</b>
+   ③ SaveData( 权威态,      NETWORKED_ONLY )       <span class="cmt">★ 权威态的建立点</span>
+
+  <b>帧末（每帧一次）</b>
+   ④ SaveData( 权威态,      EVERYTHING )           <span class="cmt">完整刷新</span>
+   ⑤ CPredictionCopy 比对   NETWORKED_ONLY         <span class="cmt">★ 纯比较，不拷</span>
+
+  <b>下一帧预测开始</b>
+   ⑥ RestoreOriginalEntityState( EVERYTHING )      <span class="cmt">活体 ← 权威态</span>
+   ⑦ 每跑完一条命令：StorePredictionResults()      <span class="cmt">★ 存档 × M</span>
+</div>
+
+<p><b>恢复 3 次，保存 3+M 次，纯比较 1 次。</b>走优化捷径时 ⑥ 被替换，M 降到 1。</p>
+
+<h3>5.4 重放不是常态 —— 这点最容易误解</h3>
+
+<p><code>cl_pred_optimize</code> 默认 <b>2</b>。稳定网络下走的是这条路：</p>
+
+<div class="filetag">game/client/prediction.cpp:1471-1492</div>
+<pre><code><span class="kw">if</span> ( cl_pred_optimize.<span class="type">GetInt</span>() &gt;= <span class="num">2</span> &amp;&amp; !m_bPreviousAckHadErrors &amp;&amp; ... )
+{
+    <span class="type">RestoreEntityToPredictedFrame</span>( m_nCommandsPredicted - <span class="num">1</span> );
+    <span class="type">ShiftIntermediateDataForward</span>( ... );
+    skipahead = ( m_nCommandsPredicted - m_nServerCommandsAcknowledged );
+}</code></pre>
+
+<p>预测全对 → 上次结果依然有效 → 恢复到最后一个预测 slot，把 slot 数组前移，<b>只跑最新那一条命令</b>。</p>
+
+<p>而且 <code>ShiftIntermediateDataForward</code>（<code>c_baseentity.cpp:5227-5256</code>）<b>只搬指针，不 memcpy</b>。</p>
+
+<div class="warn">
+<b>"Source 每帧重放 N 条命令"是个误解</b>
+<b>重放是异常处理，不是主循环。</b>稳定网络下绝大多数帧只跑一条新命令。<br><br>
+Unity 落地：如果你写成每帧无条件重放 N 条，<b>性能会随延迟线性恶化</b>。应该先比对、无误差就走捷径。
+</div>
+
+<p>还有一条捷径（<code>cl_pred_optimize >= 1</code>）：<b>压根没收到新世界更新</b>时，服务端没说话就不可能有新误差，直接跳到最后一条。但注释强调必须先恢复：</p>
+
+<div class="filetag">game/client/prediction.cpp:1454</div>
+<pre><code><span class="cmt">// Always restore since otherwise we might start prediction using an
+// 'interpolated' value instead of a purely predicted value</span></code></pre>
+
+<p><b>微妙的坑</b>：活体数据在渲染过程中被插值系统动过手脚，直接拿来当预测起点会污染结果。</p>
+
+<h3>5.5 回滚不能只是"把字节写回去"</h3>
+
+<p><code>RestoreData</code> 里有一串补救逻辑（<code>c_baseentity.cpp:5764-5820</code>）：</p>
+
+<pre><code><span class="kw">int</span> savedEFlags = <span class="type">GetEFlags</span>() &amp; savedEFlagsMask;
+<span class="kw">int</span> oldModelIndex = m_nModelIndex;
+<span class="cmt">/* ... TransferData ... */</span>
+<span class="type">RemoveEFlags</span>( savedEFlagsMask );  <span class="type">AddEFlags</span>( savedEFlags );
+<span class="cmt">// model index 必须走 SetModelIndex 以维护动态模型引用计数</span></code></pre>
+
+<p>结尾 <code>OnPostRestoreData()</code> 还要 <code>InvalidatePhysicsRecursive</code>、重挂 aim ents 链表、同步模型指针。</p>
+
+<div class="tip">
+<b>这是一份现成的检查清单</b>
+任何"值改变时需要副作用"的字段，回滚后都必须手工补做：<br>
+<b>引用计数 · 缓存失效 · 事件注册 · 脏标记 · 物理状态失效</b><br><br>
+Unity 里典型的：改了 <code>transform.position</code> 要不要 <code>Physics.SyncTransforms()</code>、改了动画状态要不要重算骨骼、改了父子关系要不要重挂。<b>这些都不是"写回字节"能覆盖的。</b>
+</div>
+
+<h2>六、误差的第二个善后动作：清插值历史</h2>
+
+<p>这一步和位置平滑无关，但同属"误差善后"，而且原始注释把问题说得很清楚：</p>
+
+<div class="filetag">game/client/prediction.cpp:1499-1503</div>
+<pre><code><span class="cmt">// If an entity gets a prediction error, then we want to clear out its
+// interpolated variables so we don't mix different samples at the same
+// timestamps. We subtract 1 tick interval here because if we don't, we'll
+// have 3 interpolation entries with the same timestamp as this predicted
+// frame, so we won't be able to interpolate (which leads to jerky movement
+// in the player when ANY entity like your gun gets a prediction error).</span></code></pre>
+
+<p>注意括号里那句：<b>任何实体（包括你的枪）出预测误差，都会导致玩家本体移动抖动。</b></p>
+
+<p>TF2 分支为此加了"全量重置 vs 部分重置"的分野（<code>prediction.cpp:1510-1550</code>）。旧行为是"任何实体出错就清所有 predictable 的插值历史"，新行为让实体自己决定 —— <code>C_BaseCombatWeapon</code> 在有主人时返回 false，不再连带清掉玩家的插值历史。</p>
+
+<p><b>这是"缩小误差传播范围"的典型做法</b>：既然武器预测做不对（第二篇 §6.4），至少别让它污染移动手感。</p>
+
+<h2>七、Unity 落地要点</h2>
+
+<h3>7.1 双轨修正（最重要的一条）</h3>
+
+<pre><code><span class="cmt">// 模拟轨：瞬间硬拉回</span>
+transform.position = authoritativePosition;
+
+<span class="cmt">// 视觉轨：摄像机加衰减偏移</span>
+<span class="kw">float</span> t = (<span class="type">Time</span>.time - _errorTime) / SmoothDuration;   <span class="cmt">// SmoothDuration = 0.1f</span>
+<span class="kw">if</span> (t &lt; <span class="num">1f</span>)
+    _cameraTarget.position = transform.position + _error * (<span class="num">1f</span> - t);
+<span class="kw">else</span>
+    _cameraTarget.position = transform.position;</code></pre>
+
+<p>关键是<b>别把两件事混在一起</b>。混了之后会陷入"平滑了但物理飘"或"物理准了但画面抖"的两难。</p>
+
+<h3>7.2 误差要累加</h3>
+
+<p>新误差叠加到旧误差的剩余部分上，而不是覆盖。否则连续误判会互相截断，视觉上是一顿一顿的。</p>
+
+<h3>7.3 三档判定 + 容差从压缩格式反推</h3>
+
+<p>见 §4.5 和 §5.1。这两条是最容易做错且最难 debug 的。</p>
+
+<h3>7.4 区分"服务端管的"和"只有本地知道的"</h3>
+
+<p>见 §5.2。回滚时后者绝不能被服务端快照覆盖。</p>
+
+<h3>7.5 无误差时走捷径</h3>
+
+<p>见 §5.4。重放是异常处理，不是主循环。</p>
+
+<h3>7.6 回滚后补做副作用</h3>
+
+<p>见 §5.5。<code>Physics.SyncTransforms()</code>、动画重算、父子关系重挂。</p>
+
+<h3>7.7 用一张表管字段分类</h3>
+
+<p>见 §3.1 的四类。建议在 C# 里用 attribute 表达，把 Source 的"两张表 + 手工标记交集"压成"一张表 + 声明式参数"：</p>
+
+<pre><code>[<span class="type">Predicted</span>]                                          <span class="cmt">// B 类：只回滚</span>
+[<span class="type">Predicted</span>(Networked = <span class="kw">true</span>)]                        <span class="cmt">// A 类：回滚 + 比对</span>
+[<span class="type">Predicted</span>(Networked = <span class="kw">true</span>, NoErrorCheck = <span class="kw">true</span>)]    <span class="cmt">// D 类：回滚不比对</span>
+[<span class="type">Predicted</span>(Networked = <span class="kw">true</span>, Tolerance = <span class="num">0.02f</span>)]      <span class="cmt">// A 类带容差</span>
+<span class="cmt">// 不打特性 = C 类，纯展示</span></code></pre>
+
+<p><b>这样就消掉了"标错 FTYPEDESC_INSENDTABLE"这一整类 bug。</b></p>
+
+<h2>八、读完后自测</h2>
+
+<div class="q"><b>Q1</b> "Source 平滑修正预测误差"这个说法哪里不准确？双轨各自修正什么、为什么必须分开？</div>
+<div class="q"><b>Q2</b> 三份数据分别是什么？中间态为什么用紧凑打包布局而不是 memcpy 整个对象？</div>
+<div class="q"><b>Q3</b> 误差比对的两个操作数分别是什么？为什么两边都用 <code>PC_DATA_PACKED</code>？</div>
+<div class="q"><b>Q4</b> SendTable 和 PredictionData 为什么不能合并？举出"只预测不发"和"发但不预测"各一个例子。</div>
+<div class="q"><b>Q5</b> 四类字段里，漏了 B 类和漏了 D 类的症状分别是什么？为什么后者更难排查？</div>
+<div class="q"><b>Q6</b> <code>m_flCycle</code> 既然永远对不上，为什么还要留在预测表里？删掉会有什么后果？</div>
+<div class="q"><b>Q7</b> <code>FTYPEDESC_NOERRORCHECK</code> 屏蔽的是什么、不屏蔽的是什么？</div>
+<div class="q"><b>Q8</b> 平滑曲线是什么形状？时长是多少？为什么误差要累加而不是覆盖？</div>
+<div class="q"><b>Q9</b> 误差判定为什么需要一个 64 单位的<b>上限</b>？没有它，传送会变成什么样？</div>
+<div class="q"><b>Q10</b> <code>m_vecNetworkOrigin</code> 的容差 0.0625 是怎么推导出来的？如果填 0.001 或 1.0 分别会怎样？</div>
+<div class="q"><b>Q11</b> <code>PreEntityPacketReceived</code> 里两次 <code>RestoreData</code> 的来源和字段集为什么不同？这是哪个模式存在的唯一理由？</div>
+<div class="q"><b>Q12</b> <code>cl_pred_optimize 2</code> 这条捷径做了什么？为什么说"重放是异常处理不是主循环"？</div>
+<div class="q"><b>Q13</b> 为什么回滚不能只是"把字节写回去"？举三类需要补做的副作用。</div>
+<div class="q"><b>Q14</b> 为什么"你的枪出预测误差"会导致"玩家移动抖动"？TF2 怎么改的？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>game/shared/predictioncopy.cpp</code> / <code>predictioncopy.h</code> 的模式过滤、比较函数、CanCheck；<code>game/client/prediction.cpp</code> 的 <code>CheckError</code> / <code>RestoreOriginalEntityState</code> / <code>ComputeFirstCommandToExecute</code> / 两条优化路径 / 插值重置注释；<code>c_baseentity.cpp</code> 的三份数据分配、<code>PreEntityPacketReceived</code>、<code>PostEntityPacketReceived</code>、<code>PostNetworkDataReceived</code>、<code>RestoreData</code> 补救逻辑、<code>ShiftIntermediateDataForward</code>；<code>c_baseplayer.cpp</code> 的 <code>NotePredictionError</code> / <code>GetPredictionErrorSmoothingVector</code> / <code>cl_smoothtime</code> 定义 / 预测表；<code>baseplayer_shared.cpp:1630-1636</code> 的 <code>eyeOrigin += vSmoothOffset</code>；<code>datamap.h</code> 的宏与 flag 定义；各处容差数值。</p>
+<p><span class="unverified">⚠ 未核实</span>：<code>PreEntityPacketReceived</code> / <code>PostNetworkDataReceived</code> 的<b>引擎侧调用点</b>（<code>IPrediction</code> 纯虚接口，闭源）—— §5.3 时序表中 ①②④⑤ 的<b>精确帧内位置</b>是从函数命名、参数语义与注释推断。<code>commands_acknowledged</code> 的引擎侧计算方式未核实。<code>cl_smoothtime</code> 默认 0.1 秒的<b>选定依据</b>代码无说明（"略长于一个 20Hz 网络间隔"是我的推断）。<code>MULTIPLAYER_BACKUP = 90</code> 的选定依据同样无说明。<b>TF2 分支特有</b>：<code>FTYPEDESC_ONLY_ERROR_IF_ABOVE_ZERO_TO_ZERO_OR_BELOW_ETC</code>、<code>cl_pred_doresetlatch</code>、部分/全量 latch reset 分野、<code>PredictionErrorShouldResetLatchedForAllPredictables</code> —— 这些来自 <code>Add Team Fortress 2 SDK</code> 提交（已用 git 核实），<b>HL2 原始 SDK 没有</b>。第三人称/载具/死亡镜头等 <code>CalcView</code> 分支是否都施加了平滑偏移未穷举。</p>
+<p>上一篇：<a href="Source同步二-客户端预测讲解.html" style="color:var(--accent)">（二）客户端预测</a>　｜　下一篇：<a href="Source同步四-插值与延迟补偿讲解.html" style="color:var(--accent)">（四）插值与延迟补偿</a></p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source 网络同步（一）属性同步 —— 声明式框架与脏标记</title>
+<link rel="stylesheet" href="reading-notes.css">
+<link rel="stylesheet" href="toc.css">
+<script src="toc.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a class="cur" href="Source同步一-属性同步讲解.html">一 · 属性同步</a>
+    <a href="Source同步二-客户端预测讲解.html">二 · 客户端预测</a>
+    <a href="Source同步三-回滚与误差修正讲解.html">三 · 回滚与修正</a>
+    <a href="Source同步四-插值与延迟补偿讲解.html">四 · 插值与延迟补偿</a>
+  </div>
+  <h1>Source 网络同步（一）属性同步</h1>
+  <div class="sub">
+    Source SDK 2013 源码阅读 · 网络同步四部曲第一篇<br>
+    <code>public/dt_send.cpp</code> · <code>public/networkvar.h</code> · <code>public/edict.h</code>
+  </div>
+</header>
+
+<div class="note">
+<b>这一系列和 Fantasy 三部曲的关系</b>
+Fantasy 的 TCP/UDP/KCP 三篇讲的是<b>传输层</b>：字节怎么可靠地送到。Source 这四篇讲的是<b>表现层</b>：字节到了之后，怎么让玩家感觉不到延迟。<br><br>
+两边不重叠。Source SDK 是<b>游戏 DLL 层</b>的开源，引擎（<code>engine.dll</code>）闭源 —— <code>public/inetchannel.h</code> 只有接口，没有实现。所以传输层在这里是个黑盒，正好是你已经吃透的那一层。
+</div>
+
+<h2>零、四篇的主线：所有招数都在操纵时间</h2>
+
+<p>网络同步的根本矛盾只有一句话：<b>信息传递需要时间，但玩家要求即时反馈。</b></p>
+
+<p>服务端是唯一权威，但它在 100ms 之外。你看到的一切都是过去，你的操作要 100ms 后才生效。Valve 的整套方案是三个方向的时间操纵：</p>
+
+<table>
+<tr><th>机制</th><th>时间方向</th><th>解决什么</th><th>代价</th></tr>
+<tr><td>客户端预测</td><td>把未来<b>提前</b></td><td>按下 W 立刻走</td><td>会预测错，需要回滚</td></tr>
+<tr><td>实体插值</td><td>把过去<b>延后</b></td><td>别人不抖动</td><td>你看到的别人更旧</td></tr>
+<tr><td>延迟补偿</td><td>把过去<b>倒带</b></td><td>高 ping 也能打中</td><td>躲到墙后还被打死</td></tr>
+</table>
+
+<p><b>三者是一个闭环，不是三个独立优化。</b>插值制造的延迟必须由延迟补偿抵消，否则你瞄准的是别人 100ms 前的位置，永远打不中。很多人在 Unity 里只做了预测就上线，然后发现打不中人 —— 就是没意识到插值欠下的时间债必须还。</p>
+
+<p>本篇讲的属性同步是这一切的地基：<b>服务端怎么把状态送到客户端，且只送变化的部分。</b>它本身不操纵时间，但后面三篇全建立在它之上。</p>
+
+<h2>一、SendTable 的本质：一张运行时元数据表</h2>
+
+<p>Source 里每个可联网的类都要声明一张 <b>SendTable</b>（服务端）和一张 <b>RecvTable</b>（客户端）。表里没有任何逻辑，只有一个 <code>SendProp</code> 数组：</p>
+
+<div class="filetag">public/dt_send.h:468-474</div>
+<pre><code><span class="type">SendProp</span>   *m_pProps;
+<span class="kw">int</span>        m_nProps;
+<span class="kw">const char</span> *m_pNetTableName;   <span class="cmt">// 客户端与服务端匹配用的名字</span>
+<span class="type">CSendTablePrecalc</span> *m_pPrecalc;   <span class="cmt">// 引擎把预计算结果挂这里（闭源）</span></code></pre>
+
+<p>每个 <code>SendProp</code> 描述一个字段：类型、位数、值域、flag、<b>以及这个字段在对象里的字节偏移</b>。</p>
+
+<p>偏移量是整套设计的支点。表里存的不是"怎么读这个字段"的代码，而是"它在对象里的第几个字节"。宏 <code>SENDINFO</code> 用编译期 <code>offsetof</code> 算出来。</p>
+
+<div class="tip">
+<b>C# 类比</b>
+相当于你不写 <code>Serialize()</code>，而是维护一份"字段清单"，每项记录 <code>{ 字段名, 类型, 位数, 内存偏移 }</code>。序列化时遍历清单按偏移取值。C# 有真反射，可以扫 attribute 生成清单；C++ 没有，Valve 用宏手搓了一个。
+</div>
+
+<h3>1.1 为什么不每个类手写 Serialize()</h3>
+
+<p>这是本篇第一个值得吸收的架构决策，理由比"避免重复代码"深得多。</p>
+
+<p><b>核心理由：客户端和服务端是两个独立编译的 DLL，且必须能版本错配。</b></p>
+
+<p>手写 <code>Serialize()</code>/<code>Deserialize()</code> 要求两边字段读写顺序严格一致，任何一边改动就崩。而表是<b>运行时按字符串名字匹配</b>的 —— 服务端在连接建立时把整张表结构发给客户端，引擎按名字对齐。所以客户端可以缺字段、多字段、顺序不同。</p>
+
+<p>这是 mod 生态的生命线。讨论要不要支持 int64 时的注释很说明问题：</p>
+
+<div class="filetag">public/dt_common.h:104</div>
+<pre><code><span class="cmt">// The day we do this, we break all mods until they recompile.</span></code></pre>
+
+<p>另外三条理由：</p>
+
+<ul>
+<li><b>增量编码需要引擎"看懂"字段结构。</b>引擎要做的不是"序列化一个对象"，而是"对比上一帧，只发变化的字段，且发字段索引而不是字段名"。这要求能枚举、排序、索引所有属性 —— 手写函数是黑盒，做不到。</li>
+<li><b>一处声明换来多项能力。</b>同一张表同时驱动 delta 压缩、per-client 过滤、新客户端加入时的初始快照（baseline）、demo 录制回放。</li>
+<li><b>编译期强制正确性。</b>见 §4.3。</li>
+</ul>
+
+<h2>二、量化：用精度换带宽</h2>
+
+<p>你在 KCP 那篇见过"用 10%~20% 带宽换 30%~40% 延迟"。这里是同一种取舍思维用在另一层：<b>用精度损失换带宽</b>。</p>
+
+<p><code>SendPropFloat(SENDINFO(m_flMaxspeed), 12, SPROP_ROUNDDOWN, 0.0f, 2048.0f)</code> 的意思是：把 0~2048 的浮点压成 12 bit。构造时预计算一个乘数：</p>
+
+<div class="filetag">public/dt_send.cpp:215-217</div>
+<pre><code>iHighValue = ((<span class="num">1</span> &lt;&lt; nBits) - <span class="num">1</span>);
+<span class="kw">float</span> fHighLowMul = iHighValue / range;   <span class="cmt">// range = high - low</span></code></pre>
+
+<p>编码就是 <code>(value - low) * fHighLowMul</code> 取整，解码反向。12 bit 装 2048 的值域，精度约 0.5 单位。</p>
+
+<p>有段防御性代码值得一提（<code>dt_send.cpp:222-248</code>）：如果浮点精度导致乘数算出来会溢出 N bit，就依次乘 <code>{0.9999, 0.99, 0.9, 0.8, 0.7}</code> 收缩直到不溢出。<b>因为一旦最大值编码成超出 N bit 的整数，会污染相邻字段的 bit。</b>这种"宁可损失一点精度也不能越界"的处理是位打包协议的必备防线。</p>
+
+<h3>2.1 几个关键 flag</h3>
+
+<table>
+<tr><th>flag</th><th>作用</th><th>什么时候用</th></tr>
+<tr><td><code>SPROP_COORD</code></td><td>世界坐标专用变长编码，<b>忽略 nBits</b>。整数 14 bit + 小数 5 bit（精度 1/32）</td><td>位置。变长意味着静止在整数格点的物体只花几个 bit</td></tr>
+<tr><td><code>SPROP_NOSCALE</code></td><td>不量化，直接发 32 bit 原始 float</td><td>精度敏感处，如玩家速度。<b>显式声明"放弃压缩换正确性"</b></td></tr>
+<tr><td><code>SPROP_UNSIGNED</code></td><td>无符号。省符号位，且换用 UInt proxy</td><td>注释说换 proxy 不是为了编码正确，是<b>为了范围校验能抓到 bug</b></td></tr>
+<tr><td><code>SPROP_CHANGES_OFTEN</code></td><td>见 §2.2</td><td>高频变化的字段</td></tr>
+</table>
+
+<p>角度有专门的 <code>SendPropAngle</code>，值域硬编码 0~360，且 proxy 先做 <code>anglemod()</code> 归一化（<code>dt_send.cpp:72-80, 440-441</code>）。<b>避免"355° → 5°"被当成 350° 的大跳变。</b>这个环绕问题在第四篇的插值里还会以另一种形式出现。</p>
+
+<h3>2.2 SPROP_CHANGES_OFTEN 优化的是元数据，不是数据</h3>
+
+<p>这个 flag 我一开始理解错了，它值得单独讲。定义处的注释就是全部答案：</p>
+
+<div class="filetag">public/dt_common.h:65</div>
+<pre><code><span class="cmt">// this is an often changed field, moved to head of
+// sendtable so it gets a small index</span></code></pre>
+
+<p>机制：delta 编码时每个变化的属性要先发一个<b>变长编码的属性索引</b>。把高频变化的属性排到列表最前面，索引就小，索引本身占的 bit 就少。</p>
+
+<div class="warn">
+<b>关键洞察</b>
+一个 1 bit 的 bool，如果索引要花 10 bit，<b>那索引才是主要成本</b>。<br><br>
+这和你在 KCP 那篇算过的"24 字节 KCP 头在 470 载荷里占 12%"是同一个问题的另一个尺度。<b>协议设计到一定程度，元数据开销会超过数据本身。</b>
+</div>
+
+<h3>2.3 这个优化有个坑，代码里有直接证据</h3>
+
+<p>排序会破坏属性的<b>到达顺序</b>，而某些客户端 RecvProxy 依赖顺序：</p>
+
+<div class="filetag">game/server/fish.cpp:87-89</div>
+<pre><code><span class="cmt">* NOTE: Do NOT use SPROP_CHANGES_OFTEN, as it will reorder this list.
+* The pool origin must arrive befoore m_x and m_y or the fish will
+* respawn at the origin and zip back to their proper places.</span></code></pre>
+
+<p>（<code>befoore</code> 是原文的拼写错误。）同文件里三处 flag 因此被注释掉了。</p>
+
+<p>Source 甚至专门造了一个子表来强制顺序：</p>
+
+<div class="filetag">game/server/baseentity.cpp:261-263</div>
+<pre><code><span class="cmt">// NOTE: Animtime must be sent before origin and angles because it has a
+//  proxy on the client that stores off the old values before writing in
+//  the new values and if it is sent after, then it will only have the new...</span></code></pre>
+
+<p>子表叫 <code>DT_AnimTimeMustBeFirst</code> —— 名字本身就是文档。</p>
+
+<div class="tip">
+<b>可以带走的一条经验</b>
+<b>"优化"和"正确性"冲突时，Valve 选了正确性，并留下注释解释为什么。</b>你自己做同步系统时，如果引入了任何会改变字段顺序或时序的优化，要先确认没有接收侧逻辑依赖顺序。这类 bug 的症状（鱼在原点重生然后飞回去）和根因（属性排序）距离极远，极难查。
+</div>
+
+<h2>三、SendProxy：per-client 过滤</h2>
+
+<p>Proxy 是取值/存值的拦截钩子。最有架构价值的用法是<b>让一整张子表只发给"这个实体本人"</b>：</p>
+
+<div class="filetag">public/dt_send.cpp:196-200</div>
+<pre><code><span class="kw">void</span>* <span class="type">SendProxy_SendLocalDataTable</span>( ..., <span class="type">CSendProxyRecipients</span> *pRecipients, <span class="kw">int</span> objectID )
+{
+    pRecipients-&gt;<span class="type">SetOnly</span>( objectID - <span class="num">1</span> );   <span class="cmt">// 只发给自己</span>
+    <span class="kw">return</span> ( <span class="kw">void</span> * )pVarData;
+}</code></pre>
+
+<p>用在玩家表的最后一行（<code>player.cpp:8199</code>），子表 <code>DT_LocalPlayerExclusive</code> 里装着弹药、摩擦力、tickbase、约束参数 —— 只有你自己需要。</p>
+
+<p><b>这既省带宽，也是反作弊</b>：其他玩家的客户端<b>根本收不到</b>这些数据。想想那些"透视自己队友弹药"之类的需求，服务端不发就是最彻底的防护。</p>
+
+<p>客户端两张表都声明了，注释点明这个不对称：</p>
+
+<div class="filetag">game/client/c_baseplayer.cpp:271-273</div>
+<pre><code><span class="cmt">// We have both the local and nonlocal data in here, but the server proxies
+// only send one.</span></code></pre>
+
+<h3>3.1 EHANDLE：对象引用怎么同步</h3>
+
+<p>你不能直接同步一个指针。Source 把 <code>EHANDLE</code> 打包成一个 int：</p>
+
+<div class="filetag">game/server/sendproxy.cpp:30-31</div>
+<pre><code>pOut-&gt;m_Int = pHandle-&gt;<span class="type">GetEntryIndex</span>() | (iSerialNum &lt;&lt; MAX_EDICT_BITS);</code></pre>
+
+<p>低位是实体索引，高位是<b>序列号</b>。序列号解决的是<b>槽位复用</b>：索引 42 的实体销毁后，新实体占用同一槽位，旧 handle 因序列号不匹配自动失效。没有它，旧引用会静默指向一个完全不相干的新对象。</p>
+
+<div class="tip">
+<b>和 Unity 的对照</b>
+NGO 的 <code>NetworkObjectId</code> 是单调递增不复用的，所以不需要序列号 —— 代价是 ID 空间理论上会耗尽。Source 选了固定槽位 + 版本号，上限是<b>同时存在</b>的实体数而非累计创建数。<br><br>
+两种方案看你的对象生命周期特征：大量短命对象（子弹、特效）用 Source 这套更省。
+</div>
+
+<h3>3.2 继承与组合是同一个原语</h3>
+
+<p><code>BEGIN_SEND_TABLE</code> 自动插入一条指向基类表的 DataTable 属性（<code>dt_send.h:551-553</code>）。所以<b>类继承 → 表嵌套</b>，自动同构。</p>
+
+<p>而"组合"（嵌套一个成员对象的表）用的是<b>同一个</b> <code>SendPropDataTable</code>，区别只在偏移量是 0 还是成员偏移。这是个很干净的设计 —— 一个原语覆盖两种关系。</p>
+
+<p>偏移为 0 且用默认 proxy 时会打上 <code>SPROP_COLLAPSIBLE</code>，引擎可以直接把这一层<b>折叠掉</b>，省去遍历层级的开销。</p>
+
+<p>反向操作是 <code>SendPropExclude</code> —— 它不是真属性，只是一条指令："把继承来的某个字段剔除"。真实用法：</p>
+
+<div class="filetag">game/server/hl2mp/hl2mp_player.cpp:72</div>
+<pre><code><span class="type">SendPropExclude</span>( <span class="str">"DT_BaseEntity"</span>, <span class="str">"m_vecOrigin"</span> ),</code></pre>
+
+<p>动机在另一个文件里写得最清楚：<code>// client has its own orientation logic</code>（<code>eyeball_boss.cpp:58</code>）。<b>继承带来了不需要的带宽，就显式减掉。</b></p>
+
+<h2>四、脏标记：CNetworkVar 宏体系</h2>
+
+<p>服务端不可能每帧全量比对所有实体的所有字段。脏标记的作用是把昂贵的精确比对限制在极小的候选集上。</p>
+
+<h3>4.1 一次赋值发生了什么</h3>
+
+<p><code>CNetworkVar( int, m_iHealth )</code> 展开后大致是：</p>
+
+<pre><code><span class="cmt">// 一个纯静态的"变更通知策略"类</span>
+<span class="kw">class</span> <span class="type">NetworkVar_m_iHealth</span> {
+    <span class="kw">static inline void</span> <span class="type">NetworkStateChanged</span>( <span class="kw">void</span> *ptr ) {
+        ((<span class="type">ThisClass</span>*)(((<span class="kw">char</span>*)ptr) - <span class="type">MyOffsetOf</span>(<span class="type">ThisClass</span>,m_iHealth)))
+            -&gt;<span class="type">NetworkStateChanged</span>( ptr );
+    }
+};
+<span class="type">CNetworkVarBase</span>&lt; <span class="kw">int</span>, <span class="type">NetworkVar_m_iHealth</span> &gt; m_iHealth;   <span class="cmt">// 真正的成员</span>
+<span class="kw">typedef</span> <span class="type">ThisClass</span> MakeANetworkVar_m_iHealth;              <span class="cmt">// 编译期检查用</span></code></pre>
+
+<p>三个要点：</p>
+
+<p><b>(1) 靠指针算术反查宿主对象。</b><code>((char*)ptr) - offsetof(...)</code> —— 从成员地址减去偏移得到实体地址。所以这些包装器<b>零额外内存开销</b>：不需要存一个 back-pointer，偏移量是编译期常量。这个技巧是整套设计能"几乎免费"的关键。</p>
+
+<p><b>(2) 赋值即通知，且带相等性检查。</b></p>
+
+<div class="filetag">public/networkvar.h:246-254</div>
+<pre><code><span class="kw">const</span> <span class="type">Type</span>&amp; <span class="type">Set</span>( <span class="kw">const</span> <span class="type">Type</span> &amp;val )
+{
+    <span class="kw">if</span> ( <span class="type">NetworkParanoidUnequal</span>( m_Value, val ) )
+    {
+        <span class="type">NetworkStateChanged</span>();
+        m_Value = val;
+    }
+    <span class="kw">return</span> m_Value;
+}</code></pre>
+
+<p><b>(3) 浮点用位比较而非数值比较。</b><code>NetworkParanoidUnequal</code> 对 float/double 通过 union 转成整数比（<code>networkvar.h:190-216</code>）。原因：<code>-0.0f == 0.0f</code> 在数值上成立但位模式不同，而量化编码看的是位。<b>这种细节是用了十年被磨出来的。</b></p>
+
+<h3>4.2 脏标记的粒度：精确到字节偏移</h3>
+
+<p>传播链是四跳，全部在开源代码里：</p>
+
+<div class="flow"><b>脏标记传播链</b>
+
+  m_iHealth = 50
+    ↓  <span class="cmt">networkvar.h:246</span>       位级相等性检查
+  <b>CNetworkVarBase::Set()</b>
+    ↓  <span class="cmt">networkvar.h:813</span>       指针算术反查实体
+  <b>NetworkVar_m_iHealth::NetworkStateChanged()</b>
+    ↓
+  <b>CBaseEntity::NetworkStateChanged()</b> → NetworkProp()
+    ↓  <span class="cmt">ServerNetworkProperty.h:201</span>   可选 timer 节流
+  <b>CServerNetworkProperty::NetworkStateChanged( offset )</b>
+    ↓  <span class="cmt">edict.h:286</span>
+  <b>edict_t::StateChanged( offset )</b>
+    置 FL_EDICT_CHANGED + 把 <b>offset</b> 记进变更列表
+</div>
+
+<p><b>终点不只是"这个实体变了"，还有"变的是偏移 0x40 处那个"。</b>引擎可以直接定位到属性而不必遍历整棵属性树。</p>
+
+<p>但这个精确列表有容量上限，超了就降级：</p>
+
+<div class="filetag">public/edict.h:291-313（节选）</div>
+<pre><code>m_fStateFlags |= FL_EDICT_CHANGED;
+<span class="cmt">// …去重后…</span>
+p-&gt;m_ChangeOffsets[p-&gt;m_nChangeOffsets++] = offset;</code></pre>
+
+<p>最多记 19 个偏移，超了就打 <code>FL_FULL_EDICT_CHANGED</code> 当"全变了"处理。</p>
+
+<div class="tip">
+<b>这个降级策略本身是个好设计</b>
+"精确追踪有上限，超限降级为保守正确"。而且它在数值上是合理的：一帧改 20 个字段的实体，<b>全量比对反而更划算</b> —— 维护精确列表的开销超过了它节省的比对开销。<br><br>
+自己做脏标记时值得照抄这个思路：不要为了"永远精确"付出无界的记账成本。
+</div>
+
+<h3>4.3 那个静默 bug，和编译期怎么堵住它</h3>
+
+<p>如果绕过 <code>CNetworkVar</code> 直接改字段，后果是：<b>服务端值变了，edict 从未标脏，引擎认为实体没变化，客户端永远收不到更新。</b></p>
+
+<p>不报错、不崩溃，只是静默不同步。表现是"服务端血量 50，客户端一直显示 100"。<b>代码逻辑看起来完全正确，问题在于你没告诉框架你改了东西。</b></p>
+
+<p>Valve 用编译期检查堵住了大部分情况。回看 §4.1 那个 <code>typedef ThisClass MakeANetworkVar_m_iHealth;</code> —— <code>SENDINFO</code> 宏会引用它：</p>
+
+<div class="filetag">public/dt_send.h:586</div>
+<pre><code>#define SENDINFO(varName)  #varName, \
+    _hacky_dtsend_offsetof(currentSendDTClass::MakeANetworkVar_##varName, varName), ...</code></pre>
+
+<p>对普通成员变量写 <code>SENDINFO(m_foo)</code>，这个 typedef 不存在，<b>编译失败</b>。</p>
+
+<div class="warn">
+<b>但有后门</b>
+<code>SENDINFO_NOCHECK(m_foo)</code> 跳过检查（<code>dt_send.h:601-602</code>，注释 <code>// Use this when you're not using a CNetworkVar</code>）。它的<b>正当</b>用途是非实体的一次性结构体，那里根本没有 delta 机制 —— <code>effect_dispatch_data.cpp:81-84</code> 的注释是标准答案。<br><br>
+用在实体上就是自找麻烦。<b>Unity 里的对应物：直接改 <code>NetworkVariable</code> 的内部字段而不走 <code>Value</code> setter。NGO 没有编译期保护，全靠自觉。</b>
+</div>
+
+<h3>4.4 变体：把粒度做到分量级</h3>
+
+<table>
+<tr><th>宏</th><th>解决什么</th></tr>
+<tr><td><code>CNetworkVector</code></td><td><b>分量级脏标记</b>。<code>SetX/SetY/SetZ</code> 各自独立检查，只改 X 不会让 YZ 也标脏</td></tr>
+<tr><td><code>CNetworkArray</code></td><td><b>元素级脏标记</b>。通知传的是 <code>&amp;m_Value[i]</code>，偏移精确到元素</td></tr>
+<tr><td><code>CNetworkString</code></td><td>只有 <code>Get()</code> 和 <code>GetForModify()</code>，<b>没有 Set()</b> —— char 数组无法用值比较做廉价的相等检查</td></tr>
+<tr><td><code>CNetworkHandle</code></td><td>内部存 handle，但重载 <code>operator-&gt;</code> 让它用起来像裸指针</td></tr>
+<tr><td><code>CNetworkVarEmbedded</code></td><td>让<b>嵌套结构体</b>里的 CNetworkVar 能把通知传出来。<b>故意禁用了赋值操作符</b> —— 整体赋值不会调各标量成员的 copy ctor，导致它们不被标脏</td></tr>
+</table>
+
+<p>还有一个专门解决继承层级浪费的变体，思路很值得看：</p>
+
+<p><code>CBaseEntity</code> 有 <code>m_iHealth</code>，但基类的表不发它 —— 只有 <code>CBasePlayer</code> 等派生类才发。用普通 <code>CNetworkVar</code> 的话，<b>每一个</b>实体（包括一万个不联网的道具）改血量都要走一遍标脏流程。</p>
+
+<p>解法是把通知<b>虚化并默认关闭</b>：</p>
+
+<div class="filetag">public/networkvar.h:655-659</div>
+<pre><code>#define CNetworkVarForDerived( type, name ) \
+    <span class="kw">virtual void</span> NetworkStateChanged_##name() {} \          <span class="cmt">// 空实现</span>
+    <span class="kw">virtual void</span> NetworkStateChanged_##name( <span class="kw">void</span> *pVar ) {} \
+    ...</code></pre>
+
+<p>基类里写它 = 零成本。真正要发的派生类粘一行 <code>IMPLEMENT_NETWORK_VAR_FOR_DERIVED( m_iHealth )</code> 把虚函数接回真实现。<code>player.h:872-885</code> 一次打开 11 个。</p>
+
+<p>注释很直白：</p>
+
+<div class="filetag">game/server/baseentity.h:1239</div>
+<pre><code><span class="type">CNetworkVarForDerived</span>( <span class="kw">int</span>, m_iHealth ); <span class="cmt">// CBaseEntity doesn't care about
+    // changes to this variable, but there are derived classes that do.</span></code></pre>
+
+<h2>五、完整链路与开源边界</h2>
+
+<div class="flow"><b>服务端到客户端</b>
+
+<b>【服务端 · 开源】</b>
+ 1. m_iHealth = 50                    <span class="cmt">networkvar.h:246</span>
+ 2. 指针算术反查实体                    <span class="cmt">networkvar.h:813</span>
+ 3. CServerNetworkProperty             <span class="cmt">ServerNetworkProperty.h:201</span>
+ 4. edict_t::StateChanged( offset )    <span class="cmt">edict.h:286</span>
+
+╔══ 边界：edict_t 是<b>共享内存</b>（engine 与 game DLL 共用）══╗
+   <span class="cmt">edict.h:115  "Shared between engine and game DLL"</span>
+╚══════════════════════════════════════════════════════╝
+
+<b>【引擎 · 闭源 engine.dll】</b>
+ 5. 扫描 FL_EDICT_CHANGED
+ 6. 走 CSendTablePrecalc 的<b>展平属性列表</b>   <span class="cmt">← 只有前向声明</span>
+ 7. 调 SendProxy 取值                        <span class="cmt">← proxy 函数体在开源侧</span>
+ 8. PVS 剔除 + recipients 过滤
+ 9. 与上一帧 baseline 做 delta，量化写入
+    <span class="cmt">属性索引变长编码 ← SPROP_CHANGES_OFTEN 在这生效</span>
+10. 传输（inetchannel，闭源）
+
+<b>【客户端 · 开源】</b>
+11. PreDataUpdate    —— 快照旧值        <span class="cmt">c_baseentity.cpp:2149</span>
+12. 逐属性调 RecvProxy 写入
+    <span class="cmt">★ 只有真正变化的属性其 proxy 才被调用</span>
+13. PostDataUpdate   —— 手动比对、latch 插值历史  <span class="cmt">:2538</span>
+14. OnDataChanged    —— 延迟到渲染帧起点统一派发   <span class="cmt">:3309</span>
+</div>
+
+<h3>5.1 两个反直觉的事实</h3>
+
+<div class="warn">
+<b>客户端不知道哪些属性变了</b>
+引擎<b>不下发变更清单</b>。客户端只能靠"我的 RecvProxy 有没有被调用"隐式感知，或者自己存旧值手动比对：<br><br>
+<code>bool originChanged = ( m_vecOldOrigin != GetLocalOrigin() );</code>　<span class="cmt">c_baseentity.cpp:2570-2576</span>
+</div>
+
+<p>由此推出第二个事实：<b>客户端侧的成员是普通变量，不是 <code>CNetworkVar</code>。</b>客户端不需要标脏，它是纯接收端。</p>
+
+<p><b>整套 <code>CNetworkVar</code> 机制是服务端专属的发送优化。</b>这个不对称性我一开始没想到 —— 看名字容易以为是"网络变量"，实际是"发送方的变更追踪器"。</p>
+
+<h3>5.2 PostDataUpdate 与 OnDataChanged 的区别</h3>
+
+<p>这个区分很关键，注释在 <code>iclientnetworkable.h:62-77</code>：</p>
+
+<table>
+<tr><th></th><th>频率</th><th>时机</th><th>能不能用</th></tr>
+<tr><td><code>Pre/PostDataUpdate</code></td><td>每<b>包</b>一次（一帧可能多次）</td><td>解析包的过程中</td><td>其他实体的坐标、attachment <b>可能还是旧的</b></td></tr>
+<tr><td><code>OnPre/OnDataChanged</code></td><td>每<b>帧</b>一次</td><td>渲染起点</td><td>所有实体状态已一致</td></tr>
+</table>
+
+<p>注释明确建议：<b>90% 的情况用后者。</b></p>
+
+<p>还有个反向信号 <code>OnDataUnchangedInPVS</code> —— 实体在 PVS 内但零属性变化，一次解码都没发生。</p>
+
+<h2>六、Unity 落地要点</h2>
+
+<p>本篇能直接搬到你项目里的，按重要性排：</p>
+
+<h3>6.1 网络字段的标识用名字或稳定 ID，不要用顺序</h3>
+
+<p>如果你要支持热更或长期维护多版本客户端，字段的协议不能靠声明顺序。Source 用字符串名字在连接时对齐一次，之后传数字索引 —— <b>建立连接时松耦合，运行时紧凑编码</b>。</p>
+
+<p>这是个架构层决策，早定省事。改起来是伤筋动骨的。</p>
+
+<h3>6.2 脏标记的粒度要匹配你的字段特征</h3>
+
+<p>Source 做到<b>字节偏移级</b>，NGO 的 <code>NetworkVariable</code> 只到<b>变量级</b>。</p>
+
+<p>如果你有大数组或大结构体要同步（比如背包、技能栏），变量级脏标记意味着改一格就全量重发。这时候要么手动拆成多个 <code>NetworkVariable</code>，要么自己实现元素级脏标记（<code>NetworkList</code> 有部分支持）。</p>
+
+<h3>6.3 别忘了元数据开销</h3>
+
+<p>同步一个 bool 时，"这是第几个字段"这个信息可能比 bool 本身贵一个数量级。</p>
+
+<p>实践建议：<b>把高频变化的字段集中放在一个小结构里同步，而不是散在几十个字段中间。</b>这样索引空间小，索引编码短。这就是 <code>SPROP_CHANGES_OFTEN</code> 的手工版。</p>
+
+<h3>6.4 用 C# 反射把两件事合一</h3>
+
+<p>Source 受 C++ 限制才用宏。C# 可以做得干净得多：</p>
+
+<pre><code><span class="cmt">// 启动时扫一遍生成字段清单，缓存成委托（Expression 或 source generator）</span>
+[<span class="type">Sync</span>(Bits = <span class="num">12</span>, Low = <span class="num">0</span>, High = <span class="num">2048</span>)]     <span class="cmt">// 量化</span>
+<span class="kw">private float</span> _maxSpeed;
+
+[<span class="type">Sync</span>(Owner = <span class="type">SyncScope</span>.OwnerOnly)]           <span class="cmt">// per-client 过滤</span>
+<span class="kw">private int</span> _ammo;</code></pre>
+
+<p><b>设计意图和 Source 完全相同，但把"宏 + 手工偏移"换成"attribute + 反射生成"</b>，同时消掉了一整类"表和类定义不一致"的 bug。</p>
+
+<h2>七、读完后自测</h2>
+
+<div class="q"><b>Q1</b> 为什么用声明式描述表而不是每个类手写 <code>Serialize()</code>？最硬的那条理由是什么（提示：和两个独立编译的 DLL 有关）？</div>
+<div class="q"><b>Q2</b> <code>SPROP_CHANGES_OFTEN</code> 优化的是数据还是元数据？它为什么会引入一类和"字段顺序"有关的 bug？</div>
+<div class="q"><b>Q3</b> <code>SendProxy_SendLocalDataTable</code> 除了省带宽，还有什么安全上的价值？</div>
+<div class="q"><b>Q4</b> <code>EHANDLE</code> 里的序列号解决什么问题？如果去掉它会发生什么？</div>
+<div class="q"><b>Q5</b> <code>CNetworkVar</code> 靠什么做到"零额外内存开销"地反查宿主实体？</div>
+<div class="q"><b>Q6</b> 为什么 <code>NetworkParanoidUnequal</code> 对浮点用位比较而不是 <code>==</code>？</div>
+<div class="q"><b>Q7</b> 一个 edict 最多精确记录几个变更偏移？超了怎么办？为什么这个降级是合理的？</div>
+<div class="q"><b>Q8</b> 忘记用 <code>CNetworkVar</code> 会怎样？Valve 用什么手段在编译期堵住它？</div>
+<div class="q"><b>Q9</b> <code>CNetworkVarForDerived</code> 解决什么浪费？基类里用它的成本是多少？</div>
+<div class="q"><b>Q10</b> 客户端侧的成员为什么<b>不</b>用 <code>CNetworkVar</code>？这说明这套机制的本质是什么？</div>
+<div class="q"><b>Q11</b> <code>PostDataUpdate</code> 和 <code>OnDataChanged</code> 的调用频率和时机各是什么？为什么建议用后者？</div>
+<div class="q"><b>Q12</b> 如果你在 Unity 里同步一个 64 格的背包，NGO 的变量级脏标记会带来什么问题？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>public/dt_send.h</code> / <code>dt_send.cpp</code> / <code>dt_recv.h</code> / <code>dt_common.h</code> / <code>networkvar.h</code> / <code>edict.h</code> / <code>iclientnetworkable.h</code> 相关段落；<code>ServerNetworkProperty.h</code>；<code>game/server/player.cpp</code> 与 <code>game/client/c_baseplayer.cpp</code> 的表定义；<code>sendproxy.cpp</code> / <code>recvproxy.cpp</code>；<code>fish.cpp:87-89</code> 与 <code>baseentity.cpp:261-263</code> 的注释。文中行号均来自实际读取。</p>
+<p><span class="unverified">⚠ 未核实</span>：<b>位级编解码的实现全部在闭源 <code>engine.dll</code></b> —— <code>dt_encode*</code> / <code>dt_decode*</code> 文件不存在，<code>SendTable_Encode</code> / <code>RecvTable_Decode</code> 全树无实现。"先写属性索引再写数据""变长索引编码"是从 <code>SPROP_CHANGES_OFTEN</code> 的注释语义 + <code>fish.cpp</code> 的重排警告<b>推断</b>的。<code>CSendTablePrecalc</code> / <code>CRecvDecoder</code> 只有前向声明，"展平属性列表""排序在此发生"同属推断。<code>SPROP_CHANGES_OFTEN</code> 的确切排序算法（稳定排序？有权重？）无法确定。<code>WriteBitCoord</code> 的位布局只读到声明。第 4.2 节"脏标记优于全量比对"用的是复杂度与缓存局部性的定性推理，<b>无 profiling 数据</b>。</p>
+<p>下一篇：<a href="Source同步二-客户端预测讲解.html" style="color:var(--accent)">Source 网络同步（二）客户端预测</a></p>
+<p>相关：<a href="网络层三-KCP讲解.html" style="color:var(--accent)">Fantasy 网络层（三）KCP</a>（传输层视角）</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source 网络同步（二）客户端预测 —— 把未来提前</title>
+<link rel="stylesheet" href="reading-notes.css">
+<link rel="stylesheet" href="toc.css">
+<script src="toc.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="nav">
+    <a href="Source同步一-属性同步讲解.html">一 · 属性同步</a>
+    <a class="cur" href="Source同步二-客户端预测讲解.html">二 · 客户端预测</a>
+    <a href="Source同步三-回滚与误差修正讲解.html">三 · 回滚与修正</a>
+    <a href="Source同步四-插值与延迟补偿讲解.html">四 · 插值与延迟补偿</a>
+  </div>
+  <h1>Source 网络同步（二）客户端预测</h1>
+  <div class="sub">
+    Source SDK 2013 源码阅读 · 网络同步四部曲第二篇<br>
+    <code>game/client/prediction.cpp</code> · <code>game/shared/gamemovement.cpp</code> · <code>game/shared/usercmd.h</code>
+  </div>
+</header>
+
+<p>上一篇讲的是"服务端怎么把状态送到客户端"。但状态送到时已经晚了 —— 你按下 W 的那一刻，服务端在 100ms 之外。</p>
+
+<p>如果老老实实等服务端确认才移动，操作手感直接毁掉。<b>客户端预测的目标就一句话：让本地输入立即生效，事后再和服务端对账。</b></p>
+
+<div class="note">
+<b>这一篇的核心洞察</b>
+预测能成立不是因为算法聪明，而是因为一个工程决定：<b>客户端和服务端跑的是同一份移动代码</b>（<code>gamemovement.cpp</code>，141KB）。<br><br>
+同样的输入 + 同样的起始状态 + 同样的代码 = 同样的结果。预测的正确性建立在这个确定性上，而不是建立在"猜得准"上。
+</div>
+
+<h2>一、一次预测的完整时间线</h2>
+
+<div class="flow"><b>从按键到对账</b>
+
+<b>【客户端 · 第 N 帧】</b>
+ 1. 采集输入          <span class="cmt">CreateMove</span>
+ 2. 打包成 CUserCmd    <span class="cmt">带 command_number = N</span>
+ 3. <b>本地立即执行</b>      <span class="cmt">RunCommand → gamemovement</span>
+ 4. <b>存档结果</b>          <span class="cmt">StorePredictionResults( N )</span>
+ 5. 发送（含历史命令）  <span class="cmt">WriteUsercmdDeltaToBuffer</span>
+
+        ↓ 网络延迟 ~50ms
+
+<b>【服务端】</b>
+ 6. 收到命令 N
+ 7. 执行 <b>同一份</b> gamemovement
+ 8. 结果进快照
+
+        ↓ 网络延迟 ~50ms
+
+<b>【客户端 · 第 N+6 帧】</b>
+ 9. 快照到达，说"命令 N 的结果是这样"
+10. <b>对账</b>：预测存档 N ←→ 服务端快照
+11a. 一致 → 走优化路径，只跑最新那条命令
+11b. 不一致 → 回滚到 N，重跑 N+1..N+6
+</div>
+
+<p><b>注意第 4 步和第 10 步的配对</b>：不存档就没法对账。这是第三篇的主题，本篇先讲清楚 1-8 步。</p>
+
+<h2>二、CUserCmd：预测的输入单元</h2>
+
+<p>整套机制的原子是 <code>CUserCmd</code> —— 一条"玩家在某一刻做了什么"的记录。</p>
+
+<div class="filetag">game/shared/usercmd.h（字段节选）</div>
+<pre><code><span class="kw">int</span>     command_number;    <span class="cmt">// ★ 序号，对账的钥匙</span>
+<span class="kw">int</span>     tick_count;        <span class="cmt">// 客户端的 tick，延迟补偿要用（第四篇）</span>
+<span class="type">QAngle</span>  viewangles;        <span class="cmt">// 视角</span>
+<span class="kw">float</span>   forwardmove, sidemove, upmove;
+<span class="kw">int</span>     buttons;           <span class="cmt">// 按键位图</span>
+<span class="kw">int</span>     random_seed;       <span class="cmt">// ★ 共享随机数的种子，见 §5</span>
+<span class="kw">bool</span>    hasbeenpredicted;  <span class="cmt">// ★ 本地标记：这条跑过没有</span></code></pre>
+
+<p><code>command_number</code> 是<b>对账的钥匙</b>。服务端确认"我处理完了命令 N"，客户端才知道该拿哪个存档去比。</p>
+
+<h3>2.1 为什么一次要发多条历史命令</h3>
+
+<p>UDP 会丢包。如果每个包只带一条命令，丢一个包就意味着<b>那一刻的输入永久丢失</b> —— 玩家按下的跳跃直接消失。</p>
+
+<p>Source 的做法是每个包携带最近若干条命令，并用 delta 编码压缩（相邻命令差异很小）。服务端收到后按 <code>command_number</code> 去重，补上漏掉的。</p>
+
+<div class="tip">
+<b>这个思路和 KCP 的对照</b>
+KCP 用 <b>ARQ 重传</b>解决丢包：丢了就重发，保证送达。<br>
+UserCmd 用<b>冗余</b>解决丢包：不等发现丢包，直接每次都多带几条。<br><br>
+差别在于<b>输入有时效性</b>。100ms 后才重传到的跳跃指令，玩家已经不想跳了。所以宁可浪费带宽也不能等重传 —— <b>和 KCP "用带宽换延迟"是同一种取舍，只是更极端。</b>
+</div>
+
+<h2>三、共用移动代码：预测正确的必要条件</h2>
+
+<p>这是整篇最重要的一节。</p>
+
+<p><code>game/shared/gamemovement.cpp</code> 这个路径里的 <code>shared</code> 是字面意思：<b>这个文件被编译进客户端 DLL 和服务端 DLL 两次。</b></p>
+
+<h3>3.1 编译期怎么做到的</h3>
+
+<p>靠 <code>#ifdef CLIENT_DLL</code> 和一层 typedef。同一个符号 <code>CBasePlayer</code> 在两边指向不同的类：</p>
+
+<pre><code><span class="cmt">// 客户端编译时</span>
+#define CBasePlayer C_BasePlayer
+
+<span class="cmt">// 服务端编译时：CBasePlayer 就是 CBasePlayer</span></code></pre>
+
+<p>所以 <code>gamemovement.cpp</code> 里写 <code>CBasePlayer *player</code>，在客户端编译出来操作的是 <code>C_BasePlayer</code>，在服务端操作的是 <code>CBasePlayer</code>。<b>一份源码，两个二进制，行为一致。</b></p>
+
+<h3>3.2 为什么"一致"是必要条件而非优化</h3>
+
+<p>假设两边移动代码有任何差异 —— 比如客户端的摩擦力算法少了一个 clamp。那么：</p>
+
+<ul>
+<li>每一帧预测都会产生微小误差</li>
+<li>每一帧都判定"预测失败"</li>
+<li>每一帧都触发误差修正和插值重置</li>
+<li>玩家体验：<b>移动持续抖动，且找不到原因</b></li>
+</ul>
+
+<p><b>预测不是"猜"，是"用相同的确定性函数算出相同的结果"。</b>一旦确定性被破坏，整套机制从"偶尔纠错"退化成"永久纠错"，比不做预测更糟。</p>
+
+<div class="warn">
+<b>这条对 Unity 项目的意义最直接</b>
+如果你在 Unity 里做预测，<b>客户端和服务端必须调用同一个移动函数</b>，不能是"客户端一套 CharacterController，服务端一套物理"。<br><br>
+更隐蔽的破坏源：<code>Time.deltaTime</code>（每帧不同）、<code>Random</code>（两边序列不同）、浮点运算顺序差异、以及 <b>Unity 物理引擎本身的非确定性</b>。后者是最难缠的 —— <code>Rigidbody</code> 在不同帧率下结果不同，这就是为什么帧同步/预测类项目往往要自己写移动而不用内置物理。
+</div>
+
+<h2>四、prediction.cpp 的职责分层</h2>
+
+<table>
+<tr><th>函数</th><th>职责</th><th>位置</th></tr>
+<tr><td><code>Update</code></td><td>入口。<b>备份全局时间变量</b>，因为重放要反复篡改 <code>gpGlobals-&gt;curtime</code></td><td><code>prediction.cpp:1708-1737</code></td></tr>
+<tr><td><code>_Update</code></td><td>决定要不要恢复起点，然后调 <code>PerformPrediction</code></td><td><code>:1742-1799</code></td></tr>
+<tr><td><code>ComputeFirstCommandToExecute</code></td><td><b>决定从第几条命令开始跑</b>（优化路径都在这）</td><td><code>:1434-1565</code></td></tr>
+<tr><td><code>PerformPrediction</code></td><td>主循环：逐条命令 <code>RunSimulation</code> + 存档</td><td><code>:1611-1679</code></td></tr>
+<tr><td><code>RunSimulation</code></td><td>跑一条命令：抑制事件 → 移动 → 物理</td><td><code>:1208-1280</code></td></tr>
+<tr><td><code>CheckError</code></td><td>只比 <b>位置</b> 一个字段，算视觉平滑量（第三篇）</td><td><code>:128-199</code></td></tr>
+</table>
+
+<p><code>Update</code> 开头那个时间备份值得看一眼，它暗示了重放的本质：</p>
+
+<div class="filetag">game/client/prediction.cpp:1729-1735</div>
+<pre><code><span class="type">CGlobalVarsBase</span> saveVars(<span class="kw">true</span>);
+saveVars = *gpGlobals;
+<span class="type">_Update</span>( ... );
+*gpGlobals = saveVars;   <span class="cmt">// 还原</span></code></pre>
+
+<p><b>重放就是"把时钟拨回去，重新走一遍"。</b>而游戏代码到处读 <code>gpGlobals->curtime</code>，所以必须让它在重放期间报告"当时"的时间，跑完再拨回来。</p>
+
+<h3>4.1 哪些命令会被重放</h3>
+
+<p>关键判据是 <code>hasbeenpredicted</code>：</p>
+
+<div class="filetag">game/client/prediction.cpp:1632</div>
+<pre><code>m_bFirstTimePredicted = !cmd-&gt;hasbeenpredicted;</code></pre>
+
+<p>循环末尾置 <code>cmd->hasbeenpredicted = true</code>。所以：</p>
+
+<ul>
+<li><b>第一次跑</b>某条命令 → <code>m_bFirstTimePredicted == true</code></li>
+<li><b>重放</b>同一条命令 → <code>false</code></li>
+</ul>
+
+<p>这个标志是重放机制的灵魂，下一节专讲。</p>
+
+<h2>五、两个"跑两遍不能出错"的问题</h2>
+
+<p>同一条命令被跑多次，会撞上两类麻烦。Source 各有一套解法，都很值得学。</p>
+
+<h3>5.1 副作用：一枪五响问题</h3>
+
+<p>命令 N 里包含"开火"。第一次预测时播了枪声、生成了弹壳。重放 5 次 → <b>枪声响 5 次</b>。</p>
+
+<p>解法是三层：</p>
+
+<p><b>第一层：全局抑制开关。</b><code>RunSimulation</code> 开头：</p>
+
+<div class="filetag">game/client/prediction.cpp:1208</div>
+<pre><code><span class="type">IPredictionSystem</span>::<span class="type">SuppressEvents</span>( !<span class="type">IsFirstTimePredicted</span>() );</code></pre>
+
+<p><b>第二层：游戏代码显式判断。</b>TF2 里数十处 <code>if ( IsFirstTimePredicted() )</code> 包裹音效、粒子、震动。</p>
+
+<p><b>第三层（最漂亮的一层）：服务端反向配合。</b></p>
+
+<div class="filetag">game/server/recipientfilter.cpp:115 等处</div>
+<pre><code><span class="cmt">// IPredictionSystem::GetSuppressHost() 让服务端把本地玩家
+// 从特效/声音的接收者列表里剔除</span></code></pre>
+
+<p><b>客户端自己预测出的效果，服务端不再重复发一遍。</b>不只是客户端"重放时闭嘴"，还有服务端"知道你已经自己演过了"。这一层配合是 Source 预测系统成熟度的体现。</p>
+
+<div class="warn">
+<b>Unity 落地时这是最容易漏、症状最明显的坑</b>
+你需要一个全局可查的 <code>IsReplaying</code> 标志，并且<b>所有产生副作用的代码都要检查它</b>：音效、粒子、震动、UI 提示、成就计数、分析埋点。<br><br>
+漏一个的症状很好认（一枪五响、成就+5），但如果漏的是分析埋点，你可能几个月后才发现数据被污染了。
+</div>
+
+<h3>5.2 随机数：后坐力怎么两端一致</h3>
+
+<p>这是我认为整套设计里<b>最精彩的一个点</b>。</p>
+
+<p>问题：开枪有弹道散射、后坐力抖动，这些是随机的。客户端预测时随机出 A，服务端算的时候随机出 B —— 必然不一致，且每次开枪都不一致。</p>
+
+<p>朴素解法是"随机数只由服务端算，客户端不预测开火" —— 那开火手感就毁了。</p>
+
+<p><b>Source 的解法：让随机数变成输入的函数。</b></p>
+
+<div class="filetag">game/shared/util_shared.cpp:142-155</div>
+<pre><code><span class="kw">static int</span> <span class="type">SeedFileLineHash</span>( <span class="kw">int</span> seedvalue, <span class="kw">const char</span> *sharedname, <span class="kw">int</span> additionalSeed )
+{
+    <span class="type">CRC32_t</span> retval;  <span class="type">CRC32_Init</span>( &amp;retval );
+    <span class="type">CRC32_ProcessBuffer</span>( &amp;retval, &amp;seedvalue, <span class="kw">sizeof</span>( <span class="kw">int</span> ) );
+    <span class="type">CRC32_ProcessBuffer</span>( &amp;retval, &amp;additionalSeed, <span class="kw">sizeof</span>( <span class="kw">int</span> ) );
+    <span class="type">CRC32_ProcessBuffer</span>( &amp;retval, (<span class="kw">void</span> *)sharedname, <span class="type">Q_strlen</span>( sharedname ) );
+    <span class="type">CRC32_Final</span>( &amp;retval );  <span class="kw">return</span> (<span class="kw">int</span>)( retval );
+}</code></pre>
+
+<p>然后 <code>SharedRandomFloat</code> / <code>SharedRandomInt</code> / <code>SharedRandomVector</code> 都是同一模式：<b>种子 = hash(命令的 random_seed, 调用点字符串, 附加种子)</b>，然后 <code>RandomSeed(seed)</code> + <code>RandomFloat()</code>。</p>
+
+<p>种子随每条 usercmd 设置（<code>prediction.cpp:753</code>），命令结束时清空（<code>:768</code>）。</p>
+
+<h4>三个设计要点</h4>
+
+<p><b>(1) 种子绑定命令，不绑定时间。</b>这是重放能收敛的前提 —— 重放同一条命令，得到<b>完全相同</b>的随机序列。如果种子来自 <code>Time.time</code> 或帧号，重放就会产生不同结果。</p>
+
+<p><b>(2) 调用点字符串参与 hash。</b>同一条命令里可能有多个随机调用（后坐力、散射、暴击判定）。用字符串区分后，它们<b>各自独立</b>，不会因为调用顺序变化而串味。</p>
+
+<p>对比朴素方案"一个命令一个种子，按调用顺序取随机数"：如果某个分支条件让客户端少调了一次随机，<b>后面所有随机数全部错位</b>。用调用点名字做 key 就免疫这个问题。</p>
+
+<p><b>(3) 断言保护。</b><code>Assert( GetPredictionRandomSeed() != -1 )</code> —— 在预测上下文外调用会被抓住。</p>
+
+<div class="tip">
+<b>C# 里的等价写法</b>
+<pre><code><span class="kw">public static float</span> <span class="type">SharedRandom</span>(<span class="kw">string</span> callSite, <span class="kw">int</span> extraSeed = <span class="num">0</span>)
+{
+    <span class="kw">int</span> seed = <span class="type">HashCombine</span>(_currentCmd.RandomSeed, callSite.<span class="type">GetHashCode</span>(), extraSeed);
+    <span class="kw">return new</span> <span class="type">System.Random</span>(seed).<span class="type">NextSingle</span>();  <span class="cmt">// 或用无分配的确定性 PRNG</span>
+}
+
+<span class="cmt">// 调用处：字符串写死，两端必须一致</span>
+<span class="kw">float</span> spread = <span class="type">SharedRandom</span>(<span class="str">"WeaponSpread"</span>) * _maxSpread;</code></pre>
+注意：<b>不要用 <code>System.Random</code> 在热路径上</b>（每次 new 会分配）。实际项目用 xorshift 之类的确定性 PRNG，把状态放在栈上。<br><br>
+另外 C# 的 <code>string.GetHashCode()</code> <b>跨进程不保证一致</b>（.NET 有随机化 hash seed）。要用固定算法自己算，比如 FNV-1a。<b>这个坑很隐蔽，会导致"本地测试正常、联机就散射不同步"。</b>
+</div>
+
+<h4>一个诚实的例外</h4>
+
+<p>TF2 里 <code>GetPredictionRandomSeed</code> 有个参数 <code>bUseUnSyncedServerPlatTime</code>（<code>c_baseentity.h:1233</code>），部分武器传 <code>UseServerRandomSeed()</code>。</p>
+
+<p><b>意思是：有一部分随机是故意不同步的</b>，某些武器的散射刻意只由服务端决定，客户端无法预测。这是明确的取舍点 —— 大概是为了防止客户端通过预测提前知道散射方向。</p>
+
+<h2>六、预测的边界：什么不预测</h2>
+
+<p>Valve 划界限划得很清楚，而且态度务实 —— <b>做不对的就不做，然后想办法缩小损害。</b></p>
+
+<h3>6.1 其他玩家：完全不预测</h3>
+
+<div class="filetag">game/client/c_baseplayer.cpp:2324-2334</div>
+<pre><code><span class="kw">if</span> ( <span class="type">IsLocalPlayer</span>() ) <span class="kw">return true</span>;
+<span class="kw">return false</span>;</code></pre>
+
+<p>本地玩家走预测（即时但可能错），其他玩家走插值（滞后但平滑）。命中判定交给服务端的延迟补偿。</p>
+
+<p><b>这是 Source 网络模型的基本分工，不是缺陷。</b>三条路径各管一段，第四篇会把它们拼起来。</p>
+
+<h3>6.2 视角：索性不预测</h3>
+
+<p>视角来自本地鼠标输入，<b>本来就是零延迟的</b>，根本不需要预测。所以 <code>_Update</code> 直接两次强制覆盖：</p>
+
+<div class="filetag">game/client/prediction.cpp:1750-1754, 1790-1791</div>
+<pre><code>engine-&gt;<span class="type">GetViewAngles</span>( viewangles );
+localPlayer-&gt;<span class="type">SetLocalAngles</span>( viewangles );
+<span class="cmt">// … PerformPrediction 之后 …</span>
+localPlayer-&gt;<span class="type">SetLocalAngles</span>( viewangles );   <span class="cmt">// 再覆盖一次</span></code></pre>
+
+<p>注释是 <code>// Always using current view angles no matter what</code>。配套地把 <code>m_angNetworkAngles</code> 标为不参与误差比对（第三篇细讲）。</p>
+
+<h3>6.3 血量与伤害：只保证语义正确</h3>
+
+<p>伤害计算需要服务端才有的信息（其他玩家真实位置、命中判定、护甲、buff）。客户端预测不出准确血量。</p>
+
+<p>TF2 的处理很聪明 —— 加了一个 flag，只在"跨零"时才算误差：</p>
+
+<div class="filetag">public/datamap.h:236（TF2 分支）</div>
+<pre><code><span class="cmt">// Only throw a prediction error if this changes from &gt; 0 -&gt; &lt;= 0</span>
+FTYPEDESC_ONLY_ERROR_IF_ABOVE_ZERO_TO_ZERO_OR_BELOW_ETC</code></pre>
+
+<p><b>血量数值预测不准无所谓，但"活着 vs 死了"必须一致。</b>这是把"容差"概念从数值域推广到<b>语义域</b> —— 我觉得这个思路很有启发性。</p>
+
+<h3>6.4 武器逻辑：承认失败，局部关闭</h3>
+
+<p>最诚实的一批。<code>cl_predictweapons</code> 可以整体关闭武器预测，而且大量武器计时字段被标记为"不比对"。配套注释：</p>
+
+<div class="filetag">game/client/c_basecombatweapon.cpp:522-532</div>
+<pre><code><span class="cmt">// Although I have tried to fix many of the pred errors in HL2MP.
+// Still many remain, and many things remain unpredictable
+// without a rewrite of the weapon code.</span></code></pre>
+
+<p><b>这段注释比任何设计文档都有教学价值</b> —— 它告诉你哪些东西是真的难。武器逻辑涉及大量状态机、计时器、弹药、换弹中断，每一个都是预测误差的来源。</p>
+
+<h3>6.5 严重滞后：直接放弃</h3>
+
+<div class="filetag">game/client/prediction.cpp:1620, 1691-1695</div>
+<pre><code><span class="kw">if</span> ( i &gt;= MULTIPLAYER_BACKUP ) <span class="kw">break</span>;
+<span class="cmt">// Somehow we looped past the end of the list (severe lag), don't predict at all</span></code></pre>
+
+<p><code>MULTIPLAYER_BACKUP = 90</code>，66 tick 下约 1.36 秒。<b>环形缓冲的容量直接决定了系统能容忍的最大延迟。</b>超了就不预测。</p>
+
+<div class="warn">
+<b>Unity 落地要点：超容量时放弃，不要绕回覆盖</b>
+绕回覆盖会让你比对到<b>错误的历史帧</b>，产生假误差 —— 而且是那种"看起来在正常工作但结果全错"的假误差，比直接不预测危险得多。
+</div>
+
+<h2>七、一个容易被忽略的细节：站在移动平台上</h2>
+
+<p>重放之前有一步处理，不看代码想不到：</p>
+
+<div class="filetag">game/client/prediction.cpp:1583-1591</div>
+<pre><code><span class="cmt">// undo interpolation changes for entities we stand on</span>
+<span class="type">C_BaseEntity</span> *entity = localPlayer-&gt;<span class="type">GetGroundEntity</span>();
+<span class="kw">while</span> ( entity &amp;&amp; entity-&gt;<span class="type">entindex</span>() &gt; <span class="num">0</span>)
+{
+    entity-&gt;<span class="type">MoveToLastReceivedPosition</span>();
+    entity = entity-&gt;<span class="type">GetMoveParent</span>();
+}</code></pre>
+
+<p><b>你脚下的平台正在被插值系统平滑处理（因为它是远程实体）。</b>但预测必须用它的<b>权威位置</b>，否则平台的插值误差会传导成你的预测误差。</p>
+
+<p>这是"三套时间轴机制互相干扰"的第一个具体案例。<b>预测（提前）和插值（延后）在这里正面冲突，Source 的裁决是：预测优先，临时把平台拉回权威位置。</b></p>
+
+<div class="tip">
+<b>Unity 里同样会遇到</b>
+如果玩家站在一个网络同步的移动平台上（电梯、船、传送带），而平台走的是插值路径，你的预测就必须临时使用平台的<b>最新快照位置</b>而非插值位置。<br><br>
+症状：站在电梯上时角色轻微抖动或缓慢下沉。<b>根因和现象距离很远，值得提前知道。</b>
+</div>
+
+<h2>八、调试手段</h2>
+
+<table>
+<tr><th>convar</th><th>作用</th></tr>
+<tr><td><code>cl_predict</code></td><td>总开关。关掉可以直接对比"有无预测"的手感差异</td></tr>
+<tr><td><code>cl_predictweapons</code></td><td>只关武器预测，保留移动预测</td></tr>
+<tr><td><code>cl_showerror</code></td><td>打印预测误差数值 —— <b>最有用的一个</b></td></tr>
+<tr><td><code>cl_pred_optimize</code></td><td>0/1/2 控制优化路径（第三篇细讲）</td></tr>
+<tr><td><code>cl_pdump</code></td><td>屏幕上实时 dump 预测字段的值</td></tr>
+</table>
+
+<p>还有个编译期开关 <code>PREDICTION_ERROR_CHECK_LEVEL</code>（默认 0）。调高时会<b>取消所有浮点容差</b>，逼出全部细微不一致 —— 开发期排查用。</p>
+
+<div class="tip">
+<b>值得照抄的调试设计</b>
+<code>cl_showerror</code> 这个开关的价值在于：<b>预测误差是个不可见的量</b>，不打印出来你根本不知道有没有、有多大。<br><br>
+自己做预测系统时，第一天就该做一个"误差可视化"：打印数值、画出预测位置和权威位置的差异线。<b>否则你只能靠"手感不对"来 debug，那几乎是不可能的。</b>
+</div>
+
+<h2>九、Unity 落地要点</h2>
+
+<h3>9.1 确定性是地基，先验证它</h3>
+
+<p>在写任何预测逻辑之前，先做这个测试：<b>同一个输入序列 + 同一个起始状态，跑两次，结果必须逐位相同。</b></p>
+
+<p>常见的确定性杀手：
+<code>Time.deltaTime</code>（用固定 tick 代替）、
+<code>UnityEngine.Random</code>（用共享种子 PRNG 代替）、
+内置物理引擎（往往要自己写移动）、
+<code>foreach</code> 遍历 <code>Dictionary</code>（顺序不保证）。</p>
+
+<h3>9.2 输入用冗余而非重传</h3>
+
+<p>每个包带最近 N 条命令（Source 的做法），而不是靠可靠传输重发。输入有时效性，迟到的输入等于丢失的输入。</p>
+
+<h3>9.3 共享随机数用"调用点名字"做 key</h3>
+
+<p>不要用"调用顺序"。顺序会因分支变化而错位，名字不会。注意 C# 的 <code>string.GetHashCode()</code> 跨进程不稳定，要自己实现 FNV-1a 之类的固定哈希。</p>
+
+<h3>9.4 划清不预测的边界，并接受它</h3>
+
+<p>Valve 的态度值得学：其他玩家不预测、伤害不预测、做不对的武器逻辑局部关闭。<b>硬撑着全部预测，结果是全都不准。</b></p>
+
+<h3>9.5 第一天就做误差可视化</h3>
+
+<p>见 §8。这不是"以后再优化"的事，是"没有它就无法开发"的事。</p>
+
+<h2>十、读完后自测</h2>
+
+<div class="q"><b>Q1</b> 客户端预测的正确性建立在什么前提上？如果客户端和服务端的移动代码有微小差异，症状是什么？</div>
+<div class="q"><b>Q2</b> <code>gamemovement.cpp</code> 怎么做到被两端共用？<code>CBasePlayer</code> 这个符号在两边分别指向什么？</div>
+<div class="q"><b>Q3</b> 为什么每个包要携带多条历史命令？为什么不靠可靠传输重发单条？</div>
+<div class="q"><b>Q4</b> <code>m_bFirstTimePredicted</code> 解决什么问题？如果没有它，玩家会看到什么现象？</div>
+<div class="q"><b>Q5</b> Source 的抑制事件有三层，第三层（服务端配合）做的是什么？为什么需要它？</div>
+<div class="q"><b>Q6</b> 共享随机数为什么要把"调用点字符串"放进 hash？对比"一个命令一个种子按顺序取"，前者免疫了什么问题？</div>
+<div class="q"><b>Q7</b> 随机数种子为什么必须绑定命令而不能绑定时间或帧号？</div>
+<div class="q"><b>Q8</b> 视角为什么完全不预测？<code>_Update</code> 里为什么要覆盖两次？</div>
+<div class="q"><b>Q9</b> TF2 对血量的处理是"只在跨零时报误差"，这个思路的一般化表述是什么？</div>
+<div class="q"><b>Q10</b> <code>MULTIPLAYER_BACKUP = 90</code> 这个数字决定了什么？超出容量时为什么要放弃预测而不是绕回覆盖？</div>
+<div class="q"><b>Q11</b> 站在移动平台上时，预测前要对平台做什么处理？为什么？这体现了哪两个机制的冲突？</div>
+<div class="q"><b>Q12</b> 如果你在 Unity 里用 <code>Rigidbody</code> 做角色移动并加上预测，会遇到什么根本性问题？</div>
+
+<footer>
+<p><span class="verified">✓ 已核实</span>：<code>game/client/prediction.cpp</code> 主要函数与行号；<code>game/shared/usercmd.h</code> 字段；<code>game/shared/util_shared.cpp:142-201</code> 共享随机数；<code>c_baseplayer.cpp:2324-2334</code> ShouldPredict；<code>c_basecombatweapon.cpp:522-532</code> 注释；<code>datamap.h:236</code>（TF2 分支 flag）；<code>recipientfilter.cpp</code> 的 SuppressHost 用法。</p>
+<p><span class="unverified">⚠ 未核实</span>：<code>PreEntityPacketReceived</code> 等 <code>IPrediction</code> 纯虚接口的<b>引擎侧调用点</b>在闭源 <code>engine.dll</code>；<code>CPrediction::Update</code> 四个参数（<code>startframe</code>/<code>validframe</code>/<code>incoming_acknowledged</code>/<code>outgoing_command</code>）的来源未见赋值代码，语义取自 <code>iprediction.h:40-43</code> 的注释。<code>CUserCmd</code> 的 delta 编码<b>具体压缩格式</b>在引擎侧，"每包携带多条历史命令"是从 <code>WriteUsercmdDeltaToBuffer</code> 的命名与调用推断。<code>MULTIPLAYER_BACKUP = 90</code> 这个数值的<b>选定依据</b>代码中无说明。<code>#define CBasePlayer C_BasePlayer</code> 是对 <code>#ifdef CLIENT_DLL</code> 机制的简化表述，实际宏定义分散在多个头文件。TF2 的 <code>UseServerRandomSeed()</code> 的<b>动机</b>（防止客户端提前知道散射）是我的推断，代码无注释说明。</p>
+<p>上一篇：<a href="Source同步一-属性同步讲解.html" style="color:var(--accent)">（一）属性同步</a>　｜　下一篇：<a href="Source同步三-回滚与误差修正讲解.html" style="color:var(--accent)">（三）回滚与误差修正</a></p>
+</footer>
+
+</div>
+</body>
+</html>
