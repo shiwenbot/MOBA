@@ -55,3 +55,7 @@ _codex_tmp/
 
 #Windows 误生成的保留名文件
 nul
+
+#AI 助手会话临时目录（ZCode / Codex），不应进仓库
+.zcode/
+_codex_tmp/
