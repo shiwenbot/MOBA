@@ -1,8 +1,8 @@
 # WeDoBest Gameplay Sync Demo
 
-当前分支：`feature/pinball-tech-demo`
+当前分支：`feature/gameplay-sync-sandbox`
 
-> 分支名保留历史命名；当前方向已从“弹珠技术演示”收敛为“求职用 Gameplay 状态同步技术演示”。
+> 方向已从“弹珠技术演示”收敛为“求职用 Gameplay 状态同步技术演示”，分支也已由 `feature/pinball-tech-demo` 重命名为当前名称。
 
 本项目当前定位是一个极简俯视角 Gameplay 状态同步沙盒。它不追求完整商业玩法，也不优先实现复杂技能系统，而是用一个小球角色和小房间场景，集中展示弱网条件下的按帧输入、客户端预测、服务端权威校验、不一致诊断与回滚重播能力。
 

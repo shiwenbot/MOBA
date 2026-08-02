@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>feature/pinball-tech-demo 分支进度与 Source SDK 2013 借鉴分析</title>
+<title>feature/gameplay-sync-sandbox 分支进度与 Source SDK 2013 借鉴分析</title>
 <style>
 :root{
   --bg:#0f1419; --panel:#171d24; --panel2:#1d242c; --border:#2a333d;
@@ -82,12 +82,23 @@ li{margin:5px 0;}
 <body>
 <div class="wrap">
 
-<h1>feature/pinball-tech-demo 分支进度与 Source SDK 2013 借鉴分析</h1>
-<div class="sub">生成日期：2026-08-02 &nbsp;|&nbsp; 分析对象：<code>D:\unity\Tencent\TEngine</code>（分支 <code>feature/pinball-tech-demo</code>）与 <code>D:\unity\Tencent\source-sdk-2013</code></div>
+<h1>feature/gameplay-sync-sandbox 分支进度与 Source SDK 2013 借鉴分析</h1>
+<div class="sub">生成日期：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 晚（P1 已提交 <code>55d8c97d</code> 后更新）&nbsp;|&nbsp; 分析对象：<code>D:\unity\Tencent\TEngine</code>（分支 <code>feature/gameplay-sync-sandbox</code>）与 <code>D:\unity\Tencent\source-sdk-2013</code></div>
 
 <div class="card info">
 <strong>一句话结论</strong>
-<p>这个分支的<strong>底层同步内核已经很完整</strong>（v0.5a，43 个 FrameSync 文件，确定性/预测/回滚全链路闭环），但<strong>分支自身的 42 个提交里有 40 个是学习笔记</strong>。真正的 demo 功能刚在今天（工作树未提交状态）开始动工：P1 房间边界与沙盒视图已成形。剩下的缺口不是"功能不够"，而是<strong>四个架构性空白</strong>：断线重连、失同步上报、带宽观测、弱网量化。Source SDK 2013 走的是<strong>完全同一条技术路线</strong>（状态同步 + 客户端预测 + 回滚 + 插值 + 延迟补偿），是本项目最高度对标的参考实现，本报告逐条给出可落地的借鉴点。</p>
+<p>这个分支的<strong>底层同步内核已经很完整</strong>（v0.5a，43 个 FrameSync 文件，确定性/预测/回滚全链路闭环），但<strong>分支自身的 43 个提交里有 40 个是学习笔记</strong>。<strong>P1 已于 2026-08-02 晚提交完成</strong>（<code>55d8c97d</code>），demo 现在有画面了：俯视房间、边界钳制、球体角色、正交镜头、每 30 帧状态日志。剩下的缺口不是"功能不够"，而是<strong>四个架构性空白</strong>：断线重连、失同步上报、带宽观测、弱网量化。Source SDK 2013 走的是<strong>完全同一条技术路线</strong>（状态同步 + 客户端预测 + 回滚 + 插值 + 延迟补偿），是本项目最高度对标的参考实现，本报告逐条给出可落地的借鉴点。</p>
+</div>
+
+<div class="card warn">
+<span class="tag t-warn">本次修订要点</span>
+<ul>
+<li>P1 从「进行中」变为<strong>已完成并提交</strong>，Timeline 已标注完成记录。§3.3 重写。</li>
+<li><strong>优先级 #1（关掉 WarmStarting）仍未做</strong>——本次复核 <code>.cs</code> 源码仍<strong>零命中</strong>。这是唯一被跳过的高优先级项。</li>
+<li>新增发现：P1 的四面墙是<strong>纯视觉 Unity Cube，没有 Box2D body</strong>。这<strong>反向印证</strong>了 §4.5 的判断——pair 顺序隐患仍然潜伏，Box2D 求解器仍然空转。</li>
+<li>新增发现：<code>GameApp</code> 现在<strong>无条件进入沙盒，LoginUI 被完全跳过</strong>。见 §3.5。</li>
+<li>§7 优先级表按 P1 完成后的现状重排。</li>
+</ul>
 </div>
 
 <div class="toc">
@@ -110,9 +121,9 @@ li{margin:5px 0;}
 
 <div class="stat">
 <div><div class="lab">分出点</div><div class="big">fdbbbb20</div><div class="dim">2026-06-17</div></div>
-<div><div class="lab">领先 TEngine_Fantasy</div><div class="big">42</div><div class="dim">个提交</div></div>
-<div><div class="lab">其中学习笔记</div><div class="big">40</div><div class="dim">占 95%</div></div>
-<div><div class="lab">领先 origin/main</div><div class="big">117</div><div class="dim">个提交</div></div>
+<div><div class="lab">领先 TEngine_Fantasy</div><div class="big">43</div><div class="dim">个提交（P1 后 +1）</div></div>
+<div><div class="lab">其中学习笔记</div><div class="big">40</div><div class="dim">占 93%</div></div>
+<div><div class="lab">功能提交</div><div class="big">3</div><div class="dim">清原型 / P0 计划 / P1</div></div>
 </div>
 
 <p>分支从 <code>TEngine_Fantasy</code> 的 <code>fdbbbb20</code>（2026-06-17）分出。注意本地没有 <code>main</code> 分支，<code>git log main..HEAD</code> 会报错，需用 <code>origin/main</code>。</p>
@@ -136,12 +147,17 @@ li{margin:5px 0;}
   <td>07-27 ~ 07-31<br>共 40 个</td><td>—</td>
   <td>Fantasy FTask（3）、Fantasy 网络层含 KCP 全章（13）、Box2D 十二章教材（14）、笔记体系工程化（5）、Box2D 确定性分析（1）、暂存（2）、其他（2）</td>
 </tr>
+<tr>
+  <td><span class="tag t-ok">功能</span></td>
+  <td><code>55d8c97d</code></td><td>08-02 19:34</td>
+  <td><strong>feat: complete P1 battle sandbox demo</strong> —— 20 文件、+1177/-81。详见 <a href="#s33">§3.3</a></td>
+</tr>
 </table>
 
 <div class="card warn">
 <span class="tag t-warn">关键观察</span>
-<p>7-09 定完 P0 后，<strong>7-09 到 7-27 有 18 天空档</strong>，随后 7-27~7-31 五天全部投入学习笔记。这 40 个笔记不是无用功——它们补的正是面试深挖时的第二层问题（KCP 重传/拥塞控制、Box2D 求解器跨帧隐藏状态、Source 预测与插值机制）。<strong>代价是 Timeline 的 P1~P5 在提交历史里一行代码都没有。</strong></p>
-<p>但工作树状态显示 P1 已在今天开工（详见 <a href="#s3">§3.3</a>），因此"P1 未开始"的结论只对<strong>已提交历史</strong>成立。</p>
+<p>7-09 定完 P0 后，<strong>7-09 到 7-27 有 18 天空档</strong>，随后 7-27~7-31 五天全部投入学习笔记。这 40 个笔记不是无用功——它们补的正是面试深挖时的第二层问题（KCP 重传/拥塞控制、Box2D 求解器跨帧隐藏状态、Source 预测与插值机制）。</p>
+<p><strong>8-02 晚 P1 一次性提交完成</strong>，节奏从「只读不写」切回「写代码」。至此分支的功能提交为 3 个，笔记占比从 95% 降到 93%。</p>
 </div>
 
 <h3>1.2 笔记产出物（本分支新增文件）</h3>
@@ -196,7 +212,7 @@ S2C_BattleEvent</code></pre>
 
 <h3>3.1 方向已转，分支名已过时</h3>
 
-<p>分支名仍叫 <code>pinball-tech-demo</code>，但 <code>Plan/弹珠技术演示/弹珠技术演示-阶段总目录.md</code> 已明确<strong>降级为历史方向</strong>，原文写明三条转向理由：</p>
+<p>分支原名 <code>feature/pinball-tech-demo</code>，<code>Plan/弹珠技术演示/弹珠技术演示-阶段总目录.md</code> 已明确把弹珠<strong>降级为历史方向</strong>，原文写明三条转向理由：</p>
 
 <ol>
 <li>面向 Gameplay 岗求职时，单纯弹珠物理容易被理解成<strong>物理小品</strong>，而不是角色行为状态同步能力。</li>
@@ -211,34 +227,98 @@ S2C_BattleEvent</code></pre>
 <table>
 <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
 <tr><td>P0</td><td>方向收敛与文档基线</td><td><span class="tag t-ok">已完成</span>README 改写、弹珠目录降级、Timeline 落定</td></tr>
-<tr><td>P1</td><td>俯视小球移动最小闭环（房间边界、WASD 按帧上行、30Hz 权威、本地预测、权威快照下发）</td><td><span class="tag t-warn">进行中</span>工作树未提交，见 §3.3</td></tr>
+<tr><td>P1</td><td>俯视小球移动最小闭环（房间边界、WASD 按帧上行、30Hz 权威、本地预测、权威快照下发）</td><td><span class="tag t-ok">已完成</span><code>55d8c97d</code>，见 <a href="#s33">§3.3</a></td></tr>
 <tr><td>P2</td><td>Dash / 体力 / Recover 可预测行为</td><td><span class="tag t-bad">未开始</span></td></tr>
 <tr><td>P3</td><td>占点交互权威结算</td><td><span class="tag t-bad">未开始</span></td></tr>
 <tr><td>P4</td><td>弱网与回滚可视化（调试面板、ghost、轨迹）</td><td><span class="tag t-bad">未开始</span></td></tr>
 <tr><td>P5</td><td>求职展示打磨（README、录屏脚本、讲解要点）</td><td><span class="tag t-bad">未开始</span></td></tr>
 </table>
 
-<h3>3.3 P1 当前实际进度（工作树未提交）</h3>
-
-<div class="card ok">
-<span class="tag t-ok">今天开工</span>
-<p>文件修改时间 18:38~18:45。以下改动<strong>尚未提交</strong>：</p>
-</div>
+<h3 id="s33">3.3 P1 已完成内容（<code>55d8c97d</code>，2026-08-02 19:34）</h3>
 
 <table>
-<tr><th>文件</th><th>状态</th><th>内容</th></tr>
-<tr><td><code>GameShared/FrameSync/Battle/GameplayRoomSettings.cs</code></td><td><span class="tag t-ok">新增</span></td><td>P1 共享空间规则，注释明确「客户端和服务端必须使用同一份配置」。房间半宽 12 / 半高 8 / 玩家半径 0.45，全部 <code>Fixed64</code> 定点；派生出 <code>PlayerMinX/MaxX/MinY/MaxY</code></td></tr>
-<tr><td><code>GameLogic/Battle/GameplaySandboxView.cs</code></td><td><span class="tag t-ok">新增</span></td><td>163 行，沙盒表现层</td></tr>
-<tr><td><code>GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs</code></td><td><span class="tag t-warn">改 +48</span></td><td>新增 <code>ClampPlayersToRoom()</code>，在 <code>Step()</code> 后、<code>RebuildOccupancyContacts()</code> 前把玩家钳进房间；<code>PlayerBodyRadius</code> 改为引用 <code>GameplayRoomSettings.PlayerRadius</code> 统一来源</td></tr>
-<tr><td><code>GameLogic/Battle/BattleClientController.cs</code></td><td><span class="tag t-warn">改 +60/-?</span></td><td>接入沙盒</td></tr>
-<tr><td><code>GameLogic/Battle/BattlePredictionSelfTestSuite.cs</code></td><td><span class="tag t-warn">改 +15</span></td><td>补房间边界自测</td></tr>
-<tr><td><code>GameShared/Tests/FixedPoint/FixedMathSharpTests.cs</code></td><td><span class="tag t-warn">改 +15</span></td><td>补定点测试</td></tr>
-<tr><td><code>GameLogic/Battle/BattleSimulation.cs</code></td><td><span class="tag t-warn">改 +1</span></td><td>—</td></tr>
+<tr><th>文件</th><th>改动</th><th>内容</th></tr>
+<tr>
+  <td><code>GameShared/FrameSync/Battle/GameplayRoomSettings.cs</code></td><td><span class="tag t-ok">新增 20 行</span></td>
+  <td>共享空间规则，注释明确「客户端和服务端必须使用同一份配置」。房间半宽 12 / 半高 8 / 玩家半径 0.45，全部 <code>Fixed64</code>；派生 <code>PlayerMinX/MaxX/MinY/MaxY</code>（已内缩一个半径，即<strong>圆心边界</strong>而非球面边界）</td>
+</tr>
+<tr>
+  <td><code>GameLogic/Battle/GameplaySandboxView.cs</code></td><td><span class="tag t-ok">新增 165 行</span></td>
+  <td>表现层：地面 + 四面墙（Unity Cube）、正交俯视镜头（<code>orthographic</code>、<code>Euler(90,0,0)</code>、按 aspect 算 <code>orthographicSize</code> 保证房间全进画面）、方向光。<code>Create()</code> 内挂 <code>BattleClientController</code>，automation 开启时再挂 <code>BattleAutomationController</code></td>
+</tr>
+<tr>
+  <td><code>GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs</code></td><td><span class="tag t-warn">+49</span></td>
+  <td><code>ClampPlayersToRoom()</code> 插在 <code>Step()</code> → <code>ResolvePlayerOccupancy()</code> 之后、<code>RebuildOccupancyContacts()</code> 之前。<strong>不只钳位置，还按方向清速度</strong>（只在"贴边且仍朝边界外"时把该轴速度置 0，避免贴墙时速度持续累积）。<code>PlayerBodyRadius</code> 改为引用 <code>GameplayRoomSettings.PlayerRadius</code> 统一来源</td>
+</tr>
+<tr>
+  <td><code>GameLogic/Battle/BattleClientController.cs</code></td><td><span class="tag t-warn">+60/-?</span></td>
+  <td>Capsule → Sphere（<code>_playerCapsules</code> 改名 <code>_playerSpheres</code>，直径由 <code>PlayerRadius × 2</code> 推出，自己绿色/他人青色）；新增 <code>LogP1FrameStatus()</code></td>
+</tr>
+<tr>
+  <td><code>GameLogic/Battle/BattlePredictionSelfTestSuite.cs</code></td><td><span class="tag t-warn">+15</span></td>
+  <td>新增用例 <code>room-boundary-clamps-player</code>：把 body 放在 <code>PlayerMaxX</code>、给向外输入、Step 一帧，断言位置与速度<strong>按 <code>m_rawValue</code> 逐位相等</strong>（定点精确比较，不是 epsilon）。自测用例总数 18 → 19</td>
+</tr>
+<tr>
+  <td><code>GameLogic/GameApp.cs</code></td><td><span class="tag t-warn">+11/-?</span></td>
+  <td>启动路径改为 <code>GameplaySandboxView.Create()</code>，见 <a href="#s35">§3.5</a></td>
+</tr>
+<tr><td><code>GameShared/Tests/FixedPoint/FixedMathSharpTests.cs</code></td><td><span class="tag t-warn">+15</span></td><td>补定点测试</td></tr>
+<tr><td><code>UIController/CommonUIController.cs</code> / <code>BattleSimulation.cs</code></td><td><span class="tag t-warn">+16 / +1</span></td><td>配合改动</td></tr>
 </table>
 
-<p><span class="tag t-info">设计评价</span>把房间规则放进 <code>GameShared</code> 而非各端各写一份，是<strong>正确选择</strong>——这正是 Source 的 <code>game/shared/</code> 思路（详见 <a href="#s6">§6.8</a>）。边界钳制走定点 <code>Fixed64</code>，与既有 gameplay 层定点化一致。</p>
+<h4>P1 完成标准逐条对照</h4>
+<table>
+<tr><th>Timeline 要求</th><th>落实情况</th></tr>
+<tr><td>单客户端能在房间内移动</td><td><span class="tag t-ok">达成</span>沙盒 + WASD 复用既有输入链路</td></tr>
+<tr><td>小球不能穿出房间边界</td><td><span class="tag t-ok">达成</span><code>ClampPlayersToRoom()</code> + 自测用例</td></tr>
+<tr><td>服务端快照能校正客户端状态</td><td><span class="tag t-ok">复用既有</span>v0.5a 链路未改</td></tr>
+<tr>
+  <td>日志能显示当前帧、权威帧、预测帧和状态 hash</td>
+  <td><span class="tag t-ok">达成</span><code>LogP1FrameStatus()</code> 每 30 帧（1 秒）打印一次：<br><code>frame= authoritativeFrame= predictedFrame= lead= stateHash=0x…</code></td>
+</tr>
+<tr><td>状态 hash 覆盖位置和基础运动状态</td><td><span class="tag t-ok">达成</span>直接调 <code>StateHasher.Hash(snapshot)</code>，与既有确定性哈希同一份实现</td></tr>
+</table>
 
-<h3>3.4 术语风险：这不是帧同步</h3>
+<div class="card ok">
+<span class="tag t-ok">设计评价</span>
+<ul>
+<li>房间规则放进 <code>GameShared</code> 而非各端各写一份，是<strong>正确选择</strong>——正是 Source 的 <code>game/shared/</code> 思路（<a href="#s68">§6.8</a>）。</li>
+<li>边界钳制走定点 <code>Fixed64</code>，与既有 gameplay 层定点化一致；自测用例用 <code>m_rawValue</code> 逐位断言，<strong>符合确定性系统该有的零容差标准</strong>。</li>
+<li>钳位时<strong>按方向清速度</strong>而非无脑清零，说明考虑过"贴墙后沿墙滑动"的手感。</li>
+<li><code>LogP1FrameStatus</code> 降频到每 30 帧，避免 30Hz 逐帧刷屏。</li>
+</ul>
+</div>
+
+<h3 id="s34">3.4 新发现：四面墙是纯视觉，没有 Box2D body</h3>
+
+<div class="card pur">
+<span class="tag t-pur">反向印证 §4.5</span>
+<p>本次核实：<code>FrameSyncPhysicsWorld.cs</code> 全文<strong>只有一处 <code>CreateBody</code></strong>（玩家圆形），无 <code>EdgeShape</code> / <code>PolygonShape</code> / <code>SetAsBox</code> / <code>StaticBody</code>。P1 的四面墙是 <code>GameObject.CreatePrimitive(PrimitiveType.Cube)</code>，属于 <strong>Unity 渲染层，与 Box2D 世界无关</strong>。</p>
+<p>三条推论：</p>
+<ol>
+<li><strong>pair 顺序隐患仍然潜伏</strong>，没有被这次改动激活——§4.5 的"一旦加墙体必触发"<strong>还没发生</strong>，因为加的是视觉墙不是物理墙。</li>
+<li><strong>Box2D 求解器现在更空转了</strong>：玩家间 <code>GroupIndex=-1</code> 不产生 Contact，边界靠手写钳制，挤位靠手写 <code>ResolvePlayerOccupancy</code>。Box2D 实际只剩「圆形 body 速度积分」。§4.5 末尾那个"是否仍需 Box2D 求解器"的问题<strong>比之前更值得问</strong>。</li>
+<li>好处是<strong>确定性风险没有增加</strong>：钳制是纯定点比较 + <code>SetTransform</code>，顺序由 <code>_sortedBodyIdsBuffer</code>（已排序）决定，可控。</li>
+</ol>
+</div>
+
+<h3 id="s35">3.5 新发现：LoginUI 被完全跳过</h3>
+
+<p><code>GameApp.cs</code> 的启动逻辑从「automation 开启 → <code>BattleMainUI</code>，否则 → <code>LoginUI</code>」<strong>简化为无条件 <code>GameplaySandboxView.Create()</code></strong>：</p>
+
+<pre><code>await GameClient.Instance.InitAsync(_hotfixAssembly);
+GameplaySandboxView.Create();          // 不再有 LoginUI / BattleMainUI 分支</code></pre>
+
+<div class="card warn">
+<span class="tag t-warn">取舍评价</span>
+<p>对「一键进 demo」的求职展示目标<strong>是合理简化</strong>——省掉点击登录的步骤，录屏更干净。但要意识到两点：</p>
+<ul>
+<li><strong>登录流程在主路径上变成了死代码</strong>。<code>LoginUI</code> 仍在仓库里，但正常启动不再经过。Timeline 完成记录写「<code>GameApp</code> 与登录成功兜底路径均进入 Gameplay Sandbox」，说明兜底路径也改了。</li>
+<li>P5 要写「新环境能按 README 跑起服务端和客户端」时，<strong>README 需说明这个跳过是故意的</strong>，否则读者会以为登录坏了。</li>
+</ul>
+</div>
+
+<h3 id="s36">3.6 术语风险：这不是帧同步</h3>
 
 <div class="card bad">
 <span class="tag t-bad">首要风险</span>
@@ -317,9 +397,10 @@ S2C_BattleEvent</code></pre>
 </tr>
 </table>
 
-<div class="card warn">
-<span class="tag t-warn">尚未修复</span>
-<p>本次核实（2026-08-02）：<code>GameScripts/</code> 全树搜索 <code>WarmStarting</code> 仍<strong>只命中 Box2DSharp.dll 二进制</strong>，源码零命中——<strong>报告里的落地清单第 1 项还没做</strong>。</p>
+<div class="card bad">
+<span class="tag t-bad">P1 提交后仍未修复</span>
+<p>两次核实（2026-08-02 白天 + P1 提交 <code>55d8c97d</code> 之后）：<code>GameScripts/</code> 全树搜索 <code>WarmStarting</code> 仍<strong>只命中 Box2DSharp.dll 二进制，<code>.cs</code> 源码零命中</strong>——<strong>Box2D 报告落地清单第 1 项（标注"高（立即）"）依然没做</strong>，也是本报告 §7 优先级 #1。</p>
+<p>P1 这次改的正是 <code>FrameSyncPhysicsWorld.cs</code>（+49 行），<strong>顺手加一行的机会已经错过一次</strong>。</p>
 <p>已确认 <code>Box2DSharp.dll</code> 导出 <code>set_WarmStarting</code>，即 <code>World.WarmStarting</code> 可写，加一行即可编译通过：</p>
 <pre><code>_world = new World(in gravity);
 _world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</code></pre>
@@ -333,12 +414,13 @@ _world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</co
 <dt>唯一 body</dt><dd>玩家圆形，<code>Radius = 0.45</code>，Dynamic + Bullet + FixedRotation + 不睡眠</dd>
 <dt>Step 参数</dt><dd><code>Step(dt, VelocityIterations = 12, PositionIterations = 8)</code></dd>
 <dt>玩家间挤位</dt><dd><strong>手写</strong> <code>ResolvePlayerOccupancy</code>：4 次迭代、O(n²) 两两查圆心距、直接 <code>SetTransform</code> 硬掰。<strong>绕开了 Box2D 求解器</strong></dd>
-<dt>墙体 / 障碍 / 关节</dt><dd>无（P1 边界靠新增的 <code>ClampPlayersToRoom()</code> 钳制，同样绕开求解器）</dd>
+<dt>墙体 / 障碍 / 关节</dt><dd><strong>Box2D 中无</strong>。P1 的四面墙是纯视觉 Unity Cube，边界靠手写 <code>ClampPlayersToRoom()</code>，同样绕开求解器（见 <a href="#s34">§3.4</a>）</dd>
 </dl>
 
 <div class="card pur">
-<span class="tag t-pur">值得长期思考</span>
-<p>Box2D 在本项目实际只承担「圆形 body 速度积分」+「接触判定信号」。真正的推挤是手写的，<code>GroupIndex = -1</code> 让求解器<strong>几乎空转</strong>。P1 的边界钳制同样是手写。若未来场景也只是「球 + 墙」，一个手写的圆-墙反射 + occupancy，确定性和性能可能都比引入 Box2D 更可控。<span class="src">这不是现在要做的决定，但值得记住。</span></p>
+<span class="tag t-pur">值得长期思考（P1 后更成立）</span>
+<p>Box2D 在本项目实际只承担「圆形 body 速度积分」+「接触判定信号」。真正的推挤是手写的 <code>ResolvePlayerOccupancy</code>，<code>GroupIndex = -1</code> 让求解器<strong>几乎空转</strong>。<strong>P1 又新增了手写的边界钳制</strong>——现在「手写物理」的比重更大了。</p>
+<p>若未来场景也只是「球 + 墙」，一个手写的圆-墙反射 + occupancy，确定性和性能可能都比引入 Box2D 更可控。<span class="src">这不是现在要做的决定，但 P1 之后它比之前更值得问一次。</span></p>
 </div>
 
 <hr>
@@ -410,7 +492,8 @@ _world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</co
 <li><strong>P4（可视化）</strong>：仍值得做，价值在<strong>讲解效率</strong>——让人一眼看见预测偏差与回滚，无需读日志。</li>
 </ul>
 <p>即：<strong>补 §5.1 的四个架构缺口，收益高于按 Timeline 推进 P2/P3</strong>。</p>
-<p class="src">本报告同意该判断，但补一条：P1 必须先跑通，否则前面所有内核增强都没有画面可演示（见 §7）。</p>
+<p class="src">本报告原补一条：P1 必须先跑通，否则前面所有内核增强都没有画面可演示。</p>
+<p><span class="tag t-ok">已解除</span><code>55d8c97d</code> 完成 P1 后 demo 有画面了。这意味着 §7 的 #4~#8（误差平滑、哈希上报、epsilon 判定、RTT 校验、跳过重放）<strong>现在都能立刻看到效果</strong>，不再受"没画面可演示"限制。<strong>这是 P1 完成后最实际的变化</strong>：内核增强项的性价比整体上升了。</p>
 </div>
 
 <hr>
@@ -668,11 +751,11 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
   <td>补上最易被问倒的数字，顺势讲脏同步收益</td>
   <td>自评优先级 1</td>
 </tr>
-<tr>
-  <td>3</td><td><strong>P1 跑通并提交</strong>（房间边界已成形，补齐权威快照链路 + 日志）</td>
-  <td><span class="tag t-warn">已过半</span></td>
-  <td><strong>让 demo 有画面</strong> —— 这是 #4~#9 所有内核增强的<strong>演示前置条件</strong></td>
-  <td>Timeline P1，工作树进行中</td>
+<tr style="opacity:.55">
+  <td>3</td><td><s><strong>P1 跑通并提交</strong></s></td>
+  <td><span class="tag t-ok">已完成</span></td>
+  <td><s>让 demo 有画面 —— #4~#9 的演示前置条件</s> → <strong>已解除</strong></td>
+  <td><code>55d8c97d</code></td>
 </tr>
 <tr>
   <td>4</td><td><strong>预测误差平滑</strong>（表现层衰减偏移）</td>
@@ -719,9 +802,31 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 </table>
 
 <div class="card info">
-<span class="tag t-info">建议节奏</span>
-<p><strong>#1 + #2 先做掉</strong>（一行代码 + 半小时，几乎零成本，立刻拿到可引用的数字）→ <strong>#3 立刻让 demo 有画面</strong> → 回头做 <strong>#4~#8</strong>（都是半天量级，且都能在画面上看见效果）→ 再考虑 #9 / #10。</p>
-<p><strong>P2（Dash/体力）与 P3（占点）往后放</strong>：项目自评已判定其边际价值低于架构缺口补强，本报告同意。</p>
+<span class="tag t-info">建议节奏（P1 完成后修订）</span>
+<p>#3 已完成，前置条件解除。剩下的推荐顺序：</p>
+<ol>
+<li><strong>#1 WarmStarting</strong>（一行）—— 已经错过一次顺手改的机会，别再拖。</li>
+<li><strong>#2 带宽统计</strong>（半小时）—— 立刻拿到可引用的数字。</li>
+<li><strong>#4 误差平滑</strong>（半天）—— <strong>现在有画面了，这项收益最直观</strong>，且顺带打通 P4 的 ghost。建议紧接着做。</li>
+<li><strong>#5~#8</strong>（各半天）—— 哈希上报、epsilon 判定、RTT 校验、跳过重放。</li>
+<li>再考虑 #9 弱网自动化 / #10 断线重连。</li>
+</ol>
+<p><strong>P2（Dash/体力）与 P3（占点）往后放</strong>：项目自评已判定其边际价值低于架构缺口补强，本报告同意。P1 完成后这个判断不变——有了画面，更该拿它去演示<strong>同步能力</strong>而不是堆 gameplay 功能。</p>
+</div>
+
+<div class="card warn">
+<span class="tag t-warn">P1 之后新增的两个小项</span>
+<table>
+<tr><th>项目</th><th>成本</th><th>理由</th></tr>
+<tr>
+  <td>README 说明「LoginUI 被故意跳过」</td><td>十分钟</td>
+  <td>见 <a href="#s35">§3.5</a>。P5 要求"新环境能按 README 跑起来"，不说明会被当成 bug</td>
+</tr>
+<tr>
+  <td>调试面板承接 <code>LogP1FrameStatus</code> 的字段</td><td>P4 范围内</td>
+  <td>日志已经在打 <code>frame</code>/<code>authoritativeFrame</code>/<code>predictedFrame</code>/<code>lead</code>/<code>stateHash</code>，P4 面板要的 <code>RollbackCount</code>/<code>LastRollbackFrame</code>/<code>LastMismatchField</code> 可以在同一处扩展，不必另起链路</td>
+</tr>
+</table>
 </div>
 
 <hr>
@@ -786,7 +891,11 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <tr><td>协议 11 条消息，无 Hash / 无 Reconnect</td><td>grep <code>OuterMessage.proto</code></td></tr>
 <tr><td><code>WarmStarting</code> 源码零命中（仅 DLL 二进制命中）</td><td>grep <code>UnityProject/Assets/GameScripts/</code> 全树</td></tr>
 <tr><td><code>Box2DSharp.dll</code> 导出 <code>set_WarmStarting</code>（属性可写）</td><td>DLL 符号检查</td></tr>
-<tr><td>P1 工作树改动（<code>GameplayRoomSettings</code> / <code>ClampPlayersToRoom</code> / <code>GameplaySandboxView</code>）</td><td><code>git status</code> + <code>git diff</code> + 读文件 + <code>ls</code> 时间戳（18:38~18:45）</td></tr>
+<tr><td>P1 提交 <code>55d8c97d</code> 全部改动（20 文件 +1177/-81），工作树已 clean</td><td><code>git show --stat</code> + 逐文件 <code>git show</code> diff + 读 <code>GameplaySandboxView.cs</code> / <code>LogP1FrameStatus</code> 全文</td></tr>
+<tr><td>P1 四面墙<strong>无 Box2D body</strong>（<code>FrameSyncPhysicsWorld.cs</code> 仅 1 处 <code>CreateBody</code>，无 Edge/Polygon/SetAsBox/StaticBody）</td><td>grep 物理世界全文</td></tr>
+<tr><td><code>GameApp</code> 无条件进沙盒、LoginUI 分支被删</td><td><code>git show</code> diff 原文</td></tr>
+<tr><td>自测用例 18 → 19（新增 <code>room-boundary-clamps-player</code>，按 <code>m_rawValue</code> 逐位断言）</td><td>读 <code>BattlePredictionSelfTestSuite.cs</code> + 计数</td></tr>
+<tr><td>WarmStarting <strong>P1 后仍零命中</strong>（<code>--include=*.cs</code>）</td><td>P1 提交后二次 grep 复核</td></tr>
 <tr><td>Source 各文件行数与函数位置（<code>prediction.cpp:128/1434/1570/1807</code>、<code>c_baseplayer.cpp:2641/2715</code>、<code>c_baseentity.cpp:5916</code>、<code>player_lagcompensation.cpp:366-436</code>）</td><td><code>wc -l</code> + grep 定位 + 逐段读原文</td></tr>
 <tr><td>Timeline / 弹珠降级 / Box2D 确定性分析全文</td><td>直接读 <code>Plan/</code> 下三份 md</td></tr>
 </table>
@@ -809,11 +918,14 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <h3>9.3 已知文档问题</h3>
 <ul>
 <li><code>Plan/状态帧同步/Box2D确定性验证报告.md</code> 被自评文档引用但<strong>不存在</strong> —— 需补文件或删引用。</li>
-<li>分支名 <code>pinball-tech-demo</code> 与实际目标（Gameplay 状态同步沙盒）<strong>不符</strong>，容易造成方向误解。</li>
+<li><span class="tag t-ok">已修复</span>分支名原为 <code>feature/pinball-tech-demo</code>，与实际目标不符。已于 2026-08-02 晚重命名为 <code>feature/gameplay-sync-sandbox</code>，与 <code>Plan/Gameplay状态同步演示/</code> 目录及 P1 代码里的 <code>GameplaySandbox</code> / <code>GameplayRoom</code> / <code>GameplaySphere</code> 命名对齐。README 与三份 Plan 文档的引用已同步更新。</li>
 </ul>
 
+<h3>9.4 未复核项</h3>
+<p>P1 Timeline 完成记录声称 <code>--mode=test --scenario=all</code> 验收通过（<strong>4/4 checks、5/5 scenarios</strong>）。本次<strong>未复跑</strong>该命令，仅确认自测用例代码已加入 <code>BattlePredictionSelfTestSuite</code>（19 个用例）。注意「5/5 scenarios」与自测的 19 个用例是<strong>两套不同的计数</strong>（scenario 是无头场景，case 是预测自测），两者不矛盾。</p>
+
 <hr>
-<p class="src">报告生成：2026-08-02 &nbsp;|&nbsp; 分析范围：<code>feature/pinball-tech-demo</code> 已提交历史 + 工作树未提交改动 + <code>source-sdk-2013</code> 网络同步相关源码</p>
+<p class="src">报告生成：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 晚（P1 提交 <code>55d8c97d</code> 后）&nbsp;|&nbsp; 分析范围：<code>feature/gameplay-sync-sandbox</code> 已提交历史（含 P1）+ <code>source-sdk-2013</code> 网络同步相关源码</p>
 
 
 </div>
