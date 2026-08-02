@@ -11,7 +11,7 @@ namespace GameLogic
 
         private void OnLoginSuccess()
         {
-            UIModule.Instance.ShowUIAsync<BattleMainUI>();
+            GameplaySandboxView.Create();
         }
     }
 }

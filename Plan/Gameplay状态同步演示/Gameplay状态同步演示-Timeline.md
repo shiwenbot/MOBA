@@ -55,6 +55,7 @@
 
 ### P1：俯视小球移动最小闭环
 
+- **状态**：已完成
 - **目标**：建立最小可玩的俯视角房间和小球移动同步链路。
 - **范围**：
   - 小房间边界。
@@ -75,6 +76,11 @@
   - 单客户端能在房间内移动。
   - 服务端快照能校正客户端状态。
   - 日志能显示当前帧、权威帧、预测帧和状态 hash。
+- **完成记录**：
+  - `GameplaySandboxView` 已替换旧战斗 HUD，创建俯视房间、地面、四面边界、球体和镜头。
+  - `GameplayRoomSettings` 与 `FrameSyncPhysicsWorld` 已在客户端/服务端共享房间范围和圆心边界约束。
+  - `GameApp` 与登录成功兜底路径均进入 Gameplay Sandbox；WASD、预测、权威快照、回滚链路保持复用。
+  - `--mode=test --scenario=all` 验收通过：4/4 checks、5/5 scenarios；边界用例已加入 `PredictSelfTest`。
 
 ### P2：Dash / 体力 / Recover 可预测行为
 

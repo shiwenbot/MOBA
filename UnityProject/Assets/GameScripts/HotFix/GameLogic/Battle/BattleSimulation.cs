@@ -103,6 +103,7 @@ namespace GameLogic
         public long SelfPlayerId => _selfPlayerId;
         public uint LeadFrames => _leadFrames;
         public uint LastAppliedFrame => _lastAppliedFrame;
+        public uint LastPredictedFrame => _lastPredictedFrame;
         public uint LocalFrame => _localFrame;
         public uint InitialAlignedFrame => unchecked(_lastAppliedFrame + _leadFrames);
         public int ConsistencyChecked => _checked;

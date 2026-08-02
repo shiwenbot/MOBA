@@ -13,6 +13,7 @@ namespace GameLogic
             "frame-index-is-global",
             "input-normalization",
             "prediction-moves-self-player",
+            "room-boundary-clamps-player",
             "catchup-target-is-auth-plus-lead",
             "queued-snapshots-apply-in-order",
             "consistency-hit",
@@ -54,6 +55,7 @@ namespace GameLogic
                     "frame-index-is-global" => FrameIndexIsGlobal(),
                     "input-normalization" => InputNormalization(),
                     "prediction-moves-self-player" => PredictionMovesSelfPlayer(),
+                    "room-boundary-clamps-player" => RoomBoundaryClampsPlayer(),
                     "catchup-target-is-auth-plus-lead" => CatchUpTargetIsAuthPlusLead(),
                     "queued-snapshots-apply-in-order" => QueuedSnapshotsApplyInOrder(),
                     "consistency-hit" => ConsistencyHit(),
@@ -115,6 +117,19 @@ namespace GameLogic
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
             simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
             return worldState.TryGetPlayer(1, out PlayerState selfPlayer) && selfPlayer.X > Fixed64.Zero;
+        }
+
+        private static bool RoomBoundaryClampsPlayer()
+        {
+            FrameSyncPhysicsWorld physicsWorld = new FrameSyncPhysicsWorld();
+            Fixed64 fixedDt = DeterminismRules.FixedDeltaTimeFixed64;
+            physicsWorld.EnsureBody(1, GameplayRoomSettings.PlayerMaxX, Fixed64.Zero);
+            physicsWorld.SetBodyMovementInput(1, Fixed64.One, Fixed64.Zero);
+            physicsWorld.Step(fixedDt);
+
+            return physicsWorld.TryGetBodySnapshot(1, out PhysicsBodySnapshot snapshot) &&
+                   snapshot.PositionX.m_rawValue == GameplayRoomSettings.PlayerMaxX.m_rawValue &&
+                   snapshot.LinearVelocityX.m_rawValue == Fixed64.Zero.m_rawValue;
         }
 
         private static bool CatchUpTargetIsAuthPlusLead()

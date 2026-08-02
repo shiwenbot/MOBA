@@ -8,6 +8,7 @@ using GameLogic.FrameSync;
 using GameShared.InputBuffering;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
+using GameShared.FrameSync.Snapshot;
 using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
@@ -24,7 +25,7 @@ namespace GameLogic
         private static bool s_predictionSelfTestExecuted;
 #endif
 
-        private readonly Dictionary<long, GameObject> _playerCapsules = new Dictionary<long, GameObject>();
+        private readonly Dictionary<long, GameObject> _playerSpheres = new Dictionary<long, GameObject>();
         private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
         private readonly Dictionary<long, AuthoritativeBuffBaseline> _authoritativeBuffsByPlayerId = new Dictionary<long, AuthoritativeBuffBaseline>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
@@ -47,6 +48,7 @@ namespace GameLogic
         private float _cachedDx;
         private float _cachedDy;
         private IBattleAutomationInputSource _automationInputSource;
+        private uint _nextStatusLogFrame;
 
         public int Priority => 0;
 
@@ -99,10 +101,11 @@ namespace GameLogic
             _pongMessageCount = 0;
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
+            _nextStatusLogFrame = 0u;
             _inputBuffer.Clear();
             _automationInputSource = null;
 
-            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
+            foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
             {
                 if (pair.Value != null)
                 {
@@ -110,7 +113,7 @@ namespace GameLogic
                 }
             }
 
-            _playerCapsules.Clear();
+            _playerSpheres.Clear();
             _activePlayers.Clear();
             _authoritativeAttributesByPlayerId.Clear();
             _authoritativeBuffsByPlayerId.Clear();
@@ -167,6 +170,7 @@ namespace GameLogic
             TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, (Fixed64)dx, (Fixed64)dy, skillId);
             _inputBuffer.TickDecay();
             SyncRendering();
+            LogP1FrameStatus(frameIndex);
 
             if (tickResult.TargetFrameExclusive > 0 && _tickDriver != null)
             {
@@ -393,12 +397,12 @@ namespace GameLogic
             {
                 _activePlayers.Add(player.PlayerId);
                 bool isSelf = player.PlayerId == _simulation.SelfPlayerId;
-                GameObject capsule = GetOrCreateCapsule(player.PlayerId, isSelf);
-                capsule.transform.position = ToWorldPosition(player.X, player.Y);
-                capsule.SetActive(true);
+                GameObject sphere = GetOrCreateSphere(player.PlayerId, isSelf);
+                sphere.transform.position = ToWorldPosition(player.X, player.Y);
+                sphere.SetActive(true);
             }
 
-            foreach (KeyValuePair<long, GameObject> pair in _playerCapsules)
+            foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
             {
                 if (_activePlayers.Contains(pair.Key))
                 {
@@ -699,30 +703,54 @@ namespace GameLogic
             });
         }
 
-        private GameObject GetOrCreateCapsule(long playerId, bool isSelf)
+        private void LogP1FrameStatus(uint frameIndex)
         {
-            if (_playerCapsules.TryGetValue(playerId, out GameObject exist) && exist != null)
+            if (_simulation == null || frameIndex < _nextStatusLogFrame)
+            {
+                return;
+            }
+
+            BattleWorldState worldState = _tickDriver?.WorldState;
+            if (worldState == null)
+            {
+                return;
+            }
+
+            BattleWorldSnapshot snapshot = worldState.TakeSnapshot().WithFrameIndex(_simulation.LocalFrame);
+            ulong stateHash = StateHasher.Hash(snapshot);
+            Log.Info(
+                $"[Battle][P1] frame={frameIndex} authoritativeFrame={_simulation.LastAppliedFrame} " +
+                $"predictedFrame={_simulation.LastPredictedFrame} lead={_simulation.LeadFrames} stateHash=0x{stateHash:X16}");
+            _nextStatusLogFrame = unchecked(frameIndex + 30u);
+        }
+
+        private GameObject GetOrCreateSphere(long playerId, bool isSelf)
+        {
+            if (_playerSpheres.TryGetValue(playerId, out GameObject exist) && exist != null)
             {
                 return exist;
             }
 
-            GameObject capsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            capsule.name = $"BattleCapsule_{playerId}";
-            capsule.transform.position = Vector3.zero;
+            GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            sphere.name = $"GameplaySphere_{playerId}";
+            sphere.transform.SetParent(transform, false);
+            sphere.transform.position = Vector3.zero;
+            float diameter = (float)(GameplayRoomSettings.PlayerRadius * Fixed64.Two);
+            sphere.transform.localScale = Vector3.one * diameter;
 
-            Renderer renderer = capsule.GetComponent<Renderer>();
+            Renderer renderer = sphere.GetComponent<Renderer>();
             if (renderer != null)
             {
                 renderer.material.color = isSelf ? Color.green : Color.cyan;
             }
 
-            _playerCapsules[playerId] = capsule;
-            return capsule;
+            _playerSpheres[playerId] = sphere;
+            return sphere;
         }
 
         private static Vector3 ToWorldPosition(Fixed64 x, Fixed64 y)
         {
-            return new Vector3((float)x, 0.5f, (float)y);
+            return new Vector3((float)x, (float)GameplayRoomSettings.PlayerRadius, (float)y);
         }
 
         private static BattleAutomationBuffSnapshot[] BuildAutomationBuffSnapshots(IReadOnlyList<BuffState> activeBuffs)

@@ -115,6 +115,21 @@ namespace GameShared.FixedPoint.Tests
             }
         }
 
+        [Test]
+        public void PhysicsWorld_ClampsPlayerToGameplayRoom()
+        {
+            FrameSyncPhysicsWorld world = new FrameSyncPhysicsWorld();
+            Fixed64 dt = DeterminismRules.FixedDeltaTimeFixed64;
+
+            world.EnsureBody(1, GameplayRoomSettings.PlayerMaxX, Fixed64.Zero);
+            world.SetBodyMovementInput(1, Fixed64.One, Fixed64.Zero);
+            world.Step(dt);
+
+            Assert.That(world.TryGetBodySnapshot(1, out PhysicsBodySnapshot snapshot), Is.True);
+            AssertFixedRawEqual(GameplayRoomSettings.PlayerMaxX, snapshot.PositionX);
+            AssertFixedRawEqual(Fixed64.Zero, snapshot.LinearVelocityX);
+        }
+
         private static void AssertFixedRawEqual(Fixed64 expected, Fixed64 actual)
         {
             Assert.That(actual.m_rawValue, Is.EqualTo(expected.m_rawValue));

@@ -13,7 +13,8 @@ namespace GameShared.FrameSync.Battle
 {
     public sealed class FrameSyncPhysicsWorld : IPhysicsMovementWorld
     {
-        private static readonly Fixed64 PlayerBodyRadius = (Fixed64)0.45f;
+        // Keep the shared room geometry authoritative for both prediction and server simulation.
+        private static readonly Fixed64 PlayerBodyRadius = GameplayRoomSettings.PlayerRadius;
         private static readonly Fixed64 MinimumPlayerSeparation = PlayerBodyRadius * Fixed64.Two;
         private static readonly Fixed64 PlayerDensity = Fixed64.One;
         private const short PlayerNoPushGroupIndex = -1;
@@ -165,8 +166,54 @@ namespace GameShared.FrameSync.Battle
 
             _world.Step((float)dt, VelocityIterations, PositionIterations);
             ResolvePlayerOccupancy(requestedVelocities);
+            ClampPlayersToRoom();
             RebuildOccupancyContacts();
             _pendingLinearVelocities.Clear();
+        }
+
+        private void ClampPlayersToRoom()
+        {
+            for (int i = 0; i < _sortedBodyIdsBuffer.Count; i++)
+            {
+                int bodyId = _sortedBodyIdsBuffer[i];
+                Body body = _bodies[bodyId];
+                Vector2 position = body.GetPosition();
+                float clampedX = Clamp(position.X, GameplayRoomSettings.PlayerMinX, GameplayRoomSettings.PlayerMaxX);
+                float clampedY = Clamp(position.Y, GameplayRoomSettings.PlayerMinY, GameplayRoomSettings.PlayerMaxY);
+                bool touchedHorizontalBoundary = clampedX != position.X;
+                bool touchedVerticalBoundary = clampedY != position.Y;
+
+                if (!touchedHorizontalBoundary && !touchedVerticalBoundary)
+                {
+                    continue;
+                }
+
+                Vector2 clampedPosition = new Vector2(clampedX, clampedY);
+                body.SetTransform(in clampedPosition, body.GetAngle());
+                Vector2 velocity = body.LinearVelocity;
+                if (touchedHorizontalBoundary &&
+                    ((clampedX <= (float)GameplayRoomSettings.PlayerMinX && velocity.X < 0.0f) ||
+                     (clampedX >= (float)GameplayRoomSettings.PlayerMaxX && velocity.X > 0.0f)))
+                {
+                    velocity.X = 0.0f;
+                }
+
+                if (touchedVerticalBoundary &&
+                    ((clampedY <= (float)GameplayRoomSettings.PlayerMinY && velocity.Y < 0.0f) ||
+                     (clampedY >= (float)GameplayRoomSettings.PlayerMaxY && velocity.Y > 0.0f)))
+                {
+                    velocity.Y = 0.0f;
+                }
+
+                SetBodyLinearVelocity(body, velocity);
+            }
+        }
+
+        private static float Clamp(float value, Fixed64 minimum, Fixed64 maximum)
+        {
+            float min = (float)minimum;
+            float max = (float)maximum;
+            return value < min ? min : value > max ? max : value;
         }
 
         public bool TryGetBodySnapshot(int bodyId, out PhysicsBodySnapshot snapshot)
