@@ -83,21 +83,21 @@ li{margin:5px 0;}
 <div class="wrap">
 
 <h1>feature/gameplay-sync-sandbox 分支进度与 Source SDK 2013 借鉴分析</h1>
-<div class="sub">生成日期：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 晚（P1 已提交 <code>55d8c97d</code> 后更新）&nbsp;|&nbsp; 分析对象：<code>D:\unity\Tencent\TEngine</code>（分支 <code>feature/gameplay-sync-sandbox</code>）与 <code>D:\unity\Tencent\source-sdk-2013</code></div>
+<div class="sub">生成日期：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 夜（核实工作树未提交改动后二次更新）&nbsp;|&nbsp; 分析对象：<code>D:\unity\Tencent\TEngine</code>（分支 <code>feature/gameplay-sync-sandbox</code>）与 <code>D:\unity\Tencent\source-sdk-2013</code></div>
 
 <div class="card info">
 <strong>一句话结论</strong>
-<p>这个分支的<strong>底层同步内核已经很完整</strong>（v0.5a，43 个 FrameSync 文件，确定性/预测/回滚全链路闭环），但<strong>分支自身的 43 个提交里有 40 个是学习笔记</strong>。<strong>P1 已于 2026-08-02 晚提交完成</strong>（<code>55d8c97d</code>），demo 现在有画面了：俯视房间、边界钳制、球体角色、正交镜头、每 30 帧状态日志。剩下的缺口不是"功能不够"，而是<strong>四个架构性空白</strong>：断线重连、失同步上报、带宽观测、弱网量化。Source SDK 2013 走的是<strong>完全同一条技术路线</strong>（状态同步 + 客户端预测 + 回滚 + 插值 + 延迟补偿），是本项目最高度对标的参考实现，本报告逐条给出可落地的借鉴点。</p>
+<p>这个分支的<strong>底层同步内核已经很完整</strong>（v0.5a，43 个 FrameSync 文件，确定性/预测/回滚全链路闭环），但<strong>分支自身的 43 个提交里有 40 个是学习笔记</strong>。<strong>P1 已于 2026-08-02 晚提交完成</strong>（<code>55d8c97d</code>），demo 现在有画面了：俯视房间、边界钳制、球体角色、正交镜头、每 30 帧状态日志。剩下的缺口不是"功能不够"，而是<strong>架构性空白</strong>：断线重连、失同步上报、弱网量化。<span class="tag t-ok" style="margin:0;">本次更新</span>原列优先级 #1（WarmStarting）和 #2（带宽统计）<strong>均已在工作树里动手，只是尚未 <code>git commit</code></strong>——详见下方"本次修订要点"。Source SDK 2013 走的是<strong>完全同一条技术路线</strong>（状态同步 + 客户端预测 + 回滚 + 插值 + 延迟补偿），是本项目最高度对标的参考实现，本报告逐条给出可落地的借鉴点。</p>
 </div>
 
 <div class="card warn">
-<span class="tag t-warn">本次修订要点</span>
+<span class="tag t-warn">本次修订要点（二次更新，2026-08-02 夜）</span>
 <ul>
-<li>P1 从「进行中」变为<strong>已完成并提交</strong>，Timeline 已标注完成记录。§3.3 重写。</li>
-<li><strong>优先级 #1（关掉 WarmStarting）仍未做</strong>——本次复核 <code>.cs</code> 源码仍<strong>零命中</strong>。这是唯一被跳过的高优先级项。</li>
-<li>新增发现：P1 的四面墙是<strong>纯视觉 Unity Cube，没有 Box2D body</strong>。这<strong>反向印证</strong>了 §4.5 的判断——pair 顺序隐患仍然潜伏，Box2D 求解器仍然空转。</li>
-<li>新增发现：<code>GameApp</code> 现在<strong>无条件进入沙盒，LoginUI 被完全跳过</strong>。见 §3.5。</li>
-<li>§7 优先级表按 P1 完成后的现状重排。</li>
+<li><strong>重大更正：优先级 #1（关掉 WarmStarting）不再是"未做"</strong>——核实工作树发现 <code>FrameSyncPhysicsWorld.cs:47</code> 已写入 <code>_world.WarmStarting = false</code>（含 4 行确定性注释），<code>git diff</code> 可见，<strong>仅未 <code>git commit</code></strong>。早先"零命中"的描述针对的是 P1 提交 <code>55d8c97d</code> 那一刻的快照，现已过时。</li>
+<li><strong>重大更正：优先级 #2（带宽统计）也已在动手，且完成度更高</strong>——不仅是新增 <code>BattleBandwidthStats.cs</code> / <code>BattleBandwidthConfig.cs</code> 两个文件，<code>BattleComponent.BroadcastSnapshot</code> 已真接入测量链路：每 tick 用 ProtoBuf 序列化器实测字节数、按属性/Buff/位置分类、还做"不做脏同步会是多少字节"的对照测量，环境变量 <code>BATTLE_BANDWIDTH_STATS=1</code> 打开。<strong>全部为未提交的工作树改动</strong>。</li>
+<li>因此 §4.5、§5.1、§7 的"未做/零代码"表述已逐条更新为"工作树已补/已接入，未提交"。</li>
+<li>P1 仍维持「已完成并提交」（<code>55d8c97d</code>），Timeline 不变。</li>
+<li>新增发现（上次修订遗留）：P1 的四面墙是<strong>纯视觉 Unity Cube，没有 Box2D body</strong>（§3.4）；<code>GameApp</code> 现在<strong>无条件进入沙盒，LoginUI 被完全跳过</strong>（§3.5）。</li>
 </ul>
 </div>
 
@@ -392,19 +392,21 @@ GameplaySandboxView.Create();          // 不再有 LoginUI / BattleMainUI 分�
 </tr>
 <tr>
   <td>WarmStarting 跨帧累积冲量无法快照（<code>Contact.Manifold</code> 是 internal，0.6 无公开 API）</td>
-  <td><span class="tag t-bad">真实存在</span></td>
-  <td>全树 grep <code>WarmStarting</code> <strong>零命中</strong>，依赖 DLL 默认 = 开启。<strong>修复只需一行</strong></td>
+  <td><span class="tag t-ok">已补（未提交）</span></td>
+  <td><code>FrameSyncPhysicsWorld.cs:47</code> 已写 <code>_world.WarmStarting = false</code> + 4 行确定性注释，<code>git diff</code> 可见，<strong>仅未 <code>git commit</code></strong>。注：P1 提交 <code>55d8c97d</code> 那一刻仍为零命中，本行所述"已补"指 P1 之后的工作树改动</td>
 </tr>
 </table>
 
-<div class="card bad">
-<span class="tag t-bad">P1 提交后仍未修复</span>
-<p>两次核实（2026-08-02 白天 + P1 提交 <code>55d8c97d</code> 之后）：<code>GameScripts/</code> 全树搜索 <code>WarmStarting</code> 仍<strong>只命中 Box2DSharp.dll 二进制，<code>.cs</code> 源码零命中</strong>——<strong>Box2D 报告落地清单第 1 项（标注"高（立即）"）依然没做</strong>，也是本报告 §7 优先级 #1。</p>
-<p>P1 这次改的正是 <code>FrameSyncPhysicsWorld.cs</code>（+49 行），<strong>顺手加一行的机会已经错过一次</strong>。</p>
-<p>已确认 <code>Box2DSharp.dll</code> 导出 <code>set_WarmStarting</code>，即 <code>World.WarmStarting</code> 可写，加一行即可编译通过：</p>
+<div class="card ok">
+<span class="tag t-ok">已补（工作树，未提交）</span>
+<p><strong>2026-08-02 夜核实更新</strong>：早先"零命中"的描述针对 P1 提交 <code>55d8c97d</code> 那一刻的快照——P1 改的正是 <code>FrameSyncPhysicsWorld.cs</code>（+49 行），那次确实<strong>错过了一次顺手加一行的机会</strong>。但之后该行已被补上：<code>FrameSyncPhysicsWorld.cs:47</code> 现为</p>
 <pre><code>_world = new World(in gravity);
-_world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</code></pre>
-<p><strong>代价为零</strong>：本项目零重力 + 俯视角 + 圆形 body + 无堆叠，<code>VelocityIterations = 12</code> 足够单帧收敛。</p>
+// 确定性优先：warm starting 会用上一帧的累积冲量做本帧求解初值，而该冲量存在
+// Contact.Manifold 内部字段里，快照存不了、回滚也恢复不了，会导致回滚后第一帧
+// 的解与原始轨迹不一致。本项目零重力 + 圆形 body + 无堆叠，关掉它没有代价。
+_world.WarmStarting = false;</code></pre>
+<p><code>git diff HEAD</code> 显示该文件 <strong>+4 行</strong>（一行赋值 + 三行注释），<strong>仅未 <code>git commit</code></strong>。Box2D 报告落地清单第 1 项（标注"高（立即）"）至此<strong>已落地</strong>，剩余动作只是提交。</p>
+<p><strong>代价确认为零</strong>：本项目零重力 + 俯视角 + 圆形 body + 无堆叠，<code>VelocityIterations = 12</code> 足够单帧收敛（<code>Box2DSharp.dll</code> 已确认导出 <code>set_WarmStarting</code>，属性可写）。</p>
 </div>
 
 <h4>物理层现状（已核实）</h4>
@@ -426,7 +428,11 @@ _world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</co
 <hr>
 <h2 id="s5">5. 尚未解决的问题</h2>
 
-<h3>5.1 四个架构性空白（最高优先级）</h3>
+<h3>5.1 架构性空白（最高优先级）</h3>
+<div class="card info" style="margin-top:8px;">
+<span class="tag t-info">状态更新（2026-08-02 夜）</span>
+<p>原列四项里，<strong>「带宽观测」已在工作树落地（接入广播链路，未提交）</strong>，不再算空白。剩余<strong>三个完全空白项</strong>：断线重连、失同步上报、弱网量化。下表保留带宽行并标注进行中状态，便于追溯。</p>
+</div>
 
 <table>
 <tr><th>缺口</th><th>现状</th><th>为什么是架构问题</th></tr>
@@ -441,9 +447,9 @@ _world.WarmStarting = false;   // 确定性优先：消除跨帧隐藏状态</co
   <td>后果：<strong>服务端无从得知任何客户端已失同步</strong>。线上失同步 = 静默发散。补它要动协议</td>
 </tr>
 <tr>
-  <td><strong>带宽观测</strong><br><span class="tag t-bad">零代码</span></td>
-  <td>无任何带宽统计。广播为 per-session 单发，每 tick 30Hz 无降频，复杂度 O(玩家数²)（<code>BattleComponent.cs:120-203</code>）</td>
-  <td>"带宽多少 / 怎么优化"答不上。更可惜的是<strong>已经做了脏同步却拿不出收益数字</strong></td>
+  <td><strong>带宽观测</strong><br><span class="tag t-warn">工作树已接入，未提交</span></td>
+  <td><strong>不再是"零代码"</strong>。新增 <code>BattleBandwidthStats.cs</code> / <code>BattleBandwidthConfig.cs</code>（未追踪），且已真接入 <code>BattleComponent.BroadcastSnapshot</code> 广播链路：每 tick 用 ProtoBuf 序列化器实测消息字节数、按属性/Buff/位置/全量分类统计、还做"不做脏同步会是多少字节"的对照测量（<code>MeasureFullSyncBytes</code>），环境变量 <code>BATTLE_BANDWIDTH_STATS=1</code> 打开，默认按 300 帧（30Hz 下 10 秒）输出一次报告。广播本身仍是 per-session 单发、O(玩家数²)。<strong>全部为未提交工作树改动</strong>，<code>git diff</code> 可见</td>
+  <td>"带宽多少 / 脏同步省了多少"<strong>即将能答出数字</strong>——只差提交 + 跑一次取样。原"拿不出收益数字"的痛点进入解除流程</td>
 </tr>
 <tr>
   <td><strong>弱网量化</strong><br><span class="tag t-bad">无自动化</span></td>
@@ -739,17 +745,17 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 
 <table>
 <tr><th>#</th><th>项目</th><th>成本</th><th>收益</th><th>来源</th></tr>
-<tr>
-  <td>1</td><td><strong>关掉 WarmStarting</strong>（<code>_world.WarmStarting = false</code>）</td>
+<tr style="opacity:.55">
+  <td>1</td><td><s><strong>关掉 WarmStarting</strong>（<code>_world.WarmStarting = false</code>）</s></td>
   <td><span class="tag t-ok">一行</span></td>
-  <td>消除一整类跨帧隐藏状态。本项目代价为零（零重力 + 圆形 + 无堆叠）。已确认 DLL 可写</td>
-  <td>Box2D 报告落地清单第 1 项，<strong>至今未做</strong></td>
+  <td><s>消除一整类跨帧隐藏状态</s> → <strong>工作树已补（<code>FrameSyncPhysicsWorld.cs:47</code>），仅未提交</strong>。剩余动作 = 一次 <code>git commit</code></td>
+  <td>Box2D 报告落地清单第 1 项，<strong>已落地（未提交）</strong></td>
 </tr>
-<tr>
+<tr style="opacity:.7">
   <td>2</td><td><strong>带宽统计</strong>（每 tick 字节数 + 分类占比）</td>
-  <td><span class="tag t-ok">半小时</span></td>
-  <td>补上最易被问倒的数字，顺势讲脏同步收益</td>
-  <td>自评优先级 1</td>
+  <td><span class="tag t-warn">进行中</span></td>
+  <td><strong>工作树已接入广播链路</strong>：<code>BattleBandwidthStats</code>/<code>Config</code> + <code>BattleComponent</code> 真实测序列化字节、分类统计、全量对照。剩余动作 = 提交 + 跑一次取样拿数字</td>
+  <td>自评优先级 1，<strong>进行中（未提交）</strong></td>
 </tr>
 <tr style="opacity:.55">
   <td>3</td><td><s><strong>P1 跑通并提交</strong></s></td>
@@ -802,11 +808,9 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 </table>
 
 <div class="card info">
-<span class="tag t-info">建议节奏（P1 完成后修订）</span>
-<p>#3 已完成，前置条件解除。剩下的推荐顺序：</p>
+<span class="tag t-info">建议节奏（2026-08-02 夜二次修订）</span>
+<p>#1 #2 #3 都已动手或完成：#1 WarmStarting 工作树已补（仅未提交）、#2 带宽统计工作树已接入广播链路（仅未提交）、#3 P1 已提交。<strong>眼下的第一件事是把 #1 #2 的工作树改动提交，让 git 状态干净</strong>，并跑一次带宽取样拿到可引用的数字。之后的推荐顺序：</p>
 <ol>
-<li><strong>#1 WarmStarting</strong>（一行）—— 已经错过一次顺手改的机会，别再拖。</li>
-<li><strong>#2 带宽统计</strong>（半小时）—— 立刻拿到可引用的数字。</li>
 <li><strong>#4 误差平滑</strong>（半天）—— <strong>现在有画面了，这项收益最直观</strong>，且顺带打通 P4 的 ghost。建议紧接着做。</li>
 <li><strong>#5~#8</strong>（各半天）—— 哈希上报、epsilon 判定、RTT 校验、跳过重放。</li>
 <li>再考虑 #9 弱网自动化 / #10 断线重连。</li>
@@ -889,13 +893,14 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <tr><td>40/42 为笔记提交</td><td><code>git log --format</code> 逐条阅读</td></tr>
 <tr><td>文件数：FrameSync 43 / GameShared 82 / GameLogic Battle 20 / Server Battle 14</td><td><code>git ls-files</code>（<code>find</code> 输出曾被截断，已改用 <code>git ls-files</code> 复核）</td></tr>
 <tr><td>协议 11 条消息，无 Hash / 无 Reconnect</td><td>grep <code>OuterMessage.proto</code></td></tr>
-<tr><td><code>WarmStarting</code> 源码零命中（仅 DLL 二进制命中）</td><td>grep <code>UnityProject/Assets/GameScripts/</code> 全树</td></tr>
+<tr><td><code>WarmStarting</code>：<strong>P1 提交 <code>55d8c97d</code> 那一刻源码零命中（仅 DLL 二进制）；P1 之后工作树已补 <code>_world.WarmStarting = false</code>（<code>FrameSyncPhysicsWorld.cs:47</code>，+4 行含注释），未提交</strong></td><td>grep 全树 + <code>git diff HEAD -- FrameSyncPhysicsWorld.cs</code>（显示 +4 行）</td></tr>
 <tr><td><code>Box2DSharp.dll</code> 导出 <code>set_WarmStarting</code>（属性可写）</td><td>DLL 符号检查</td></tr>
-<tr><td>P1 提交 <code>55d8c97d</code> 全部改动（20 文件 +1177/-81），工作树已 clean</td><td><code>git show --stat</code> + 逐文件 <code>git show</code> diff + 读 <code>GameplaySandboxView.cs</code> / <code>LogP1FrameStatus</code> 全文</td></tr>
+<tr><td>P1 提交 <code>55d8c97d</code> 全部改动（20 文件 +1177/-81）；<strong>注：P1 提交时工作树曾 clean，但之后新增了 WarmStarting + 带宽统计两组未提交改动</strong>（见下两条）</td><td><code>git show --stat</code> + 逐文件 <code>git show</code> diff + 读 <code>GameplaySandboxView.cs</code> / <code>LogP1FrameStatus</code> 全文</td></tr>
 <tr><td>P1 四面墙<strong>无 Box2D body</strong>（<code>FrameSyncPhysicsWorld.cs</code> 仅 1 处 <code>CreateBody</code>，无 Edge/Polygon/SetAsBox/StaticBody）</td><td>grep 物理世界全文</td></tr>
 <tr><td><code>GameApp</code> 无条件进沙盒、LoginUI 分支被删</td><td><code>git show</code> diff 原文</td></tr>
 <tr><td>自测用例 18 → 19（新增 <code>room-boundary-clamps-player</code>，按 <code>m_rawValue</code> 逐位断言）</td><td>读 <code>BattlePredictionSelfTestSuite.cs</code> + 计数</td></tr>
-<tr><td>WarmStarting <strong>P1 后仍零命中</strong>（<code>--include=*.cs</code>）</td><td>P1 提交后二次 grep 复核</td></tr>
+<tr><td><strong>带宽统计已接入广播链路（未提交）</strong>：<code>BattleBandwidthStats.cs</code>/<code>BattleBandwidthConfig.cs</code> 未追踪；<code>BattleComponent.cs</code> diff 含 <code>_bandwidthStats</code> 字段、<code>MeasureSerializedBytes</code>、<code>MeasureFullSyncBytes</code>、<code>RecordSend/RecordSnapshotTick/TryConsumeReportDue</code> 调用点，默认关闭由 <code>BATTLE_BANDWIDTH_STATS=1</code> 打开</td><td><code>git diff HEAD -- BattleComponent.cs</code> + <code>cat BattleBandwidthConfig.cs</code></td></tr>
+<tr><td><strong>工作树当前未提交改动汇总</strong>：<code>M BattleComponent.cs</code> / <code>M FrameSyncPhysicsWorld.cs</code> / <code>?? BattleBandwidthConfig.cs</code> / <code>?? BattleBandwidthStats.cs</code>（另有 <code>D SwitchTabItem.prefab</code> 与本主题无关）</td><td><code>git status --short</code></td></tr>
 <tr><td>Source 各文件行数与函数位置（<code>prediction.cpp:128/1434/1570/1807</code>、<code>c_baseplayer.cpp:2641/2715</code>、<code>c_baseentity.cpp:5916</code>、<code>player_lagcompensation.cpp:366-436</code>）</td><td><code>wc -l</code> + grep 定位 + 逐段读原文</td></tr>
 <tr><td>Timeline / 弹珠降级 / Box2D 确定性分析全文</td><td>直接读 <code>Plan/</code> 下三份 md</td></tr>
 </table>
@@ -919,13 +924,14 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <ul>
 <li><code>Plan/状态帧同步/Box2D确定性验证报告.md</code> 被自评文档引用但<strong>不存在</strong> —— 需补文件或删引用。</li>
 <li><span class="tag t-ok">已修复</span>分支名原为 <code>feature/pinball-tech-demo</code>，与实际目标不符。已于 2026-08-02 晚重命名为 <code>feature/gameplay-sync-sandbox</code>，与 <code>Plan/Gameplay状态同步演示/</code> 目录及 P1 代码里的 <code>GameplaySandbox</code> / <code>GameplayRoom</code> / <code>GameplaySphere</code> 命名对齐。README 与三份 Plan 文档的引用已同步更新。</li>
+<li><span class="tag t-ok">已修复</span><strong>本报告早先版本的过时描述已二次修订</strong>（2026-08-02 夜）：原称 WarmStarting「至今未做 / 零命中」、带宽观测「零代码」，均针对 P1 提交 <code>55d8c97d</code> 那一刻的快照。核实工作树发现两项<strong>均已动手</strong>（WarmStarting 一行已写入 <code>FrameSyncPhysicsWorld.cs:47</code>；带宽统计已接入 <code>BattleComponent.BroadcastSnapshot</code> 广播链路），仅未提交。相关章节（顶部结论、§4.5、§5.1、§7、§9.1）已逐条更新。</li>
 </ul>
 
 <h3>9.4 未复核项</h3>
 <p>P1 Timeline 完成记录声称 <code>--mode=test --scenario=all</code> 验收通过（<strong>4/4 checks、5/5 scenarios</strong>）。本次<strong>未复跑</strong>该命令，仅确认自测用例代码已加入 <code>BattlePredictionSelfTestSuite</code>（19 个用例）。注意「5/5 scenarios」与自测的 19 个用例是<strong>两套不同的计数</strong>（scenario 是无头场景，case 是预测自测），两者不矛盾。</p>
 
 <hr>
-<p class="src">报告生成：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 晚（P1 提交 <code>55d8c97d</code> 后）&nbsp;|&nbsp; 分析范围：<code>feature/gameplay-sync-sandbox</code> 已提交历史（含 P1）+ <code>source-sdk-2013</code> 网络同步相关源码</p>
+<p class="src">报告生成：2026-08-02 &nbsp;|&nbsp; 修订：2026-08-02 晚（P1 提交 <code>55d8c97d</code> 后）；<strong>二次修订：2026-08-02 夜</strong>（核实工作树未提交改动后，纠正 WarmStarting / 带宽统计的过时描述）&nbsp;|&nbsp; 分析范围：<code>feature/gameplay-sync-sandbox</code> 已提交历史（含 P1）+ <strong>当前工作树未提交改动</strong> + <code>source-sdk-2013</code> 网络同步相关源码</p>
 
 
 </div>
