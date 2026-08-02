@@ -840,4 +840,63 @@ namespace Fantasy
         [ProtoMember(1)]
         public ulong SendTimestampMs { get; set; }
     }
+    [Serializable]
+    [ProtoContract]
+    public partial class S2C_BandwidthStats : AMessage, IMessage
+    {
+        public static S2C_BandwidthStats Create(bool autoReturn = true)
+        {
+            var s2C_BandwidthStats = MessageObjectPool<S2C_BandwidthStats>.Rent();
+            s2C_BandwidthStats.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                s2C_BandwidthStats.SetIsPool(false);
+            }
+            
+            return s2C_BandwidthStats;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            FrameIndex = default;
+            MeasureFullSyncBaseline = default;
+            HasSamples = default;
+            ActualPayloadBytes = default;
+            FullSyncPayloadBytes = default;
+            DirtySyncSavedRatio = default;
+            DirtySyncSavedBytes = default;
+            MessageObjectPool<S2C_BandwidthStats>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.S2C_BandwidthStats; } 
+        [ProtoMember(1)]
+        public uint FrameIndex { get; set; }
+        [ProtoMember(2)]
+        public bool MeasureFullSyncBaseline { get; set; }
+        [ProtoMember(3)]
+        public bool HasSamples { get; set; }
+        [ProtoMember(4)]
+        public long ActualPayloadBytes { get; set; }
+        [ProtoMember(5)]
+        public long FullSyncPayloadBytes { get; set; }
+        [ProtoMember(6)]
+        public double DirtySyncSavedRatio { get; set; }
+        [ProtoMember(7)]
+        public long DirtySyncSavedBytes { get; set; }
+    }
 }

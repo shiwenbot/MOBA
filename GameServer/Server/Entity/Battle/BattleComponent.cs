@@ -4,6 +4,7 @@ using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
 using Fantasy.Network;
+using Fantasy.Serialize;
 
 namespace Fantasy;
 
@@ -17,6 +18,19 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     private readonly Dictionary<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> _buffBaselinesByObserverTarget = new();
     private readonly List<long> _playerIdBuffer = new();
     private readonly List<(long ObserverSessionId, long TargetPlayerId)> _staleBuffBaselineKeys = new();
+
+    private readonly BattleBandwidthConfig _bandwidthConfig = BattleBandwidthConfig.Current;
+    private readonly BattleBandwidthStats _bandwidthStats = new(BattleBandwidthConfig.Current.ReportIntervalFrames);
+    private readonly MemoryStreamBuffer _bandwidthMeasureBuffer = new();
+
+    /// <summary>带宽统计累积器。报告窗口数据从这里读取（含对照基线）。</summary>
+    public BattleBandwidthStats BandwidthStats => _bandwidthStats;
+
+    /// <summary>带宽统计总开关是否开启。</summary>
+    public bool BandwidthStatsEnabled => _bandwidthConfig.Enabled;
+
+    /// <summary>对照测量是否开启（未开启则算不出「省了多少」）。</summary>
+    public bool BandwidthMeasureFullSyncBaseline => _bandwidthConfig.MeasureFullSyncBaseline;
 
     private long _nextPlayerId = 1;
     private bool _automationPlayerThresholdObserved;
@@ -125,6 +139,11 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         Dictionary<int, PhysicsBodySnapshot> physicsByBodyId = BuildPhysicsBodyLookup(snapshot.PhysicsSnapshot);
+        bool measureBandwidth = _bandwidthConfig.Enabled;
+        if (measureBandwidth)
+        {
+            _bandwidthStats.RecordSnapshotTick();
+        }
 
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
         {
@@ -138,6 +157,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             {
                 FrameIndex = snapshot.FrameIndex
             };
+            int dirtyAttributeEntries = 0;
+            int buffFullSyncEntries = 0;
 
             for (int i = 0; i < snapshot.Players.Length; i++)
             {
@@ -150,6 +171,19 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 PlayerAttributeDirtyFlags dirtyMask = buffPayload.IsFullSync || !hasPreviousAttributes
                     ? PlayerAttributeDirtyFlags.All
                     : PlayerAttributeSync.ComputeDirtyMask(true, previousAttributes, currentAttributes);
+
+                if (measureBandwidth)
+                {
+                    if (dirtyMask != PlayerAttributeDirtyFlags.None)
+                    {
+                        dirtyAttributeEntries++;
+                    }
+
+                    if (buffPayload.IsFullSync)
+                    {
+                        buffFullSyncEntries++;
+                    }
+                }
 
                 frameSnapshot.Players.Add(new PlayerSnapshot
                 {
@@ -192,7 +226,44 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 }
             }
 
+            if (measureBandwidth)
+            {
+                _bandwidthStats.RecordSend(
+                    MeasureSerializedBytes(frameSnapshot),
+                    frameSnapshot.Players.Count,
+                    frameSnapshot.Contacts.Count,
+                    dirtyAttributeEntries,
+                    buffFullSyncEntries);
+
+                if (_bandwidthConfig.MeasureFullSyncBaseline)
+                {
+                    _bandwidthStats.RecordFullSyncCounterfactual(MeasureFullSyncBytes(frameSnapshot));
+                }
+            }
+
             session.Send(frameSnapshot);
+        }
+
+        if (_bandwidthStats.TryConsumeReportDue(snapshot.FrameIndex))
+        {
+            // 到点：先把当前窗口的统计推送给每个客户端，再打日志、再清窗口。
+            // 推送不依赖总开关——开关关着时也推一条带标记的消息，客户端据此显示「统计未开启」。
+            S2C_BandwidthStats statsMessage = BuildBandwidthStatsMessage(snapshot.FrameIndex);
+            foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
+            {
+                Session session = pair.Value.Session;
+                if (session != null && !session.IsDisposed)
+                {
+                    session.Send(statsMessage);
+                }
+            }
+
+            if (measureBandwidth)
+            {
+                Log.Info(_bandwidthStats.BuildReport(snapshot.FrameIndex, _sessionsByPlayerId.Count));
+            }
+
+            _bandwidthStats.ResetWindow();
         }
 
         for (int i = 0; i < snapshot.Players.Length; i++)
@@ -200,6 +271,110 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             PlayerStateSnapshot player = snapshot.Players[i];
             _lastBroadcastAttributesByPlayerId[player.PlayerId] = player.Attributes;
         }
+    }
+
+    /// <summary>
+    /// 用真实序列化器量一遍消息体字节数。复用同一个 buffer，避免每帧分配。
+    /// </summary>
+    private int MeasureSerializedBytes(S2C_FrameSnapshot frameSnapshot)
+    {
+        _bandwidthMeasureBuffer.SetLength(0);
+        _bandwidthMeasureBuffer.Position = 0;
+        SerializerManager.ProtoBufHelper.Serialize(frameSnapshot, _bandwidthMeasureBuffer);
+        return (int)_bandwidthMeasureBuffer.Length;
+    }
+
+    /// <summary>
+    /// 对照测量：把属性掩码强制为全量、Buff 强制为全量后再量一次，用来算脏同步省了多少。
+    /// 只改用于测量的临时对象，不影响真正发出去的那条消息。
+    /// </summary>
+    private int MeasureFullSyncBytes(S2C_FrameSnapshot frameSnapshot)
+    {
+        S2C_FrameSnapshot fullSync = new S2C_FrameSnapshot
+        {
+            FrameIndex = frameSnapshot.FrameIndex
+        };
+
+        for (int i = 0; i < frameSnapshot.Players.Count; i++)
+        {
+            PlayerSnapshot source = frameSnapshot.Players[i];
+            long playerId = source.PlayerId;
+            bool hasAttributes = _lastBroadcastAttributesByPlayerId.TryGetValue(playerId, out PlayerAttributeSnapshot attributes);
+
+            fullSync.Players.Add(new PlayerSnapshot
+            {
+                PlayerId = source.PlayerId,
+                X = source.X,
+                Y = source.Y,
+                LatestAcceptedInputFrame = source.LatestAcceptedInputFrame,
+                Angle = source.Angle,
+                LinearVelocityX = source.LinearVelocityX,
+                LinearVelocityY = source.LinearVelocityY,
+                AngularVelocity = source.AngularVelocity,
+                IsAwake = source.IsAwake,
+                IsEnabled = source.IsEnabled,
+                AttributeDirtyMask = (uint)PlayerAttributeDirtyFlags.All,
+                Health = hasAttributes ? attributes.Health : source.Health,
+                MaxHealth = hasAttributes ? attributes.MaxHealth : source.MaxHealth,
+                Mana = hasAttributes ? attributes.Mana : source.Mana,
+                MaxMana = hasAttributes ? attributes.MaxMana : source.MaxMana,
+                Attack = hasAttributes ? attributes.Attack : source.Attack,
+                ActiveBuffs = source.ActiveBuffs,
+                NextRuntimeBuffId = source.NextRuntimeBuffId,
+                Numeric = source.Numeric,
+                BuffDirtyMask = uint.MaxValue,
+                BuffSnapshotFrameIndex = source.BuffSnapshotFrameIndex,
+                IsBuffFullSync = true
+            });
+        }
+
+        for (int i = 0; i < frameSnapshot.Contacts.Count; i++)
+        {
+            fullSync.Contacts.Add(frameSnapshot.Contacts[i]);
+        }
+
+        return MeasureSerializedBytes(fullSync);
+    }
+
+    /// <summary>
+    /// 把当前窗口的带宽统计打包成下推消息。节省量算法与 <see cref="BattleBandwidthStats.BuildReport"/> 末尾一致：
+    /// saved = fullSyncPayload - actualPayload；ratio = saved / fullSyncPayload * 100。
+    /// 总开关关闭时只填标记位，actual/fullSync 都为 0。
+    /// </summary>
+    private S2C_BandwidthStats BuildBandwidthStatsMessage(uint frameIndex)
+    {
+        S2C_BandwidthStats message = new S2C_BandwidthStats();
+        message.FrameIndex = frameIndex;
+        message.HasSamples = _bandwidthStats.HasSamples;
+        message.MeasureFullSyncBaseline = _bandwidthConfig.MeasureFullSyncBaseline;
+
+        if (!message.HasSamples || !_bandwidthConfig.Enabled)
+        {
+            message.ActualPayloadBytes = 0;
+            message.FullSyncPayloadBytes = 0;
+            message.DirtySyncSavedRatio = 0.0;
+            message.DirtySyncSavedBytes = 0;
+            return message;
+        }
+
+        long actual = _bandwidthStats.TotalPayloadBytes;
+        long fullSync = _bandwidthStats.TotalFullSyncPayloadBytes;
+        message.ActualPayloadBytes = actual;
+        message.FullSyncPayloadBytes = fullSync;
+
+        if (_bandwidthConfig.MeasureFullSyncBaseline && _bandwidthStats.HasFullSyncBaseline && fullSync > 0)
+        {
+            long saved = fullSync - actual;
+            message.DirtySyncSavedBytes = saved;
+            message.DirtySyncSavedRatio = (double)saved / fullSync * 100.0;
+        }
+        else
+        {
+            message.DirtySyncSavedBytes = 0;
+            message.DirtySyncSavedRatio = 0.0;
+        }
+
+        return message;
     }
 
     private static Dictionary<int, PhysicsBodySnapshot> BuildPhysicsBodyLookup(PhysicsWorldSnapshot physicsSnapshot)

@@ -151,5 +151,17 @@ message S2C_Pong // IMessage
 	uint64 SendTimestampMs = 1;
 }
 
+// 服务端周期性带宽节省量上报（单向消息）
+message S2C_BandwidthStats // IMessage
+{
+	uint32 FrameIndex = 1;               // 报告窗口结束帧
+	bool   MeasureFullSyncBaseline = 2;  // 对照测量是否开启（没开就看不到节省量）
+	bool   HasSamples = 3;               // 本窗口是否有发送样本
+	int64  ActualPayloadBytes = 4;       // 实际脏同步发的 payload 累计
+	int64  FullSyncPayloadBytes = 5;     // 假设全量同步的 payload 累计
+	double DirtySyncSavedRatio = 6;      // 节省百分比 %
+	int64  DirtySyncSavedBytes = 7;      // 节省的绝对字节数
+}
+
 
 

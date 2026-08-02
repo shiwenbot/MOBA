@@ -112,6 +112,24 @@ namespace Fantasy
 			S2C_Pong_message.SendTimestampMs = sendTimestampMs;
 			session.Send(S2C_Pong_message);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_BandwidthStats(this Session session, S2C_BandwidthStats S2C_BandwidthStats_message)
+		{
+			session.Send(S2C_BandwidthStats_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_BandwidthStats(this Session session, uint frameIndex, bool measureFullSyncBaseline, bool hasSamples, long actualPayloadBytes, long fullSyncPayloadBytes, double dirtySyncSavedRatio, long dirtySyncSavedBytes)
+		{
+			using var S2C_BandwidthStats_message = Fantasy.S2C_BandwidthStats.Create();
+			S2C_BandwidthStats_message.FrameIndex = frameIndex;
+			S2C_BandwidthStats_message.MeasureFullSyncBaseline = measureFullSyncBaseline;
+			S2C_BandwidthStats_message.HasSamples = hasSamples;
+			S2C_BandwidthStats_message.ActualPayloadBytes = actualPayloadBytes;
+			S2C_BandwidthStats_message.FullSyncPayloadBytes = fullSyncPayloadBytes;
+			S2C_BandwidthStats_message.DirtySyncSavedRatio = dirtySyncSavedRatio;
+			S2C_BandwidthStats_message.DirtySyncSavedBytes = dirtySyncSavedBytes;
+			session.Send(S2C_BandwidthStats_message);
+		}
 
    }
 }
