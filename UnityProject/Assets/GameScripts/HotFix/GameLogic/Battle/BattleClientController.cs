@@ -38,8 +38,10 @@ namespace GameLogic
         private BattleSimulation _simulation;
         private Action<IMessage> _snapshotHandler;
         private Action<IMessage> _pongHandler;
+        private Action<IMessage> _bandwidthStatsHandler;
         private bool _snapshotRegistered;
         private bool _pongRegistered;
+        private bool _bandwidthStatsRegistered;
         private bool _isInitialized;
         private bool _joinSucceeded;
         private string _joinFailureReason = string.Empty;
@@ -51,6 +53,15 @@ namespace GameLogic
         private uint _nextStatusLogFrame;
 
         public int Priority => 0;
+
+        /// <summary>
+        /// 最近一次收到的服务端带宽统计快照（值拷贝，避免消息对象被回收后失效）。
+        /// <see cref="HasBandwidthStats"/> 为 false 时本结构无意义。
+        /// </summary>
+        public BandwidthStatsSnapshot LatestBandwidthStats { get; private set; }
+
+        /// <summary>是否已收到过至少一次带宽统计上报。</summary>
+        public bool HasBandwidthStats { get; private set; }
 
         private enum BufferedInputKind
         {
@@ -89,10 +100,17 @@ namespace GameLogic
                 GameClient.Instance.UnRegisterMsgHandler(OuterOpcode.S2C_Pong, _pongHandler);
             }
 
+            if (_bandwidthStatsRegistered && _bandwidthStatsHandler != null)
+            {
+                GameClient.Instance.UnRegisterMsgHandler(OuterOpcode.S2C_BandwidthStats, _bandwidthStatsHandler);
+            }
+
             _snapshotRegistered = false;
             _pongRegistered = false;
+            _bandwidthStatsRegistered = false;
             _snapshotHandler = null;
             _pongHandler = null;
+            _bandwidthStatsHandler = null;
             _simulation = null;
             _isInitialized = false;
             _joinSucceeded = false;
@@ -104,6 +122,8 @@ namespace GameLogic
             _nextStatusLogFrame = 0u;
             _inputBuffer.Clear();
             _automationInputSource = null;
+            LatestBandwidthStats = default;
+            HasBandwidthStats = false;
 
             foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
             {
@@ -348,10 +368,13 @@ namespace GameLogic
 
             _snapshotHandler = OnSnapshotMessage;
             _pongHandler = OnPongMessage;
+            _bandwidthStatsHandler = OnBandwidthStatsMessage;
             GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_FrameSnapshot, _snapshotHandler);
             GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_Pong, _pongHandler);
+            GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_BandwidthStats, _bandwidthStatsHandler);
             _snapshotRegistered = true;
             _pongRegistered = true;
+            _bandwidthStatsRegistered = true;
         }
 
         private void OnSnapshotMessage(IMessage message)
@@ -382,6 +405,28 @@ namespace GameLogic
             }
 
             _simulation?.ProcessPong(rttMs);
+        }
+
+        private void OnBandwidthStatsMessage(IMessage message)
+        {
+            if (message is not S2C_BandwidthStats stats)
+            {
+                return;
+            }
+
+            // 消息回调返回后会被对象池回收，必须在这里把字段值拷出来。
+            LatestBandwidthStats = new BandwidthStatsSnapshot
+            {
+                FrameIndex = stats.FrameIndex,
+                MeasureFullSyncBaseline = stats.MeasureFullSyncBaseline,
+                HasSamples = stats.HasSamples,
+                ActualPayloadBytes = stats.ActualPayloadBytes,
+                FullSyncPayloadBytes = stats.FullSyncPayloadBytes,
+                DirtySyncSavedRatio = stats.DirtySyncSavedRatio,
+                DirtySyncSavedBytes = stats.DirtySyncSavedBytes
+            };
+            HasBandwidthStats = true;
+            GameEvent.Get<IBattleUI>().OnBandwidthStatsUpdated();
         }
 
         private void SyncRendering()
@@ -812,6 +857,21 @@ namespace GameLogic
             public IReadOnlyList<BuffState> ActiveBuffs { get; }
             public long NextRuntimeBuffId { get; }
             public uint FrameIndex { get; }
+        }
+
+        /// <summary>
+        /// 服务端带宽统计上报的客户端侧快照（值拷贝自 <see cref="S2C_BandwidthStats"/>，
+        /// 因消息对象在回调返回后会被对象池回收，必须拷出来缓存）。
+        /// </summary>
+        public struct BandwidthStatsSnapshot
+        {
+            public uint FrameIndex { get; set; }
+            public bool MeasureFullSyncBaseline { get; set; }
+            public bool HasSamples { get; set; }
+            public long ActualPayloadBytes { get; set; }
+            public long FullSyncPayloadBytes { get; set; }
+            public double DirtySyncSavedRatio { get; set; }
+            public long DirtySyncSavedBytes { get; set; }
         }
     }
 }

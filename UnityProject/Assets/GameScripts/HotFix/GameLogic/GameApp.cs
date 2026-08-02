@@ -43,6 +43,8 @@ public partial class GameApp
             GameplaySandboxView.Create();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             SkillGraphStepBSmokeTest.Run();
+            // 带宽节省量调试面板（仅开发期）。服务端需开 BATTLE_BANDWIDTH_STATS=1 才有数据。
+            GameModule.UI.ShowUIAsync<BandwidthStatsUI>();
 #endif
         }
     }
