@@ -41,6 +41,10 @@ namespace GameShared.FrameSync.Battle
         {
             Vector2 gravity = Vector2.Zero;
             _world = new World(in gravity);
+            // 确定性优先：warm starting 会用上一帧的累积冲量做本帧求解初值，而该冲量存在
+            // Contact.Manifold 内部字段里，快照存不了、回滚也恢复不了，会导致回滚后第一帧
+            // 的解与原始轨迹不一致。本项目零重力 + 圆形 body + 无堆叠，关掉它没有代价。
+            _world.WarmStarting = false;
             _contactListener = new ContactListener(_physicsContacts);
             _world.SetContactListener(_contactListener);
         }
