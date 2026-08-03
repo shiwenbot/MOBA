@@ -172,8 +172,8 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
   </div>
   <div class="qcard half">
     <div class="q">③ 接入了 Box2D？</div>
-    <div class="a">⚠️ 接了，但只用了一半</div>
-    <div class="d">Box2DSharp 真在用：玩家是圆形 body（半径 0.45），<code>World.Step()</code> 真在跑。但<strong>墙体没有 Box2D body</strong>（靠手写定点 clamp 挡住），<strong>玩家互撞也不走 Box2D</strong>（靠手写 4 次迭代推位分离）。Box2D 实际只负责"圆形 body 的速度积分"。</div>
+    <div class="a">⚠️ 接了，但只用了一行</div>
+    <div class="d">Box2DSharp 真在用，但<strong>求解器完全空转</strong>：所有 fixture 设 <code>GroupIndex = -1</code>（同为负则互不碰撞）且全场只有玩家 → <strong>任何 pair 都不产生 Contact</strong> → <code>ContactListener</code> 永不触发。墙体无 body（手写定点 clamp）、玩家互撞不走 Box2D（手写 4 次迭代推位）。<code>World.Step()</code> 实际等价于 <code>pos += vel * dt</code>。<strong>2026-08-03 核实更正</strong>：原写"用了一半"低估，实际只用了一行。</div>
   </div>
   <div class="qcard half">
     <div class="q">④ 定点数？</div>
@@ -187,9 +187,10 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
   </div>
 </div>
 
-<div class="card warn">
-<span class="tag t-warn">报告与现实的一个差异</span>
-<p>那份《分支进度分析》报告说「<code>WarmStarting = false</code> 还没加，漏了两次」——<strong>这已经过时了</strong>。核实工作树：这一行（+4 行注释）<strong>已经在工作区里</strong>，只是还没 <code>git commit</code>（属于未提交改动）。报告说的是"P1 提交那一刻"的状态，是对的；但当下工作树已经补上。</p>
+<div class="card ok">
+<span class="tag t-ok">2026-08-03 更新：均已提交</span>
+<p>本文与《分支进度分析》报告都曾把 WarmStarting 和带宽统计描述为"工作树已改但未提交"——<strong>现已全部提交</strong>：<code>0bb9a468</code>（关闭 WarmStarting）、<code>4c1104cb</code>（带宽统计服务端）、<code>70e9aad7</code>（带宽调试面板）。工作树当前干净。</p>
+<p class="dim" style="font-size:12.8px;margin-bottom:0;">另需注意：<code>WarmStarting = false</code> 这行的推理是对的，但因为全场无 Contact（见上方问题 ③），它<strong>目前并未实际生效</strong>——属于为将来打开 native 碰撞时预留的正确设置。</p>
 </div>
 
 <hr>
@@ -363,13 +364,14 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
 </ul>
 </div>
 
-<div class="card warn">
-<span class="tag t-warn">⏳ 工作树里在改但还没提交的</span>
+<div class="card ok">
+<span class="tag t-ok">✅ P1 之后已提交的三项（原列为"工作树未提交"）</span>
 <ul>
-<li><strong><code>WarmStarting = false</code>（4 行 + 注释）</strong>——<code>FrameSyncPhysicsWorld.cs:47</code>，已写入工作树，<code>git diff</code> 可见，<strong>未 commit</strong>。消除一类跨帧隐藏状态的确定性隐患。</li>
-<li><strong>带宽统计</strong>——新增 <code>BattleBandwidthStats.cs</code> / <code>BattleBandwidthConfig.cs</code>（未追踪），<code>BattleComponent.cs</code> 有配合改动（已修改未提交）。统计快照广播的应用层字节 + 分类占比。</li>
+<li><strong><code>0bb9a468</code> 关闭 WarmStarting</strong>——<code>FrameSyncPhysicsWorld.cs:47</code>，+4 行。推理正确，但因全场无 Contact 而<strong>暂未实际生效</strong>。</li>
+<li><strong><code>4c1104cb</code> 带宽统计服务端</strong>——新增 <code>BattleBandwidthStats.cs</code> / <code>BattleBandwidthConfig.cs</code>，接入 <code>BattleComponent.BroadcastSnapshot</code>；新增 <code>S2C_BandwidthStats</code> 协议消息。实测序列化字节 + 分类占比 + 全量对照。</li>
+<li><strong><code>70e9aad7</code> 带宽调试面板</strong>——新增 <code>BandwidthStatsUI</code>，订阅 <code>S2C_BandwidthStats</code> 实时展示脏同步收益。</li>
 </ul>
-<p class="src">即：分析报告 §7 的优先级 #1（WarmStarting）和 #2（带宽统计）<strong>都已经在动手了</strong>，只是还没形成提交。报告的描述落后于实际进度。</p>
+<p class="src">即：分析报告 §7 的优先级 #1（WarmStarting）和 #2（带宽统计）<strong>均已落地并提交</strong>。「带宽多少 / 脏同步省了多少」现在能答出数字。</p>
 </div>
 
 <div class="card bad">
@@ -381,7 +383,7 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
 <tr><td><strong>弱网量化</strong></td><td>无头测试是同进程零延迟函数调用，无丢包/抖动模拟</td><td>"弱网表现如何"答不出数据</td></tr>
 <tr><td><strong>预测误差平滑</strong></td><td>回滚时位置硬跳变，无任何表现层平滑</td><td>画面会"跳"，观感差</td></tr>
 <tr><td><strong>远端玩家插值</strong></td><td>无插值层</td><td>多客户端下远端小球会以 30Hz 阶跃移动</td></tr>
-<tr><td><strong>Dash / 体力 / 占点</strong></td><td>grep 零命中，P1 一个字没写</td><td>这些是 P2/P3 计划，未开始</td></tr>
+<tr><td><strong>Dash / 体力 / 击退</strong></td><td>grep 零命中，P1 一个字没写</td><td>P2 范围，未开始。<strong>占点已于 2026-08-03 决策取消</strong>（见《物理层与玩法形态-讨论记录-20260803.md》）</td></tr>
 </table>
 </div>
 
@@ -412,7 +414,8 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
 </div>
 
 <hr>
-<p class="src">本概览基于源码逐行核实，所有事实带 file:line 证据。生成 2026-08-02。与同目录《分支进度与SourceSDK借鉴分析》互补：那份讲"还差什么 + 怎么借鉴 Source"，本份讲"P1 到底是什么样"。<br>注：分析报告中「WarmStarting 未做」的描述现已过时——工作树已补，仅未提交。</p>
+<p class="src">本概览基于源码逐行核实，所有事实带 file:line 证据。生成 2026-08-02，<strong>修订 2026-08-03</strong>。与同目录《分支进度与SourceSDK借鉴分析》互补：那份讲"还差什么 + 怎么借鉴 Source"，本份讲"P1 到底是什么样"。</p>
+<p class="src"><strong>2026-08-03 修订三处</strong>：① Box2D 由"用了一半"更正为"只用了一行"——<code>GroupIndex = -1</code> 使 Contact 恒为空、求解器空转；② WarmStarting / 带宽统计由"工作树未提交"更新为已提交（<code>0bb9a468</code> / <code>4c1104cb</code> / <code>70e9aad7</code>）；③ 占点已决策取消。后续方向见 <code>Plan/Gameplay状态同步演示/物理层与玩法形态-讨论记录-20260803.md</code>：拿掉 Box2D 改手写定点物理，玩法定为移动 + Dash + 击退。</p>
 
 </div>
 </body>
