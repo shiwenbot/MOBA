@@ -12,6 +12,7 @@ namespace GameLogic.FrameSync
     {
         private const int MaxCatchUpTicksPerFrame = 8;
         private const int SnapshotBufferCapacity = 24;
+        private const float AheadTimeScale = 0.5f;
 
         [SerializeField]
         private bool autoStart = true;
@@ -25,6 +26,7 @@ namespace GameLogic.FrameSync
         private SnapshotManager _snapshotManager;
         private UnityFrameSyncLogger _logger;
         private uint _targetFrame;
+        private bool _hasTargetFrame;
 
         public TickDispatcher Dispatcher => _dispatcher;
         public FrameTimerService TimerService => _timerService;
@@ -65,6 +67,7 @@ namespace GameLogic.FrameSync
         public void SetTargetFrame(uint targetFrame)
         {
             _targetFrame = targetFrame;
+            _hasTargetFrame = true;
         }
 
         public void AlignToFrame(uint frameIndex, bool resetAccumulator = true)
@@ -72,6 +75,7 @@ namespace GameLogic.FrameSync
             EnsureInitialized();
             _dispatcher.SetCurrentFrame(frameIndex, resetAccumulator);
             _targetFrame = frameIndex;
+            _hasTargetFrame = true;
         }
 
         private void Update()
@@ -81,10 +85,26 @@ namespace GameLogic.FrameSync
                 return;
             }
 
-            _dispatcher.Update(Time.deltaTime);
+            if (!_hasTargetFrame)
+            {
+                _dispatcher.Update(Time.deltaTime);
+                return;
+            }
 
             uint currentFrame = _dispatcher.CurrentFrame;
             int frameGap = unchecked((int)(_targetFrame - currentFrame));
+            if (frameGap < 0)
+            {
+                // Slow the logical clock while ahead. Keeping the accumulator makes
+                // this independent of render FPS and still lets snapshots get applied.
+                _dispatcher.Update(Time.deltaTime * AheadTimeScale);
+                return;
+            }
+
+            _dispatcher.Update(Time.deltaTime);
+
+            currentFrame = _dispatcher.CurrentFrame;
+            frameGap = unchecked((int)(_targetFrame - currentFrame));
             if (frameGap <= 0)
             {
                 return;

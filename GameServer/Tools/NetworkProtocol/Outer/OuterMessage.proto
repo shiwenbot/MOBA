@@ -62,8 +62,8 @@ message C2B_PlayerInput // IMessage
 {
 	uint32 FrameIndex = 1;
 	uint32 InputSeq = 2;
-	float Dx = 3;
-	float Dy = 4;
+	int64 DxRaw = 3;
+	int64 DyRaw = 4;
 	int32 SkillId = 5;
 }
 

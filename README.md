@@ -73,16 +73,24 @@
 
 ## 基线测试
 
-三个 csproj 是单目标 `net9.0`，**必须用 Rider 那套 dotnet**（系统 dotnet 无 net9.0 SDK，会报 `NETSDK1045`）。跑之前先停掉正在运行的服务端，否则锁 dll 报 `MSB3027`。
+三个 csproj 是单目标 `net9.0`，**必须用一个带 net9.0 SDK 的 dotnet**。不同机器上 net9.0 SDK 装的位置不一样，按下面的规则选：
+
+| 候选 | 怎么判定用哪个 |
+|------|---------------|
+| `dotnet`（PATH 里的） | 先 `dotnet --list-sdks`，输出里含 `9.` 开头就直接用 |
+| `C:/Users/shiwe/.dotnet/dotnet.exe` | 家里那台装在用户目录下，SDK 9.0.316 |
+| `C:\Program Files\dotnet\dotnet.exe` | 公司那台装在系统目录下 |
+
+选错会报 `NETSDK1045: 当前 .NET SDK 不支持面向 .NET 9.0`——看到这个就换另一个候选。跑之前先停掉正在运行的服务端，否则锁 dll 报 `MSB3027`。
 
 ```bash
-"C:/Users/shiwe/.dotnet/dotnet.exe" run --project "GameServer/Server/Main/Main.csproj" -- --mode=test --scenario=all
+dotnet run --project "GameServer/Server/Main/Main.csproj" -- --mode=test --scenario=all
 ```
 
 只验证编译（不受服务端进程锁影响）：
 
 ```bash
-"C:/Users/shiwe/.dotnet/dotnet.exe" build "GameServer/Server/Entity/Entity.csproj" -v q --nologo
+dotnet build "GameServer/Server/Entity/Entity.csproj" -v q --nologo
 ```
 
 ## 致谢

@@ -288,7 +288,7 @@ for (int i = 0; i < catchUpCount; i++) { _dispatcher.TickOnce(); }
 | ghost 球退出战斗后残留 | `DisposeController()` 加显式 `Destroy`，现有代码只清 `_playerSpheres` 字典 |
 | 平滑衰减跑在 30Hz 上，等于没平滑 | transform 写入必须搬到 `Update()`（渲染帧率），`Tick()` 只更新逻辑目标缓存。见 Step 3 |
 | 大误差平滑观感更差 | 阈值内平滑、阈值外硬跳 |
-| 用系统 dotnet 编译报 `NETSDK1045` | csproj 是单目标 net9.0，只有 Rider 那套 `C:/Users/shiwe/.dotnet/dotnet.exe`（SDK 9.0.316）能编。命令写全路径 |
+| 用系统 dotnet 编译报 `NETSDK1045` | csproj 是单目标 net9.0，需要一个带 net9.0 SDK 的 dotnet。家里是 `C:\Users\shiwe\.dotnet\dotnet.exe`（SDK 9.0.316），公司是 `C:\Program Files\dotnet\dotnet.exe`。`dotnet --list-sdks` 看哪个有 9.x，PATH 不对就换全路径 |
 | 服务端运行中导致 `MSB3027` 锁文件 | 跑 `Main.csproj` 前先停服务端；只验证编译用 `build Entity.csproj` |
 | `AllCaseNames` 漏加导致用例静默不跑 | 注册两处都要做，且 `--scenario=all` 报 PASS 不代表新用例跑了 |
 | 追帧时一渲染帧多次 Tick | 同帧多次对账共享同一「上一帧绘制位置」基准，这是正确行为，别在 `Tick()` 里刷缓存 |

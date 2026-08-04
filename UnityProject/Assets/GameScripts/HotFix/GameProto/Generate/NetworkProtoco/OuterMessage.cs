@@ -373,8 +373,8 @@ namespace Fantasy
             if (!IsPool()) return; 
             FrameIndex = default;
             InputSeq = default;
-            Dx = default;
-            Dy = default;
+            DxRaw = default;
+            DyRaw = default;
             SkillId = default;
             MessageObjectPool<C2B_PlayerInput>.Return(this);
         }
@@ -384,9 +384,9 @@ namespace Fantasy
         [ProtoMember(2)]
         public uint InputSeq { get; set; }
         [ProtoMember(3)]
-        public float Dx { get; set; }
+        public long DxRaw { get; set; }
         [ProtoMember(4)]
-        public float Dy { get; set; }
+        public long DyRaw { get; set; }
         [ProtoMember(5)]
         public int SkillId { get; set; }
     }

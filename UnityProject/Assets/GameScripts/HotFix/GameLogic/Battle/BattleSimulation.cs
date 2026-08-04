@@ -83,21 +83,6 @@ namespace GameLogic
 
         public BattleSimulation(
             BattleWorldState worldState,
-            Action<uint, uint, float, float> onSendInput,
-            Action<ulong> onSendPing,
-            GameShared.FrameSync.Core.IFrameSyncLogger? logger = null)
-            : this(
-                worldState,
-                AdaptInputSender(onSendInput),
-                onSendPing,
-                null,
-                logger,
-                null)
-        {
-        }
-
-        public BattleSimulation(
-            BattleWorldState worldState,
             BattleInputSender onSendInput,
             Action<ulong> onSendPing,
             GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
@@ -224,7 +209,6 @@ namespace GameLogic
                 DeterminismRules.AssertFixedDt(fixedDt);
 
                 _localFrame = frameIndex;
-                NormalizeInput(ref dx, ref dy);
 
                 SaveInputHistory(frameIndex, dx, dy, skillId);
                 LogInputEdgeIfNeeded(frameIndex, dx, dy);
@@ -235,10 +219,13 @@ namespace GameLogic
                     frameIndex,
                     fixedDt,
                     out int catchUpFrames,
-                    out uint targetFrameExclusive,
+                    out _,
                     out bool consistencyMismatch);
                 AdvancePredictionTo(frameIndex, fixedDt);
-                SendHashReportIfNeeded(frameIndex);
+                SendHashReportIfNeeded();
+
+                uint targetFrame = unchecked(_lastAppliedFrame + _leadFrames);
+                uint targetFrameExclusive = unchecked(targetFrame + 1u);
 
                 return new TickResult(
                     snapshotApplied,
@@ -560,7 +547,7 @@ namespace GameLogic
             _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
-        private void SendHashReportIfNeeded(uint frameIndex)
+        private void SendHashReportIfNeeded()
         {
             if (_onSendHashReport == null)
             {
@@ -573,9 +560,13 @@ namespace GameLogic
                 return;
             }
 
+            if (!_authoritativeSnapshots.TryGet(_lastAppliedFrame, out BattleWorldSnapshot snapshot))
+            {
+                return;
+            }
+
             _hashReportCount = 0;
-            BattleWorldSnapshot snapshot = _worldState.TakeSnapshot().WithFrameIndex(frameIndex);
-            _onSendHashReport(frameIndex, StateHasher.Hash(snapshot));
+            _onSendHashReport(_lastAppliedFrame, StateHasher.Hash(snapshot));
             HashReportsSent++;
         }
 
@@ -875,29 +866,6 @@ namespace GameLogic
             return _worldState.TryGetPlayer(targetId, out PlayerState targetState)
                 ? BuffSystem.GetBuffStackCount(targetState, buffId)
                 : 0;
-        }
-
-        private static BattleInputSender AdaptInputSender(Action<uint, uint, float, float> legacySender)
-        {
-            if (legacySender == null)
-            {
-                throw new ArgumentNullException(nameof(legacySender));
-            }
-
-            return (frameIndex, inputSeq, dx, dy, skillId) => legacySender(frameIndex, inputSeq, (float)dx, (float)dy);
-        }
-
-        private static void NormalizeInput(ref Fixed64 dx, ref Fixed64 dy)
-        {
-            Fixed64 sqrMagnitude = (dx * dx) + (dy * dy);
-            if (sqrMagnitude <= Fixed64.One)
-            {
-                return;
-            }
-
-            Fixed64 inverseMagnitude = Fixed64.One / FixedMath.Sqrt(sqrMagnitude);
-            dx *= inverseMagnitude;
-            dy *= inverseMagnitude;
         }
 
         private static bool AreInputsEqual(Fixed64 leftDx, Fixed64 leftDy, Fixed64 rightDx, Fixed64 rightDy)

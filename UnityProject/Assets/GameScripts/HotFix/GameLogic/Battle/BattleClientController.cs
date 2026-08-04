@@ -852,8 +852,8 @@ namespace GameLogic
             {
                 FrameIndex = frameIndex,
                 InputSeq = inputSeq,
-                Dx = (float)dx,
-                Dy = (float)dy,
+                DxRaw = dx.m_rawValue,
+                DyRaw = dy.m_rawValue,
                 SkillId = skillId
             });
         }

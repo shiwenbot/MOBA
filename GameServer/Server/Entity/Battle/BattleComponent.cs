@@ -91,7 +91,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.Dx, input.Dy, input.SkillId);
+        _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.DxRaw, input.DyRaw, input.SkillId);
     }
 
     public void SubmitStateHashReport(Session session, C2B_StateHashReport report)

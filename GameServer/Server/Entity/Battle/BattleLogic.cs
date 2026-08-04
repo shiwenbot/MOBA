@@ -102,15 +102,15 @@ public sealed class BattleLogic : IBuffCommandSink
             : 0u;
     }
 
-    public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, float dx, float dy, int skillId = 0)
+    public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, long dxRaw, long dyRaw, int skillId = 0)
     {
         if (!_statesByPlayerId.ContainsKey(playerId))
         {
             return;
         }
 
-        Fixed64 fixedDx = (Fixed64)dx;
-        Fixed64 fixedDy = (Fixed64)dy;
+        Fixed64 fixedDx = Fixed64.FromRaw(dxRaw);
+        Fixed64 fixedDy = Fixed64.FromRaw(dyRaw);
         bool isInputEdge = IsSubmittedInputEdge(playerId, fixedDx, fixedDy);
         // Allow frame 0 input before the first authoritative tick starts.
         if (_hasProcessedFrame && frameIndex <= LastFrameIndex)
@@ -119,7 +119,7 @@ public sealed class BattleLogic : IBuffCommandSink
             if (isInputEdge)
             {
                 _logWarning?.Invoke(
-                    $"[Battle][LateInputDrop] player={playerId} frame={frameIndex} current={LastFrameIndex} input=({dx:F3},{dy:F3}) seq={inputSeq}");
+                    $"[Battle][LateInputDrop] player={playerId} frame={frameIndex} current={LastFrameIndex} input={FormatInput(fixedDx, fixedDy)} seq={inputSeq}");
             }
 
             return;
@@ -137,7 +137,7 @@ public sealed class BattleLogic : IBuffCommandSink
         if (isInputEdge)
         {
             _logDebug?.Invoke(
-                $"[Battle][SubmitInputEdge] player={playerId} frame={frameIndex} current={LastFrameIndex} input=({dx:F3},{dy:F3}) seq={inputSeq}");
+                $"[Battle][SubmitInputEdge] player={playerId} frame={frameIndex} current={LastFrameIndex} input={FormatInput(fixedDx, fixedDy)} seq={inputSeq}");
         }
 
         if (!_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs))
@@ -160,6 +160,18 @@ public sealed class BattleLogic : IBuffCommandSink
             _latestAcceptedInputFrameByPlayerId[playerId] = frameIndex;
         }
         AcceptedInputCount++;
+    }
+
+    // Test harnesses can still describe inputs as floats; the network path above is raw-only.
+    public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, float dx, float dy, int skillId = 0)
+    {
+        SubmitInput(
+            playerId,
+            frameIndex,
+            inputSeq,
+            ((Fixed64)dx).m_rawValue,
+            ((Fixed64)dy).m_rawValue,
+            skillId);
     }
 
     public void Tick(uint frameIndex, Fixed64 fixedDt)
@@ -247,6 +259,9 @@ public sealed class BattleLogic : IBuffCommandSink
         if (!_authoritativeHashHistory.TryGet(frameIndex, out ulong authoritativeHash))
         {
             HashNoRecordCount++;
+            _logWarning?.Invoke(
+                $"[Battle][HashNoRecord] player={playerId} frame={frameIndex} " +
+                $"reported=0x{reportedHash:X16} current={LastFrameIndex}");
             return HashReportResult.NoRecord;
         }
 

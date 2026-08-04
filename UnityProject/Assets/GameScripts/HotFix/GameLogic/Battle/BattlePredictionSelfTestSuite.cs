@@ -68,7 +68,7 @@ namespace GameLogic
                 {
                     "join-aligns-global-frame" => JoinAlignsGlobalFrame(),
                     "frame-index-is-global" => FrameIndexIsGlobal(),
-                    "input-normalization" => InputNormalization(),
+                    "input-normalization" => InputForwardingPreservesRaw(),
                     "prediction-moves-self-player" => PredictionMovesSelfPlayer(),
                     "room-boundary-clamps-player" => RoomBoundaryClampsPlayer(),
                     "catchup-target-is-auth-plus-lead" => CatchUpTargetIsAuthPlusLead(),
@@ -124,14 +124,14 @@ namespace GameLogic
             return recorder.LastFrameIndex == 11;
         }
 
-        private static bool InputNormalization()
+        private static bool InputForwardingPreservesRaw()
         {
             BattleSimulation simulation = CreateSimulation(new BattleWorldState(), out SentInputRecorder recorder, out _);
             simulation.SetJoined(9, 60, 0.0f, 0.0f);
             simulation.Tick(61, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.One);
 
-            float sqrMagnitude = (recorder.LastDx * recorder.LastDx) + (recorder.LastDy * recorder.LastDy);
-            return sqrMagnitude <= 1.0001f && sqrMagnitude >= 0.9990f;
+            return recorder.LastDxRaw == Fixed64.One.m_rawValue &&
+                   recorder.LastDyRaw == Fixed64.One.m_rawValue;
         }
 
         private static bool PredictionMovesSelfPlayer()
@@ -858,6 +858,32 @@ namespace GameLogic
                     $"frame={joinWire.ServerFrameIndex}/{joinRoundTripped.ServerFrameIndex}");
             }
 
+            Fantasy.C2B_PlayerInput inputWire = new Fantasy.C2B_PlayerInput
+            {
+                FrameIndex = sourceSnapshot.FrameIndex + 1u,
+                InputSeq = 9,
+                DxRaw = 3037000499L,
+                DyRaw = -3037000499L,
+                SkillId = 0
+            };
+            byte[] inputPayload = SerializerManager.ProtoBufHelper.Serialize(
+                typeof(Fantasy.C2B_PlayerInput),
+                inputWire);
+            Fantasy.C2B_PlayerInput inputRoundTripped =
+                (Fantasy.C2B_PlayerInput)SerializerManager.ProtoBufHelper.Deserialize(
+                    typeof(Fantasy.C2B_PlayerInput),
+                    inputPayload);
+            if (inputRoundTripped.DxRaw != inputWire.DxRaw ||
+                inputRoundTripped.DyRaw != inputWire.DyRaw ||
+                inputRoundTripped.FrameIndex != inputWire.FrameIndex ||
+                inputRoundTripped.InputSeq != inputWire.InputSeq)
+            {
+                throw new InvalidOperationException(
+                    $"input-raw-roundtrip mismatch " +
+                    $"dx={inputWire.DxRaw}/{inputRoundTripped.DxRaw} " +
+                    $"dy={inputWire.DyRaw}/{inputRoundTripped.DyRaw}");
+            }
+
             return true;
         }
 
@@ -871,8 +897,9 @@ namespace GameLogic
                 (frameIndex, inputSeq, dx, dy, skillId) => inputRecorder.Record(
                     frameIndex,
                     inputSeq,
-                    (float)dx,
-                    (float)dy),
+                    dx,
+                    dy,
+                    skillId),
                 _ => { },
                 hashRecorder.Record);
             simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
@@ -881,7 +908,9 @@ namespace GameLogic
             for (uint frame = 1; frame <= 35; frame++)
             {
                 simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
-                hashesByFrame[frame] = StateHasher.Hash(worldState.TakeSnapshot().WithFrameIndex(frame));
+                BattleWorldSnapshot authoritativeSnapshot = worldState.TakeSnapshot().WithFrameIndex(frame);
+                hashesByFrame[frame] = StateHasher.Hash(authoritativeSnapshot);
+                simulation.EnqueueServerSnapshot(authoritativeSnapshot, frame);
             }
 
             if (hashRecorder.Reports.Count != 1)
@@ -890,6 +919,11 @@ namespace GameLogic
             }
 
             (uint frameIndex, ulong reportedHash) = hashRecorder.Reports[0];
+            if (frameIndex != 29u)
+            {
+                throw new InvalidOperationException($"hash-report confirmed-frame={frameIndex}, expected=29");
+            }
+
             if (!hashesByFrame.TryGetValue(frameIndex, out ulong expectedHash))
             {
                 throw new InvalidOperationException($"hash-report frame={frameIndex}");
@@ -948,7 +982,7 @@ namespace GameLogic
                     $"{battleLogic.HashReportsMatched}/{battleLogic.HashMismatchCount}/{battleLogic.HashNoRecordCount}");
             }
 
-            if (warnings.Count != 1)
+            if (warnings.Count != 2)
             {
                 throw new InvalidOperationException(
                     $"server-hash-history warning-count={warnings.Count}");
@@ -961,6 +995,14 @@ namespace GameLogic
                 !warning.Contains($"reported=0x{(expectedHash ^ 0x1UL):X16}", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"server-hash-history warning={warning}");
+            }
+
+            string noRecordWarning = warnings.Find(value => value.Contains("[Battle][HashNoRecord]", StringComparison.Ordinal)) ?? string.Empty;
+            if (!noRecordWarning.Contains("player=1", StringComparison.Ordinal) ||
+                !noRecordWarning.Contains("frame=999", StringComparison.Ordinal) ||
+                !noRecordWarning.Contains($"reported=0x{expectedHash:X16}", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"server-hash-history no-record-warning={noRecordWarning}");
             }
 
             return true;
@@ -977,8 +1019,9 @@ namespace GameLogic
                 (frameIndex, inputSeq, dx, dy, skillId) => inputRecorder.Record(
                     frameIndex,
                     inputSeq,
-                    (float)dx,
-                    (float)dy),
+                    dx,
+                    dy,
+                    skillId),
                 _ => { },
                 hashRecorder.Record);
             simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
@@ -986,6 +1029,8 @@ namespace GameLogic
             for (uint frame = 1; frame <= 100; frame++)
             {
                 simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.One);
+                BattleWorldSnapshot authoritativeSnapshot = worldState.TakeSnapshot().WithFrameIndex(frame);
+                simulation.EnqueueServerSnapshot(authoritativeSnapshot, frame);
             }
 
             if (hashRecorder.Reports.Count != 3)
@@ -993,7 +1038,7 @@ namespace GameLogic
                 throw new InvalidOperationException($"hash-report-interval count={hashRecorder.Reports.Count}");
             }
 
-            uint[] expectedFrames = { 30, 60, 90 };
+            uint[] expectedFrames = { 29, 59, 89 };
             for (int i = 0; i < expectedFrames.Length; i++)
             {
                 uint actualFrame = hashRecorder.Reports[i].FrameIndex;
@@ -1165,12 +1210,16 @@ namespace GameLogic
             public uint LastFrameIndex { get; private set; }
             public float LastDx { get; private set; }
             public float LastDy { get; private set; }
+            public long LastDxRaw { get; private set; }
+            public long LastDyRaw { get; private set; }
 
-            public void Record(uint frameIndex, uint inputSeq, float dx, float dy)
+            public void Record(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
             {
                 LastFrameIndex = frameIndex;
-                LastDx = dx;
-                LastDy = dy;
+                LastDx = (float)dx;
+                LastDy = (float)dy;
+                LastDxRaw = dx.m_rawValue;
+                LastDyRaw = dy.m_rawValue;
             }
         }
 
