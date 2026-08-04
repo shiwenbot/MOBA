@@ -865,6 +865,10 @@ namespace GameShared.FrameSync.Snapshot
             {
             }
 
+            public void ApplyBodyImpulse(int bodyId, Fixed64 impulseX, Fixed64 impulseY)
+            {
+            }
+
             public void Step(Fixed64 dt)
             {
             }

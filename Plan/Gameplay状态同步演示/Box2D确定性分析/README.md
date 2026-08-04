@@ -25,7 +25,7 @@
 
 ### 1. 物理层只有一个封装：`FrameSyncPhysicsWorld.cs`
 
-- 路径：`Assets/GameScripts/HotFix/GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs`（636 行）
+- 路径：`Assets/GameScripts/HotFix/GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs`（本报告成文时 636 行，截至 2026-08-03 为 687 行；下文行号均为成文时的旧行号）
 - World 配置：**零重力**（`Vector2.Zero`，俯视角）
 - 唯一的 body：**玩家圆形**（`CircleShape`，Radius=0.45，DynamicBody + Bullet + FixedRotation + 不睡眠）
 - **没有墙体 / 障碍物 / 多边形 / 关节**（仓库内未找到任何相关创建代码）
@@ -168,11 +168,13 @@ _world.WarmStarting = false;   // ← 加这一行，确定性优先
 
 ## 落地清单
 
-| # | 动作 | 文件 | 优先级 |
-|---|------|------|--------|
-| 1 | 加 `_world.WarmStarting = false` | `FrameSyncPhysicsWorld.cs:39-45` 附近 | 高（立即） |
-| 2 | pair 顺序隐患留记录（未来打开 native 碰撞时处理） | 本报告 + 笔记 | 低（备忘） |
-| 3 | 长期评估「是否仍需 Box2D 求解器」 | 不动，记在心里 | 仅备忘 |
+> **状态更新（2026-08-03）**：三项均已结案，详见下表「现状」列。本清单保留原文用于追溯。
+
+| # | 动作 | 文件 | 原优先级 | 现状（2026-08-03） |
+|---|------|------|---------|-------------------|
+| 1 | 加 `_world.WarmStarting = false` | `FrameSyncPhysicsWorld.cs:39-45` 附近 | 高（立即） | **已完成**，commit `0bb9a468`（实际落在 `:47`）。但因全场无 Contact 而**暂未实际生效**；S2 拿掉 Box2D 后本项自然消失 |
+| 2 | pair 顺序隐患留记录（未来打开 native 碰撞时处理） | 本报告 + 笔记 | 低（备忘） | **已失效**。S2 决定拿掉 Box2D、改手写定点，不会再打开 native 碰撞，该隐患不复存在 |
+| 3 | 长期评估「是否仍需 Box2D 求解器」 | 不动，记在心里 | 仅备忘 | **已结案**：不需要。见 [物理层与玩法形态-讨论记录-20260803.md](../物理层与玩法形态-讨论记录-20260803.md) 决策 2 与 [S2 实现计划](../S2-物理层重写-手写定点物理-实现计划.md) |
 
 ---
 

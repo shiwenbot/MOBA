@@ -42,6 +42,7 @@ namespace GameLogic
         private readonly CommandPool<ApplyBuffCommand> _applyBuffCommandPool = new CommandPool<ApplyBuffCommand>();
         private readonly CommandPool<RemoveBuffCommand> _removeBuffCommandPool = new CommandPool<RemoveBuffCommand>();
         private readonly IBuffConfigProvider _buffConfigProvider;
+        private readonly PredictionErrorSmoother _predictionErrorSmoother = new PredictionErrorSmoother();
 
         private bool _isJoined;
         private bool _hasRttSample;
@@ -69,6 +70,13 @@ namespace GameLogic
         private int _rollbackCount;
         private int _lastRollbackReplayFrames;
         private double _lastRollbackElapsedMs;
+        private uint _lastRollbackFrame;
+        private bool _hasLastRenderedSelfPosition;
+        private float _lastRenderedSelfX;
+        private float _lastRenderedSelfY;
+        private bool _hasLatestAuthoritativeSelfPosition;
+        private Fixed64 _latestAuthoritativeSelfX;
+        private Fixed64 _latestAuthoritativeSelfY;
 
         public BattleSimulation(
             BattleWorldState worldState,
@@ -115,6 +123,35 @@ namespace GameLogic
         public int RollbackCount => _rollbackCount;
         public int LastRollbackReplayFrames => _lastRollbackReplayFrames;
         public double LastRollbackElapsedMs => _lastRollbackElapsedMs;
+        public uint LastRollbackFrame => _lastRollbackFrame;
+        public float RenderErrorOffsetX => _predictionErrorSmoother.OffsetX;
+        public float RenderErrorOffsetY => _predictionErrorSmoother.OffsetY;
+        public float LastPredictionCorrectionMagnitude => _predictionErrorSmoother.LastCorrectionMagnitude;
+        public float PredictionSmoothingRemainingSeconds => _predictionErrorSmoother.RemainingSeconds;
+
+        public void AdvancePredictionErrorSmoothing(float deltaTime)
+        {
+            _predictionErrorSmoother.Advance(deltaTime);
+        }
+
+        public void RecordRenderedSelfPosition(float x, float y)
+        {
+            if (!_isJoined)
+            {
+                return;
+            }
+
+            _lastRenderedSelfX = x;
+            _lastRenderedSelfY = y;
+            _hasLastRenderedSelfPosition = true;
+        }
+
+        public bool TryGetLatestAuthoritativeSelfPosition(out Fixed64 x, out Fixed64 y)
+        {
+            x = _latestAuthoritativeSelfX;
+            y = _latestAuthoritativeSelfY;
+            return _hasLatestAuthoritativeSelfPosition;
+        }
 
         public void EnqueueServerSnapshot(BattleWorldSnapshot snapshot, uint selfLatestAcceptedInputFrame)
         {
@@ -240,6 +277,14 @@ namespace GameLogic
             _rollbackCount = 0;
             _lastRollbackReplayFrames = 0;
             _lastRollbackElapsedMs = 0.0d;
+            _lastRollbackFrame = 0u;
+            _hasLastRenderedSelfPosition = false;
+            _lastRenderedSelfX = 0.0f;
+            _lastRenderedSelfY = 0.0f;
+            _hasLatestAuthoritativeSelfPosition = false;
+            _latestAuthoritativeSelfX = Fixed64.Zero;
+            _latestAuthoritativeSelfY = Fixed64.Zero;
+            _predictionErrorSmoother.Reset();
             _isJoined = true;
 
             _worldState.AddOrUpdatePlayer(playerId, x, y);
@@ -405,6 +450,17 @@ namespace GameLogic
 
         private void ApplyAuthoritativeSnapshot(BattleWorldSnapshot snapshot)
         {
+            if (TryGetAuthoritativeSelf(snapshot, out PlayerStateSnapshot authoritativeSelf))
+            {
+                _latestAuthoritativeSelfX = authoritativeSelf.X;
+                _latestAuthoritativeSelfY = authoritativeSelf.Y;
+                _hasLatestAuthoritativeSelfPosition = true;
+            }
+            else
+            {
+                _hasLatestAuthoritativeSelfPosition = false;
+            }
+
             _lastAppliedFrame = snapshot.FrameIndex;
             ApplySnapshotToWorldState(snapshot);
             _lastPredictedFrame = snapshot.FrameIndex;
@@ -436,6 +492,8 @@ namespace GameLogic
                 AdvancePredictionTo(replayTargetFrame, fixedDt);
             }
 
+            CapturePredictionErrorAfterReconciliation();
+
             if (!logRollback)
             {
                 return;
@@ -443,11 +501,26 @@ namespace GameLogic
 
             rollbackTimer?.Stop();
             _rollbackCount++;
+            _lastRollbackFrame = snapshot.FrameIndex;
             _lastRollbackReplayFrames = replayFrames;
             _lastRollbackElapsedMs = rollbackTimer?.Elapsed.TotalMilliseconds ?? 0.0d;
 
             Log.Info(
                 $"[Rollback] reason={rollbackReason} frame={snapshot.FrameIndex} replayTo={replayTargetFrame} replayFrames={replayFrames} elapsedMs={_lastRollbackElapsedMs:F3}");
+        }
+
+        private void CapturePredictionErrorAfterReconciliation()
+        {
+            if (!_hasLastRenderedSelfPosition ||
+                !_worldState.TryGetPlayer(_selfPlayerId, out PlayerState reconciledSelf))
+            {
+                _predictionErrorSmoother.SetOffset(0.0f, 0.0f);
+                return;
+            }
+
+            _predictionErrorSmoother.SetOffset(
+                _lastRenderedSelfX - (float)reconciledSelf.X,
+                _lastRenderedSelfY - (float)reconciledSelf.Y);
         }
 
         private void SendPingIfNeeded()

@@ -2,11 +2,14 @@ using System;
 using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Snapshot;
 
 namespace GameLogic
 {
     public static class BattlePredictionSelfTestSuite
     {
+        private const ulong FixedPhysicsExpectedHash = 0xD2120B5F0F5A5FE5UL;
+
         private static readonly string[] AllCaseNames =
         {
             "join-aligns-global-frame",
@@ -27,7 +30,12 @@ namespace GameLogic
             "authoritative-snapshot-restores-player-buffs",
             "predicted-buff-consistency-hit",
             "rollback-replays-before-next-consistency-check",
-            "manual-rollback-replays-authoritative-history"
+            "manual-rollback-replays-authoritative-history",
+            "error-smoothing-decays-to-zero",
+            "error-smoothing-large-error-snaps",
+            "error-smoothing-does-not-affect-logic-state",
+            "error-smoothing-overlapping-corrections-rebaseline",
+            "fixed-physics-bit-exact"
         };
 
         public static bool Run(out string failedCase)
@@ -70,6 +78,11 @@ namespace GameLogic
                     "predicted-buff-consistency-hit" => PredictedBuffConsistencyHit(),
                     "rollback-replays-before-next-consistency-check" => RollbackReplaysBeforeNextConsistencyCheck(),
                     "manual-rollback-replays-authoritative-history" => ManualRollbackReplaysAuthoritativeHistory(),
+                    "error-smoothing-decays-to-zero" => ErrorSmoothingDecaysToZero(),
+                    "error-smoothing-large-error-snaps" => ErrorSmoothingLargeErrorSnaps(),
+                    "error-smoothing-does-not-affect-logic-state" => ErrorSmoothingDoesNotAffectLogicState(),
+                    "error-smoothing-overlapping-corrections-rebaseline" => ErrorSmoothingOverlappingCorrectionsRebaseline(),
+                    "fixed-physics-bit-exact" => FixedPhysicsBitExact(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -363,8 +376,8 @@ namespace GameLogic
                     new PhysicsWorldSnapshot(
                         new[]
                         {
-                            new PhysicsBodySnapshot(1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true, true),
-                            new PhysicsBodySnapshot(2, 5.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true, true)
+                            new PhysicsBodySnapshot(1, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, true, true),
+                            new PhysicsBodySnapshot(2, (Fixed64)5.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, true, true)
                         })),
                 11);
 
@@ -613,6 +626,174 @@ namespace GameLogic
                    Near(restoredPlayer.Y, Fixed64.Zero);
         }
 
+        private static bool ErrorSmoothingDecaysToZero()
+        {
+            PredictionErrorSmoother smoother = new PredictionErrorSmoother();
+            smoother.SetOffset(1.0f, -2.0f);
+            smoother.Advance(PredictionErrorSmoother.SmoothingDurationSeconds + 0.01f);
+
+            return smoother.OffsetX == 0.0f &&
+                   smoother.OffsetY == 0.0f &&
+                   smoother.RemainingSeconds == 0.0f;
+        }
+
+        private static bool ErrorSmoothingLargeErrorSnaps()
+        {
+            PredictionErrorSmoother smoother = new PredictionErrorSmoother();
+            smoother.SetOffset(20.0f, 0.0f);
+
+            return smoother.OffsetX == 0.0f &&
+                   smoother.OffsetY == 0.0f &&
+                   smoother.RemainingSeconds == 0.0f &&
+                   smoother.LastCorrectionMagnitude > PredictionErrorSmoother.MaxSmoothingDistance;
+        }
+
+        private static bool ErrorSmoothingDoesNotAffectLogicState()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+            Fixed64 authoritativeX = F(2.0f);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.RecordRenderedSelfPosition(0.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, authoritativeX, Fixed64.Zero)
+                    }),
+                11);
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return worldState.TryGetPlayer(1, out PlayerState reconciledSelf) &&
+                   reconciledSelf.X.m_rawValue == authoritativeX.m_rawValue &&
+                   reconciledSelf.Y.m_rawValue == Fixed64.Zero.m_rawValue &&
+                   simulation.LastPredictionCorrectionMagnitude > 0.0f &&
+                   simulation.PredictionSmoothingRemainingSeconds > 0.0f;
+        }
+
+        private static bool ErrorSmoothingOverlappingCorrectionsRebaseline()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+            Fixed64 firstAuthoritativeX = F(1.0f);
+            Fixed64 secondAuthoritativeX = firstAuthoritativeX + F(0.5f);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.RecordRenderedSelfPosition(4.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, firstAuthoritativeX, Fixed64.Zero)
+                    }),
+                11);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFirstCorrection))
+            {
+                return false;
+            }
+
+            simulation.AdvancePredictionErrorSmoothing(PredictionErrorSmoother.SmoothingDurationSeconds * 0.5f);
+            float previousRenderedX = (float)afterFirstCorrection.X + simulation.RenderErrorOffsetX;
+            float previousRenderedY = (float)afterFirstCorrection.Y + simulation.RenderErrorOffsetY;
+            simulation.RecordRenderedSelfPosition(previousRenderedX, previousRenderedY);
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    12,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, secondAuthoritativeX, Fixed64.Zero)
+                    }),
+                12);
+            simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+
+            return NearlyEqual(
+                       simulation.RenderErrorOffsetX,
+                       previousRenderedX - (float)secondAuthoritativeX) &&
+                   NearlyEqual(
+                       simulation.RenderErrorOffsetY,
+                       previousRenderedY);
+        }
+
+        private static bool FixedPhysicsBitExact()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, -(Fixed64)2, Fixed64.Zero);
+            worldState.AddOrUpdatePlayer(2, (Fixed64)2, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState leftPlayer) ||
+                !worldState.TryGetPlayer(2, out PlayerState rightPlayer))
+            {
+                return false;
+            }
+
+            for (uint frame = 0; frame < 180; frame++)
+            {
+                GetFixedPhysicsTestInput(frame, out Fixed64 leftDx, out Fixed64 leftDy, out Fixed64 rightDx, out Fixed64 rightDy);
+                MoveSystem.Apply(worldState, leftPlayer, leftDx, leftDy, DeterminismRules.FixedDeltaTimeFixed64);
+                MoveSystem.Apply(worldState, rightPlayer, rightDx, rightDy, DeterminismRules.FixedDeltaTimeFixed64);
+                if (frame == 90)
+                {
+                    worldState.PhysicsWorld.ApplyBodyImpulse(
+                        1,
+                        (Fixed64)3 / (Fixed64)4,
+                        Fixed64.One / (Fixed64)4);
+                }
+
+                worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTimeFixed64);
+                MoveSystem.SyncFromPhysics(worldState, leftPlayer);
+                MoveSystem.SyncFromPhysics(worldState, rightPlayer);
+            }
+
+            ulong actualHash = StateHasher.Hash(worldState.TakeSnapshot());
+            if (actualHash == FixedPhysicsExpectedHash)
+            {
+                return true;
+            }
+
+            throw new InvalidOperationException($"FixedPhysicsBitExact actual=0x{actualHash:X16}");
+        }
+
+        private static void GetFixedPhysicsTestInput(
+            uint frame,
+            out Fixed64 leftDx,
+            out Fixed64 leftDy,
+            out Fixed64 rightDx,
+            out Fixed64 rightDy)
+        {
+            switch ((frame / 30u) % 4u)
+            {
+                case 0u:
+                    leftDx = Fixed64.One;
+                    leftDy = Fixed64.Zero;
+                    rightDx = -Fixed64.One;
+                    rightDy = Fixed64.Zero;
+                    return;
+                case 1u:
+                    leftDx = Fixed64.Zero;
+                    leftDy = Fixed64.One;
+                    rightDx = Fixed64.Zero;
+                    rightDy = -Fixed64.One;
+                    return;
+                case 2u:
+                    leftDx = -Fixed64.One;
+                    leftDy = Fixed64.Zero;
+                    rightDx = Fixed64.One;
+                    rightDy = Fixed64.Zero;
+                    return;
+                default:
+                    leftDx = Fixed64.Zero;
+                    leftDy = -Fixed64.One;
+                    rightDx = Fixed64.Zero;
+                    rightDy = Fixed64.One;
+                    return;
+            }
+        }
+
         private static bool TryGetBodySnapshot(
             BattleWorldSnapshot snapshot,
             int bodyId,
@@ -659,6 +840,11 @@ namespace GameLogic
         private static bool Near(Fixed64 actual, Fixed64 expected)
         {
             return FixedMath.Abs(actual - expected) < F(0.0001f);
+        }
+
+        private static bool NearlyEqual(float actual, float expected)
+        {
+            return MathF.Abs(actual - expected) < 0.0001f;
         }
 
         private static BattleSimulation CreateSimulation(

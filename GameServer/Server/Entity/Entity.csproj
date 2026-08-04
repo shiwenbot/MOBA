@@ -16,13 +16,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Box2DSharp">
-      <HintPath>..\..\..\UnityProject\Assets\GameScripts\HotFix\ThirdParty\Box2DSharp\Box2DSharp.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
     <Folder Include="Gate\" />
   </ItemGroup>
 
@@ -30,6 +23,7 @@
   <ItemGroup>
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\**\*.cs" Exclude="**\*.asmdef;**\*.meta;**\Tests\**\*.cs" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattleSimulation.cs" Link="GameLogic\BattleSimulation.cs" />
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\PredictionErrorSmoother.cs" Link="GameLogic\PredictionErrorSmoother.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattlePredictionSelfTestSuite.cs" Link="GameLogic\BattlePredictionSelfTestSuite.cs" />
   </ItemGroup>
 

@@ -8,13 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="Box2DSharp">
-      <HintPath>..\..\..\UnityProject\Assets\GameScripts\HotFix\ThirdParty\Box2DSharp\Box2DSharp.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- 排除 SnapshotSelfTestSuite：它依赖 GameShared.SkillGraph（进而依赖 Fantasy.Async / Newtonsoft.Json），
          而本 Validator 只做 Tick 间隔、时间漂移与确定性静态扫描，不需要快照用例。
          该 Suite 由 Entity.csproj 编译，通过服务端测试模式执行。 -->

@@ -18,10 +18,6 @@
       <HintPath>lib\NLog.dll</HintPath>
       <Private>true</Private>
     </Reference>
-    <Reference Include="Box2DSharp">
-      <HintPath>..\..\..\UnityProject\Assets\GameScripts\HotFix\ThirdParty\Box2DSharp\Box2DSharp.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
   </ItemGroup>
   <ItemGroup>
     <None Update="NLog.config">

@@ -219,11 +219,18 @@ dotnet build 'UnityProject/GameLogic.csproj' -c Debug -v minimal -m:1
 #### 无头逻辑测试（帧同步相关计划必须有）
 
 ```bash
+# 注意：三个 csproj 是单目标 net9.0，必须用 Rider 那套 dotnet 全路径。
+# 系统 dotnet 无 net9.0 SDK 会报 NETSDK1045，--framework net8.0 对单目标项目无效。
+# 跑 Main.csproj 前先停掉运行中的服务端，否则锁 dll 报 MSB3027。
+
 # 全部自测
-dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=all
+"C:/Users/shiwe/.dotnet/dotnet.exe" run --project 'GameServer/Server/Main/Main.csproj' -- --mode=test --scenario=all
 
 # 单场景自测
-dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=prediction-self
+"C:/Users/shiwe/.dotnet/dotnet.exe" run --project 'GameServer/Server/Main/Main.csproj' -- --mode=test --scenario=prediction-self
+
+# 只验证编译（不受服务端进程锁影响）
+"C:/Users/shiwe/.dotnet/dotnet.exe" build 'GameServer/Server/Entity/Entity.csproj' -v q --nologo
 ```
 
 **自测模式参考**：
@@ -265,7 +272,7 @@ powershell -ExecutionPolicy Bypass -File 'Tools/AutomationAcceptance/Run-BattleA
 - Unity Editor 打开无编译错误
 
 ### 自动验证
-- `dotnet run --project 'GameServer/Server/Main/Main.csproj' --framework net8.0 -- --mode=test --scenario=all`
+- `"C:/Users/shiwe/.dotnet/dotnet.exe" run --project 'GameServer/Server/Main/Main.csproj' -- --mode=test --scenario=all`
 - Unity EditMode 测试：N 项全部通过
 
 ### 一致性验证（如涉及确定性）

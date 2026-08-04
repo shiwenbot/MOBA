@@ -12,6 +12,7 @@ using GameShared.FrameSync.Snapshot;
 using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
+using UnityEngine.Rendering;
 using Log = TEngine.Log;
 
 namespace GameLogic
@@ -29,9 +30,11 @@ namespace GameLogic
         private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
         private readonly Dictionary<long, AuthoritativeBuffBaseline> _authoritativeBuffsByPlayerId = new Dictionary<long, AuthoritativeBuffBaseline>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
+        private readonly Dictionary<long, RenderTarget> _renderTargetsByPlayerId = new Dictionary<long, RenderTarget>();
         private readonly HashSet<long> _authoritativePlayersInSnapshot = new HashSet<long>();
         private readonly HashSet<long> _playersAwaitingBuffFullSync = new HashSet<long>();
         private readonly List<long> _staleAuthoritativePlayers = new List<long>();
+        private readonly List<long> _staleRenderTargetPlayerIds = new List<long>();
         private readonly InputBuffer<BufferedInputKind, int> _inputBuffer = new InputBuffer<BufferedInputKind, int>();
 
         private ClientTickDriver _tickDriver;
@@ -51,6 +54,10 @@ namespace GameLogic
         private float _cachedDy;
         private IBattleAutomationInputSource _automationInputSource;
         private uint _nextStatusLogFrame;
+        private GameObject _authoritativeGhostSphere;
+        private bool _hasAuthoritativeGhostTarget;
+        private Fixed64 _authoritativeGhostTargetX;
+        private Fixed64 _authoritativeGhostTargetY;
 
         public int Priority => 0;
 
@@ -62,6 +69,10 @@ namespace GameLogic
 
         /// <summary>是否已收到过至少一次带宽统计上报。</summary>
         public bool HasBandwidthStats { get; private set; }
+
+        public PredictionErrorSnapshot LatestPredictionError { get; private set; }
+
+        public bool HasPredictionError { get; private set; }
 
         private enum BufferedInputKind
         {
@@ -124,6 +135,17 @@ namespace GameLogic
             _automationInputSource = null;
             LatestBandwidthStats = default;
             HasBandwidthStats = false;
+            LatestPredictionError = default;
+            HasPredictionError = false;
+            _hasAuthoritativeGhostTarget = false;
+            _authoritativeGhostTargetX = Fixed64.Zero;
+            _authoritativeGhostTargetY = Fixed64.Zero;
+
+            if (_authoritativeGhostSphere != null)
+            {
+                Destroy(_authoritativeGhostSphere);
+                _authoritativeGhostSphere = null;
+            }
 
             foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
             {
@@ -135,6 +157,8 @@ namespace GameLogic
 
             _playerSpheres.Clear();
             _activePlayers.Clear();
+            _renderTargetsByPlayerId.Clear();
+            _staleRenderTargetPlayerIds.Clear();
             _authoritativeAttributesByPlayerId.Clear();
             _authoritativeBuffsByPlayerId.Clear();
             _authoritativePlayersInSnapshot.Clear();
@@ -158,6 +182,8 @@ namespace GameLogic
                     _inputBuffer.Record(BufferedInputKind.Skill, skillId, SkillInputBufferFrames);
                 }
             }
+
+            UpdateRendering();
         }
 
         public void Tick(uint frameIndex, Fixed64 fixedDt)
@@ -441,10 +467,24 @@ namespace GameLogic
             foreach (PlayerState player in worldState.Players)
             {
                 _activePlayers.Add(player.PlayerId);
+                _renderTargetsByPlayerId[player.PlayerId] = new RenderTarget(player.X, player.Y);
                 bool isSelf = player.PlayerId == _simulation.SelfPlayerId;
                 GameObject sphere = GetOrCreateSphere(player.PlayerId, isSelf);
-                sphere.transform.position = ToWorldPosition(player.X, player.Y);
                 sphere.SetActive(true);
+            }
+
+            _staleRenderTargetPlayerIds.Clear();
+            foreach (long playerId in _renderTargetsByPlayerId.Keys)
+            {
+                if (!_activePlayers.Contains(playerId))
+                {
+                    _staleRenderTargetPlayerIds.Add(playerId);
+                }
+            }
+
+            for (int i = 0; i < _staleRenderTargetPlayerIds.Count; i++)
+            {
+                _renderTargetsByPlayerId.Remove(_staleRenderTargetPlayerIds[i]);
             }
 
             foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
@@ -459,6 +499,78 @@ namespace GameLogic
                     pair.Value.SetActive(false);
                 }
             }
+
+            SyncAuthoritativeGhost();
+        }
+
+        private void UpdateRendering()
+        {
+            if (_simulation == null || !_simulation.IsJoined)
+            {
+                return;
+            }
+
+            _simulation.AdvancePredictionErrorSmoothing(Time.deltaTime);
+            foreach (KeyValuePair<long, RenderTarget> pair in _renderTargetsByPlayerId)
+            {
+                if (!_playerSpheres.TryGetValue(pair.Key, out GameObject sphere) ||
+                    sphere == null ||
+                    !sphere.activeSelf)
+                {
+                    continue;
+                }
+
+                Vector3 position = ToWorldPosition(pair.Value.X, pair.Value.Y);
+                if (pair.Key == _simulation.SelfPlayerId)
+                {
+                    position.x += _simulation.RenderErrorOffsetX;
+                    position.z += _simulation.RenderErrorOffsetY;
+                }
+
+                sphere.transform.position = position;
+                if (pair.Key == _simulation.SelfPlayerId)
+                {
+                    _simulation.RecordRenderedSelfPosition(position.x, position.z);
+                }
+            }
+
+            if (_hasAuthoritativeGhostTarget && _authoritativeGhostSphere != null)
+            {
+                _authoritativeGhostSphere.transform.position = ToWorldPosition(
+                    _authoritativeGhostTargetX,
+                    _authoritativeGhostTargetY);
+            }
+
+            LatestPredictionError = new PredictionErrorSnapshot
+            {
+                LastCorrectionMagnitude = _simulation.LastPredictionCorrectionMagnitude,
+                SmoothingRemainingSeconds = _simulation.PredictionSmoothingRemainingSeconds,
+                RollbackCount = _simulation.RollbackCount,
+                LastRollbackFrame = _simulation.LastRollbackFrame
+            };
+            HasPredictionError = true;
+            GameEvent.Get<IBattleUI>().OnPredictionErrorUpdated();
+        }
+
+        private void SyncAuthoritativeGhost()
+        {
+            if (_simulation == null ||
+                !_activePlayers.Contains(_simulation.SelfPlayerId) ||
+                !_simulation.TryGetLatestAuthoritativeSelfPosition(
+                    out _authoritativeGhostTargetX,
+                    out _authoritativeGhostTargetY))
+            {
+                _hasAuthoritativeGhostTarget = false;
+                if (_authoritativeGhostSphere != null)
+                {
+                    _authoritativeGhostSphere.SetActive(false);
+                }
+
+                return;
+            }
+
+            _hasAuthoritativeGhostTarget = true;
+            GetOrCreateAuthoritativeGhostSphere().SetActive(true);
         }
 
         private BattleWorldSnapshot ConvertSnapshot(S2C_FrameSnapshot snapshot, out uint selfLatestAcceptedInputFrame)
@@ -793,6 +905,72 @@ namespace GameLogic
             return sphere;
         }
 
+        private GameObject GetOrCreateAuthoritativeGhostSphere()
+        {
+            if (_authoritativeGhostSphere != null)
+            {
+                return _authoritativeGhostSphere;
+            }
+
+            GameObject ghost = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            ghost.name = "GameplayAuthoritativeGhost";
+            ghost.transform.SetParent(transform, false);
+            ghost.transform.position = Vector3.zero;
+            float diameter = (float)(GameplayRoomSettings.PlayerRadius * Fixed64.Two);
+            ghost.transform.localScale = Vector3.one * diameter;
+
+            Renderer renderer = ghost.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                ConfigureGhostMaterial(renderer);
+            }
+
+            Collider collider = ghost.GetComponent<Collider>();
+            if (collider != null)
+            {
+                Destroy(collider);
+            }
+
+            _authoritativeGhostSphere = ghost;
+            return ghost;
+        }
+
+        private static void ConfigureGhostMaterial(Renderer renderer)
+        {
+            Material material = renderer.material;
+            material.color = new Color(1.0f, 0.78f, 0.08f, 0.35f);
+            material.SetOverrideTag("RenderType", "Transparent");
+            if (material.HasProperty("_Mode"))
+            {
+                material.SetFloat("_Mode", 3.0f);
+            }
+
+            if (material.HasProperty("_Surface"))
+            {
+                material.SetFloat("_Surface", 1.0f);
+            }
+
+            if (material.HasProperty("_SrcBlend"))
+            {
+                material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+            }
+
+            if (material.HasProperty("_DstBlend"))
+            {
+                material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+            }
+
+            if (material.HasProperty("_ZWrite"))
+            {
+                material.SetInt("_ZWrite", 0);
+            }
+
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.renderQueue = (int)RenderQueue.Transparent;
+        }
+
         private static Vector3 ToWorldPosition(Fixed64 x, Fixed64 y)
         {
             return new Vector3((float)x, (float)GameplayRoomSettings.PlayerRadius, (float)y);
@@ -823,6 +1001,18 @@ namespace GameLogic
             }
 
             return snapshots;
+        }
+
+        private readonly struct RenderTarget
+        {
+            public RenderTarget(Fixed64 x, Fixed64 y)
+            {
+                X = x;
+                Y = y;
+            }
+
+            public Fixed64 X { get; }
+            public Fixed64 Y { get; }
         }
 
         private sealed class PlayerSnapshotComparer : IComparer<PlayerStateSnapshot>
@@ -872,6 +1062,14 @@ namespace GameLogic
             public long FullSyncPayloadBytes { get; set; }
             public double DirtySyncSavedRatio { get; set; }
             public long DirtySyncSavedBytes { get; set; }
+        }
+
+        public struct PredictionErrorSnapshot
+        {
+            public float LastCorrectionMagnitude { get; set; }
+            public float SmoothingRemainingSeconds { get; set; }
+            public int RollbackCount { get; set; }
+            public uint LastRollbackFrame { get; set; }
         }
     }
 }

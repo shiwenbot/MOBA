@@ -6,29 +6,6 @@ namespace GameShared.FrameSync.Battle
     {
         public PhysicsBodySnapshot(
             int bodyId,
-            float positionX,
-            float positionY,
-            float rotationRadians,
-            float linearVelocityX,
-            float linearVelocityY,
-            float angularVelocity,
-            bool isAwake,
-            bool isEnabled)
-            : this(
-                bodyId,
-                (Fixed64)positionX,
-                (Fixed64)positionY,
-                (Fixed64)rotationRadians,
-                (Fixed64)linearVelocityX,
-                (Fixed64)linearVelocityY,
-                (Fixed64)angularVelocity,
-                isAwake,
-                isEnabled)
-        {
-        }
-
-        public PhysicsBodySnapshot(
-            int bodyId,
             Fixed64 positionX,
             Fixed64 positionY,
             Fixed64 rotationRadians,

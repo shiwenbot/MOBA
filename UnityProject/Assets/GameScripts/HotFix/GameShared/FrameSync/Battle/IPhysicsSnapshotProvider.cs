@@ -21,6 +21,8 @@ namespace GameShared.FrameSync.Battle
 
         void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy);
 
+        void ApplyBodyImpulse(int bodyId, Fixed64 impulseX, Fixed64 impulseY);
+
         void Step(Fixed64 dt);
 
         bool TryGetBodySnapshot(int bodyId, out PhysicsBodySnapshot snapshot);

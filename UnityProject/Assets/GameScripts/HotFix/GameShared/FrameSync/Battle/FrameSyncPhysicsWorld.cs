@@ -1,11 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Numerics;
-using System.Reflection;
-using Box2DSharp.Collision.Collider;
-using Box2DSharp.Collision.Shapes;
-using Box2DSharp.Dynamics;
-using Box2DSharp.Dynamics.Contacts;
 using FixedMathSharp;
 using GameShared.FrameSync.Determinism;
 
@@ -13,52 +7,25 @@ namespace GameShared.FrameSync.Battle
 {
     public sealed class FrameSyncPhysicsWorld : IPhysicsMovementWorld
     {
-        // Keep the shared room geometry authoritative for both prediction and server simulation.
         private static readonly Fixed64 PlayerBodyRadius = GameplayRoomSettings.PlayerRadius;
         private static readonly Fixed64 MinimumPlayerSeparation = PlayerBodyRadius * Fixed64.Two;
-        private static readonly Fixed64 PlayerDensity = Fixed64.One;
-        private const short PlayerNoPushGroupIndex = -1;
-        private static readonly Fixed64 OccupancyEpsilon = (Fixed64)0.0001f;
-        private static readonly Fixed64 ContactTolerance = (Fixed64)0.001f;
-        private static readonly Fixed64 MovementIntentEpsilon = (Fixed64)0.0001f;
+        private static readonly Fixed64 OccupancyEpsilon = Fixed64.One / (Fixed64)10000;
+        private static readonly Fixed64 ContactTolerance = Fixed64.One / (Fixed64)1000;
+        private static readonly Fixed64 MovementIntentEpsilon = Fixed64.One / (Fixed64)10000;
+        private static readonly Fixed64 Half = Fixed64.One / (Fixed64)2;
         private const int OccupancyResolveIterations = 4;
-        private const int VelocityIterations = 12;
-        private const int PositionIterations = 8;
-        private static readonly PropertyInfo BodyLinearVelocityProperty =
-            typeof(Body).GetProperty(nameof(Body.LinearVelocity), BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        private static readonly PropertyInfo BodyAngularVelocityProperty =
-            typeof(Body).GetProperty(nameof(Body.AngularVelocity), BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
-        private readonly Dictionary<int, Body> _bodies = new Dictionary<int, Body>();
-        private readonly Dictionary<int, Vector2> _pendingLinearVelocities = new Dictionary<int, Vector2>();
-        private readonly Dictionary<ContactKey, PhysicsContactSnapshot> _physicsContacts = new Dictionary<ContactKey, PhysicsContactSnapshot>();
+        private readonly Dictionary<int, FixedPhysicsBody> _bodies = new Dictionary<int, FixedPhysicsBody>();
+        private readonly Dictionary<int, FixedPhysicsVector> _pendingLinearVelocities = new Dictionary<int, FixedPhysicsVector>();
+        private readonly Dictionary<int, FixedPhysicsVector> _pendingImpulses = new Dictionary<int, FixedPhysicsVector>();
         private readonly Dictionary<ContactKey, PhysicsContactSnapshot> _occupancyContacts = new Dictionary<ContactKey, PhysicsContactSnapshot>();
         private readonly List<int> _sortedBodyIdsBuffer = new List<int>();
-        private readonly ContactListener _contactListener;
-        private readonly World _world;
-
-        public FrameSyncPhysicsWorld()
-        {
-            Vector2 gravity = Vector2.Zero;
-            _world = new World(in gravity);
-            // 确定性优先：warm starting 会用上一帧的累积冲量做本帧求解初值，而该冲量存在
-            // Contact.Manifold 内部字段里，快照存不了、回滚也恢复不了，会导致回滚后第一帧
-            // 的解与原始轨迹不一致。本项目零重力 + 圆形 body + 无堆叠，关掉它没有代价。
-            _world.WarmStarting = false;
-            _contactListener = new ContactListener(_physicsContacts);
-            _world.SetContactListener(_contactListener);
-        }
 
         public void ClearBodies()
         {
-            foreach (Body body in _bodies.Values)
-            {
-                _world.DestroyBody(body);
-            }
-
             _bodies.Clear();
             _pendingLinearVelocities.Clear();
-            _physicsContacts.Clear();
+            _pendingImpulses.Clear();
             _occupancyContacts.Clear();
             _sortedBodyIdsBuffer.Clear();
         }
@@ -70,84 +37,56 @@ namespace GameShared.FrameSync.Battle
                 return;
             }
 
-            float positionX = (float)x;
-            float positionY = (float)y;
-            BodyDef bodyDef = new BodyDef
-            {
-                BodyType = BodyType.DynamicBody,
-                Position = new Vector2(positionX, positionY),
-                LinearVelocity = Vector2.Zero,
-                Bullet = true,
-                FixedRotation = true,
-                LinearDamping = 0.0f,
-                AngularDamping = 0.0f,
-                UserData = bodyId
-            };
-            bodyDef.AllowSleep = false;
-            bodyDef.Awake = true;
-            bodyDef.Enabled = true;
-            bodyDef.GravityScale = 0.0f;
-
-            Body body = _world.CreateBody(in bodyDef);
-            CircleShape circleShape = new CircleShape
-            {
-                Position = Vector2.Zero,
-                Radius = (float)PlayerBodyRadius
-            };
-            FixtureDef fixtureDef = new FixtureDef
-            {
-                Shape = circleShape,
-                Density = (float)PlayerDensity,
-                Friction = 0.0f,
-                Restitution = 0.0f,
-                RestitutionThreshold = 0.0f,
-                IsSensor = false,
-                Filter = new Filter
-                {
-                    GroupIndex = PlayerNoPushGroupIndex
-                },
-                UserData = bodyId
-            };
-            body.CreateFixture(fixtureDef);
-            body.UserData = bodyId;
-            _bodies[bodyId] = body;
+            _bodies[bodyId] = new FixedPhysicsBody(x, y);
         }
 
         public void RemoveBody(int bodyId)
         {
-            if (!_bodies.TryGetValue(bodyId, out Body body))
+            if (!_bodies.Remove(bodyId))
             {
                 return;
             }
 
-            _world.DestroyBody(body);
-            _bodies.Remove(bodyId);
             _pendingLinearVelocities.Remove(bodyId);
+            _pendingImpulses.Remove(bodyId);
             RemoveContactsForBody(bodyId);
         }
 
         public void SetBodyTransform(int bodyId, Fixed64 x, Fixed64 y, bool resetVelocity)
         {
             EnsureBody(bodyId, x, y);
-            Body body = _bodies[bodyId];
-            Vector2 position = new Vector2((float)x, (float)y);
-            body.SetTransform(in position, body.GetAngle());
+            FixedPhysicsBody body = _bodies[bodyId];
+            body.PositionX = x;
+            body.PositionY = y;
 
             if (resetVelocity)
             {
-                SetBodyLinearVelocity(body, Vector2.Zero);
-                SetBodyAngularVelocity(body, 0.0f);
+                body.LinearVelocityX = Fixed64.Zero;
+                body.LinearVelocityY = Fixed64.Zero;
+                body.AngularVelocity = Fixed64.Zero;
                 _pendingLinearVelocities.Remove(bodyId);
+                _pendingImpulses.Remove(bodyId);
             }
+
+            _bodies[bodyId] = body;
         }
 
         public void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy)
         {
             NormalizeInput(ref dx, ref dy);
             EnsureBody(bodyId, Fixed64.Zero, Fixed64.Zero);
-            _pendingLinearVelocities[bodyId] = new Vector2(
-                (float)(dx * DeterminismRules.MoveSpeed),
-                (float)(dy * DeterminismRules.MoveSpeed));
+            _pendingLinearVelocities[bodyId] = new FixedPhysicsVector(
+                dx * DeterminismRules.MoveSpeed,
+                dy * DeterminismRules.MoveSpeed);
+        }
+
+        public void ApplyBodyImpulse(int bodyId, Fixed64 impulseX, Fixed64 impulseY)
+        {
+            EnsureBody(bodyId, Fixed64.Zero, Fixed64.Zero);
+            FixedPhysicsVector currentImpulse = GetPendingImpulse(bodyId);
+            _pendingImpulses[bodyId] = new FixedPhysicsVector(
+                currentImpulse.X + impulseX,
+                currentImpulse.Y + impulseY);
         }
 
         public void Step(Fixed64 dt)
@@ -155,80 +94,52 @@ namespace GameShared.FrameSync.Battle
             DeterminismRules.AssertFixedDt(dt);
 
             BuildSortedBodyBuffer();
-            Dictionary<int, Vector2> requestedVelocities = new Dictionary<int, Vector2>(_bodies.Count);
+            Dictionary<int, FixedPhysicsVector> requestedVelocities =
+                new Dictionary<int, FixedPhysicsVector>(_bodies.Count);
             for (int i = 0; i < _sortedBodyIdsBuffer.Count; i++)
             {
                 int bodyId = _sortedBodyIdsBuffer[i];
-                Body body = _bodies[bodyId];
-                Vector2 requestedVelocity = _pendingLinearVelocities.TryGetValue(bodyId, out Vector2 cachedVelocity)
-                    ? cachedVelocity
-                    : Vector2.Zero;
+                FixedPhysicsVector inputVelocity = GetRequestedVelocity(bodyId, _pendingLinearVelocities);
+                FixedPhysicsVector impulse = GetPendingImpulse(bodyId);
+                FixedPhysicsVector requestedVelocity = new FixedPhysicsVector(
+                    inputVelocity.X + impulse.X,
+                    inputVelocity.Y + impulse.Y);
                 requestedVelocities[bodyId] = requestedVelocity;
-                SetBodyLinearVelocity(body, requestedVelocity);
-                SetBodyAngularVelocity(body, 0.0f);
+
+                FixedPhysicsBody body = _bodies[bodyId];
+                body.LinearVelocityX = requestedVelocity.X;
+                body.LinearVelocityY = requestedVelocity.Y;
+                body.AngularVelocity = Fixed64.Zero;
+                if (requestedVelocity.X != Fixed64.Zero || requestedVelocity.Y != Fixed64.Zero)
+                {
+                    body.IsAwake = true;
+                }
+
+                if (body.IsEnabled && body.IsAwake)
+                {
+                    body.PositionX += body.LinearVelocityX * dt;
+                    body.PositionY += body.LinearVelocityY * dt;
+                }
+
+                _bodies[bodyId] = body;
             }
 
-            _world.Step((float)dt, VelocityIterations, PositionIterations);
             ResolvePlayerOccupancy(requestedVelocities);
             ClampPlayersToRoom();
             RebuildOccupancyContacts();
             _pendingLinearVelocities.Clear();
-        }
-
-        private void ClampPlayersToRoom()
-        {
-            for (int i = 0; i < _sortedBodyIdsBuffer.Count; i++)
-            {
-                int bodyId = _sortedBodyIdsBuffer[i];
-                Body body = _bodies[bodyId];
-                Vector2 position = body.GetPosition();
-                float clampedX = Clamp(position.X, GameplayRoomSettings.PlayerMinX, GameplayRoomSettings.PlayerMaxX);
-                float clampedY = Clamp(position.Y, GameplayRoomSettings.PlayerMinY, GameplayRoomSettings.PlayerMaxY);
-                bool touchedHorizontalBoundary = clampedX != position.X;
-                bool touchedVerticalBoundary = clampedY != position.Y;
-
-                if (!touchedHorizontalBoundary && !touchedVerticalBoundary)
-                {
-                    continue;
-                }
-
-                Vector2 clampedPosition = new Vector2(clampedX, clampedY);
-                body.SetTransform(in clampedPosition, body.GetAngle());
-                Vector2 velocity = body.LinearVelocity;
-                if (touchedHorizontalBoundary &&
-                    ((clampedX <= (float)GameplayRoomSettings.PlayerMinX && velocity.X < 0.0f) ||
-                     (clampedX >= (float)GameplayRoomSettings.PlayerMaxX && velocity.X > 0.0f)))
-                {
-                    velocity.X = 0.0f;
-                }
-
-                if (touchedVerticalBoundary &&
-                    ((clampedY <= (float)GameplayRoomSettings.PlayerMinY && velocity.Y < 0.0f) ||
-                     (clampedY >= (float)GameplayRoomSettings.PlayerMaxY && velocity.Y > 0.0f)))
-                {
-                    velocity.Y = 0.0f;
-                }
-
-                SetBodyLinearVelocity(body, velocity);
-            }
-        }
-
-        private static float Clamp(float value, Fixed64 minimum, Fixed64 maximum)
-        {
-            float min = (float)minimum;
-            float max = (float)maximum;
-            return value < min ? min : value > max ? max : value;
+            _pendingImpulses.Clear();
         }
 
         public bool TryGetBodySnapshot(int bodyId, out PhysicsBodySnapshot snapshot)
         {
-            if (!_bodies.TryGetValue(bodyId, out Body body))
+            if (!_bodies.TryGetValue(bodyId, out FixedPhysicsBody body))
             {
                 snapshot = default;
                 return false;
             }
 
-            snapshot = CaptureBodySnapshot(bodyId, body);
+            snapshot = body.ToSnapshot(bodyId);
             return true;
         }
 
@@ -236,14 +147,20 @@ namespace GameShared.FrameSync.Battle
         {
             PhysicsBodySnapshot[] bodies = new PhysicsBodySnapshot[_bodies.Count];
             int index = 0;
-            foreach (KeyValuePair<int, Body> pair in _bodies)
+            foreach (KeyValuePair<int, FixedPhysicsBody> pair in _bodies)
             {
-                bodies[index++] = CaptureBodySnapshot(pair.Key, pair.Value);
+                bodies[index++] = pair.Value.ToSnapshot(pair.Key);
             }
 
             Array.Sort(bodies, PhysicsBodySnapshotComparer.Instance);
 
-            PhysicsContactSnapshot[] contacts = BuildMergedContacts();
+            PhysicsContactSnapshot[] contacts = new PhysicsContactSnapshot[_occupancyContacts.Count];
+            index = 0;
+            foreach (PhysicsContactSnapshot contact in _occupancyContacts.Values)
+            {
+                contacts[index++] = contact;
+            }
+
             Array.Sort(contacts, PhysicsContactSnapshotComparer.Instance);
             return new PhysicsWorldSnapshot(bodies, contacts);
         }
@@ -261,14 +178,7 @@ namespace GameShared.FrameSync.Battle
             for (int i = 0; i < bodies.Count; i++)
             {
                 PhysicsBodySnapshot bodySnapshot = bodies[i];
-                EnsureBody(bodySnapshot.BodyId, bodySnapshot.PositionX, bodySnapshot.PositionY);
-                Body body = _bodies[bodySnapshot.BodyId];
-                Vector2 position = new Vector2((float)bodySnapshot.PositionX, (float)bodySnapshot.PositionY);
-                body.SetTransform(in position, (float)bodySnapshot.RotationRadians);
-                SetBodyLinearVelocity(body, new Vector2((float)bodySnapshot.LinearVelocityX, (float)bodySnapshot.LinearVelocityY));
-                SetBodyAngularVelocity(body, (float)bodySnapshot.AngularVelocity);
-                body.IsAwake = bodySnapshot.IsAwake;
-                body.IsEnabled = bodySnapshot.IsEnabled;
+                _bodies[bodySnapshot.BodyId] = new FixedPhysicsBody(bodySnapshot);
             }
 
             IReadOnlyList<PhysicsContactSnapshot> contacts = snapshot.Contacts;
@@ -279,57 +189,43 @@ namespace GameShared.FrameSync.Battle
             }
         }
 
-        private PhysicsBodySnapshot CaptureBodySnapshot(int bodyId, Body body)
+        private void ClampPlayersToRoom()
         {
-            Vector2 position = body.GetPosition();
-            Vector2 linearVelocity = body.LinearVelocity;
-            return new PhysicsBodySnapshot(
-                bodyId,
-                (Fixed64)position.X,
-                (Fixed64)position.Y,
-                (Fixed64)body.GetAngle(),
-                (Fixed64)linearVelocity.X,
-                (Fixed64)linearVelocity.Y,
-                (Fixed64)body.AngularVelocity,
-                body.IsAwake,
-                body.IsEnabled);
-        }
-
-        private PhysicsContactSnapshot[] BuildMergedContacts()
-        {
-            PhysicsContactSnapshot[] contacts = new PhysicsContactSnapshot[_physicsContacts.Count + _occupancyContacts.Count];
-            int index = 0;
-            foreach (PhysicsContactSnapshot contact in _physicsContacts.Values)
+            for (int i = 0; i < _sortedBodyIdsBuffer.Count; i++)
             {
-                contacts[index++] = contact;
-            }
+                int bodyId = _sortedBodyIdsBuffer[i];
+                FixedPhysicsBody body = _bodies[bodyId];
+                Fixed64 clampedX = Clamp(body.PositionX, GameplayRoomSettings.PlayerMinX, GameplayRoomSettings.PlayerMaxX);
+                Fixed64 clampedY = Clamp(body.PositionY, GameplayRoomSettings.PlayerMinY, GameplayRoomSettings.PlayerMaxY);
+                bool touchedHorizontalBoundary = clampedX != body.PositionX;
+                bool touchedVerticalBoundary = clampedY != body.PositionY;
 
-            foreach (KeyValuePair<ContactKey, PhysicsContactSnapshot> pair in _occupancyContacts)
-            {
-                if (_physicsContacts.ContainsKey(pair.Key))
+                if (!touchedHorizontalBoundary && !touchedVerticalBoundary)
                 {
                     continue;
                 }
 
-                contacts[index++] = pair.Value;
-            }
+                body.PositionX = clampedX;
+                body.PositionY = clampedY;
+                if (touchedHorizontalBoundary &&
+                    ((clampedX <= GameplayRoomSettings.PlayerMinX && body.LinearVelocityX < Fixed64.Zero) ||
+                     (clampedX >= GameplayRoomSettings.PlayerMaxX && body.LinearVelocityX > Fixed64.Zero)))
+                {
+                    body.LinearVelocityX = Fixed64.Zero;
+                }
 
-            if (index == contacts.Length)
-            {
-                return contacts;
-            }
+                if (touchedVerticalBoundary &&
+                    ((clampedY <= GameplayRoomSettings.PlayerMinY && body.LinearVelocityY < Fixed64.Zero) ||
+                     (clampedY >= GameplayRoomSettings.PlayerMaxY && body.LinearVelocityY > Fixed64.Zero)))
+                {
+                    body.LinearVelocityY = Fixed64.Zero;
+                }
 
-            Array.Resize(ref contacts, index);
-            return contacts;
+                _bodies[bodyId] = body;
+            }
         }
 
-        private void RemoveContactsForBody(int bodyId)
-        {
-            RemoveContactsForBody(bodyId, _physicsContacts);
-            RemoveContactsForBody(bodyId, _occupancyContacts);
-        }
-
-        private void ResolvePlayerOccupancy(IReadOnlyDictionary<int, Vector2> requestedVelocities)
+        private void ResolvePlayerOccupancy(IReadOnlyDictionary<int, FixedPhysicsVector> requestedVelocities)
         {
             if (_sortedBodyIdsBuffer.Count <= 1)
             {
@@ -343,51 +239,59 @@ namespace GameShared.FrameSync.Battle
                 for (int i = 0; i < _sortedBodyIdsBuffer.Count - 1; i++)
                 {
                     int bodyAId = _sortedBodyIdsBuffer[i];
-                    Body bodyA = _bodies[bodyAId];
-                    Vector2 positionA = bodyA.GetPosition();
+                    FixedPhysicsBody bodyA = _bodies[bodyAId];
+                    Fixed64 positionAX = bodyA.PositionX;
+                    Fixed64 positionAY = bodyA.PositionY;
 
                     for (int j = i + 1; j < _sortedBodyIdsBuffer.Count; j++)
                     {
                         int bodyBId = _sortedBodyIdsBuffer[j];
-                        Body bodyB = _bodies[bodyBId];
-                        Vector2 positionB = bodyB.GetPosition();
-                        Vector2 delta = positionB - positionA;
-                        float distanceSquared = delta.LengthSquared();
-                        float distance = distanceSquared > (float)OccupancyEpsilon
-                            ? MathF.Sqrt(distanceSquared)
-                            : 0.0f;
-                        float penetration = (float)MinimumPlayerSeparation - distance;
-                        if (penetration <= (float)OccupancyEpsilon)
+                        FixedPhysicsBody bodyB = _bodies[bodyBId];
+                        Fixed64 deltaX = bodyB.PositionX - positionAX;
+                        Fixed64 deltaY = bodyB.PositionY - positionAY;
+                        Fixed64 distanceSquared = (deltaX * deltaX) + (deltaY * deltaY);
+                        Fixed64 distance = distanceSquared > OccupancyEpsilon
+                            ? FixedMath.Sqrt(distanceSquared)
+                            : Fixed64.Zero;
+                        Fixed64 penetration = MinimumPlayerSeparation - distance;
+                        if (penetration <= OccupancyEpsilon)
                         {
                             continue;
                         }
 
-                        Vector2 normal = DetermineSeparationNormal(
+                        DetermineSeparationNormal(
                             bodyAId,
                             bodyBId,
-                            delta,
+                            deltaX,
+                            deltaY,
                             distanceSquared,
-                            requestedVelocities);
+                            requestedVelocities,
+                            out Fixed64 normalX,
+                            out Fixed64 normalY);
                         CalculateSeparationShares(
                             bodyAId,
                             bodyBId,
-                            normal,
+                            normalX,
+                            normalY,
                             penetration,
                             requestedVelocities,
-                            out float moveBodyA,
-                            out float moveBodyB);
+                            out Fixed64 moveBodyA,
+                            out Fixed64 moveBodyB);
 
-                        if (moveBodyA > 0.0f)
+                        if (moveBodyA > Fixed64.Zero)
                         {
-                            Vector2 correctedPositionA = positionA - (normal * moveBodyA);
-                            bodyA.SetTransform(in correctedPositionA, bodyA.GetAngle());
-                            positionA = correctedPositionA;
+                            bodyA.PositionX = positionAX - (normalX * moveBodyA);
+                            bodyA.PositionY = positionAY - (normalY * moveBodyA);
+                            _bodies[bodyAId] = bodyA;
+                            positionAX = bodyA.PositionX;
+                            positionAY = bodyA.PositionY;
                         }
 
-                        if (moveBodyB > 0.0f)
+                        if (moveBodyB > Fixed64.Zero)
                         {
-                            Vector2 correctedPositionB = positionB + (normal * moveBodyB);
-                            bodyB.SetTransform(in correctedPositionB, bodyB.GetAngle());
+                            bodyB.PositionX += normalX * moveBodyB;
+                            bodyB.PositionY += normalY * moveBodyB;
+                            _bodies[bodyBId] = bodyB;
                         }
 
                         resolvedAnyPair = true;
@@ -409,19 +313,20 @@ namespace GameShared.FrameSync.Battle
                 return;
             }
 
-            float contactDistance = (float)(MinimumPlayerSeparation + ContactTolerance);
-            float contactDistanceSquared = contactDistance * contactDistance;
+            Fixed64 contactDistance = MinimumPlayerSeparation + ContactTolerance;
+            Fixed64 contactDistanceSquared = contactDistance * contactDistance;
             for (int i = 0; i < _sortedBodyIdsBuffer.Count - 1; i++)
             {
                 int bodyAId = _sortedBodyIdsBuffer[i];
-                Vector2 positionA = _bodies[bodyAId].GetPosition();
+                FixedPhysicsBody bodyA = _bodies[bodyAId];
 
                 for (int j = i + 1; j < _sortedBodyIdsBuffer.Count; j++)
                 {
                     int bodyBId = _sortedBodyIdsBuffer[j];
-                    Vector2 positionB = _bodies[bodyBId].GetPosition();
-                    Vector2 delta = positionB - positionA;
-                    if (delta.LengthSquared() > contactDistanceSquared)
+                    FixedPhysicsBody bodyB = _bodies[bodyBId];
+                    Fixed64 deltaX = bodyB.PositionX - bodyA.PositionX;
+                    Fixed64 deltaY = bodyB.PositionY - bodyA.PositionY;
+                    if ((deltaX * deltaX) + (deltaY * deltaY) > contactDistanceSquared)
                     {
                         continue;
                     }
@@ -443,51 +348,63 @@ namespace GameShared.FrameSync.Battle
             _sortedBodyIdsBuffer.Sort();
         }
 
-        private static Vector2 DetermineSeparationNormal(
+        private static void DetermineSeparationNormal(
             int bodyAId,
             int bodyBId,
-            Vector2 delta,
-            float distanceSquared,
-            IReadOnlyDictionary<int, Vector2> requestedVelocities)
+            Fixed64 deltaX,
+            Fixed64 deltaY,
+            Fixed64 distanceSquared,
+            IReadOnlyDictionary<int, FixedPhysicsVector> requestedVelocities,
+            out Fixed64 normalX,
+            out Fixed64 normalY)
         {
-            if (distanceSquared > (float)OccupancyEpsilon)
+            if (distanceSquared > OccupancyEpsilon)
             {
-                float inverseDistance = 1.0f / MathF.Sqrt(distanceSquared);
-                return delta * inverseDistance;
+                Fixed64 inverseDistance = Fixed64.One / FixedMath.Sqrt(distanceSquared);
+                normalX = deltaX * inverseDistance;
+                normalY = deltaY * inverseDistance;
+                return;
             }
 
-            Vector2 relativeRequestedVelocity =
-                GetRequestedVelocity(bodyAId, requestedVelocities) - GetRequestedVelocity(bodyBId, requestedVelocities);
-            float relativeVelocitySquared = relativeRequestedVelocity.LengthSquared();
-            if (relativeVelocitySquared > (float)OccupancyEpsilon)
+            FixedPhysicsVector requestedVelocityA = GetRequestedVelocity(bodyAId, requestedVelocities);
+            FixedPhysicsVector requestedVelocityB = GetRequestedVelocity(bodyBId, requestedVelocities);
+            Fixed64 relativeVelocityX = requestedVelocityA.X - requestedVelocityB.X;
+            Fixed64 relativeVelocityY = requestedVelocityA.Y - requestedVelocityB.Y;
+            Fixed64 relativeVelocitySquared =
+                (relativeVelocityX * relativeVelocityX) + (relativeVelocityY * relativeVelocityY);
+            if (relativeVelocitySquared > OccupancyEpsilon)
             {
-                float inverseLength = 1.0f / MathF.Sqrt(relativeVelocitySquared);
-                return relativeRequestedVelocity * inverseLength;
+                Fixed64 inverseLength = Fixed64.One / FixedMath.Sqrt(relativeVelocitySquared);
+                normalX = relativeVelocityX * inverseLength;
+                normalY = relativeVelocityY * inverseLength;
+                return;
             }
 
-            return bodyAId <= bodyBId ? Vector2.UnitX : -Vector2.UnitX;
+            normalX = bodyAId <= bodyBId ? Fixed64.One : -Fixed64.One;
+            normalY = Fixed64.Zero;
         }
 
         private static void CalculateSeparationShares(
             int bodyAId,
             int bodyBId,
-            Vector2 normal,
-            float penetration,
-            IReadOnlyDictionary<int, Vector2> requestedVelocities,
-            out float moveBodyA,
-            out float moveBodyB)
+            Fixed64 normalX,
+            Fixed64 normalY,
+            Fixed64 penetration,
+            IReadOnlyDictionary<int, FixedPhysicsVector> requestedVelocities,
+            out Fixed64 moveBodyA,
+            out Fixed64 moveBodyB)
         {
-            float bodyATowardIntent = GetTowardIntent(bodyAId, normal, requestedVelocities);
-            float bodyBTowardIntent = GetTowardIntent(bodyBId, -normal, requestedVelocities);
-            bool bodyAPushing = bodyATowardIntent > (float)MovementIntentEpsilon;
-            bool bodyBPushing = bodyBTowardIntent > (float)MovementIntentEpsilon;
+            Fixed64 bodyATowardIntent = GetTowardIntent(bodyAId, normalX, normalY, requestedVelocities);
+            Fixed64 bodyBTowardIntent = GetTowardIntent(bodyBId, -normalX, -normalY, requestedVelocities);
+            bool bodyAPushing = bodyATowardIntent > MovementIntentEpsilon;
+            bool bodyBPushing = bodyBTowardIntent > MovementIntentEpsilon;
 
             if (bodyAPushing && bodyBPushing)
             {
-                float totalIntent = bodyATowardIntent + bodyBTowardIntent;
-                if (totalIntent <= (float)MovementIntentEpsilon)
+                Fixed64 totalIntent = bodyATowardIntent + bodyBTowardIntent;
+                if (totalIntent <= MovementIntentEpsilon)
                 {
-                    moveBodyA = penetration * 0.5f;
+                    moveBodyA = penetration * Half;
                     moveBodyB = penetration - moveBodyA;
                     return;
                 }
@@ -500,46 +417,57 @@ namespace GameShared.FrameSync.Battle
             if (bodyAPushing)
             {
                 moveBodyA = penetration;
-                moveBodyB = 0.0f;
+                moveBodyB = Fixed64.Zero;
                 return;
             }
 
             if (bodyBPushing)
             {
-                moveBodyA = 0.0f;
+                moveBodyA = Fixed64.Zero;
                 moveBodyB = penetration;
                 return;
             }
 
-            moveBodyA = penetration * 0.5f;
+            moveBodyA = penetration * Half;
             moveBodyB = penetration - moveBodyA;
         }
 
-        private static float GetTowardIntent(
+        private static Fixed64 GetTowardIntent(
             int bodyId,
-            Vector2 normal,
-            IReadOnlyDictionary<int, Vector2> requestedVelocities)
+            Fixed64 normalX,
+            Fixed64 normalY,
+            IReadOnlyDictionary<int, FixedPhysicsVector> requestedVelocities)
         {
-            Vector2 requestedVelocity = GetRequestedVelocity(bodyId, requestedVelocities);
-            float towardIntent = Vector2.Dot(requestedVelocity, normal);
-            return towardIntent > 0.0f ? towardIntent : 0.0f;
+            FixedPhysicsVector requestedVelocity = GetRequestedVelocity(bodyId, requestedVelocities);
+            Fixed64 towardIntent = (requestedVelocity.X * normalX) + (requestedVelocity.Y * normalY);
+            return towardIntent > Fixed64.Zero ? towardIntent : Fixed64.Zero;
         }
 
-        private static Vector2 GetRequestedVelocity(
+        private static FixedPhysicsVector GetRequestedVelocity(
             int bodyId,
-            IReadOnlyDictionary<int, Vector2> requestedVelocities)
+            IReadOnlyDictionary<int, FixedPhysicsVector> requestedVelocities)
         {
-            return requestedVelocities.TryGetValue(bodyId, out Vector2 requestedVelocity)
+            return requestedVelocities.TryGetValue(bodyId, out FixedPhysicsVector requestedVelocity)
                 ? requestedVelocity
-                : Vector2.Zero;
+                : FixedPhysicsVector.Zero;
         }
 
-        private static void RemoveContactsForBody(
-            int bodyId,
-            Dictionary<ContactKey, PhysicsContactSnapshot> contacts)
+        private FixedPhysicsVector GetPendingImpulse(int bodyId)
+        {
+            return _pendingImpulses.TryGetValue(bodyId, out FixedPhysicsVector impulse)
+                ? impulse
+                : FixedPhysicsVector.Zero;
+        }
+
+        private static Fixed64 Clamp(Fixed64 value, Fixed64 minimum, Fixed64 maximum)
+        {
+            return value < minimum ? minimum : value > maximum ? maximum : value;
+        }
+
+        private void RemoveContactsForBody(int bodyId)
         {
             List<ContactKey> keysToRemove = new List<ContactKey>();
-            foreach (ContactKey key in contacts.Keys)
+            foreach (ContactKey key in _occupancyContacts.Keys)
             {
                 if (key.BodyAId == bodyId || key.BodyBId == bodyId)
                 {
@@ -549,31 +477,21 @@ namespace GameShared.FrameSync.Battle
 
             for (int i = 0; i < keysToRemove.Count; i++)
             {
-                contacts.Remove(keysToRemove[i]);
+                _occupancyContacts.Remove(keysToRemove[i]);
             }
         }
 
         private static void NormalizeInput(ref Fixed64 dx, ref Fixed64 dy)
         {
-            Fixed64 lenSq = dx * dx + dy * dy;
-            if (lenSq <= Fixed64.One)
+            Fixed64 lengthSquared = (dx * dx) + (dy * dy);
+            if (lengthSquared <= Fixed64.One)
             {
                 return;
             }
 
-            Fixed64 invLen = Fixed64.One / FixedMath.Sqrt(lenSq);
-            dx *= invLen;
-            dy *= invLen;
-        }
-
-        private static void SetBodyLinearVelocity(Body body, Vector2 linearVelocity)
-        {
-            BodyLinearVelocityProperty?.SetValue(body, linearVelocity);
-        }
-
-        private static void SetBodyAngularVelocity(Body body, float angularVelocity)
-        {
-            BodyAngularVelocityProperty?.SetValue(body, angularVelocity);
+            Fixed64 inverseLength = Fixed64.One / FixedMath.Sqrt(lengthSquared);
+            dx *= inverseLength;
+            dy *= inverseLength;
         }
 
         private readonly struct ContactKey : IEquatable<ContactKey>
@@ -600,66 +518,16 @@ namespace GameShared.FrameSync.Battle
                 return BodyAId == other.BodyAId && BodyBId == other.BodyBId;
             }
 
-            public override bool Equals(object obj)
+#nullable enable
+            public override bool Equals(object? obj)
             {
                 return obj is ContactKey other && Equals(other);
             }
+#nullable restore
 
             public override int GetHashCode()
             {
                 return HashCode.Combine(BodyAId, BodyBId);
-            }
-        }
-
-        private sealed class ContactListener : IContactListener
-        {
-            private readonly Dictionary<ContactKey, PhysicsContactSnapshot> _contacts;
-
-            public ContactListener(Dictionary<ContactKey, PhysicsContactSnapshot> contacts)
-            {
-                _contacts = contacts;
-            }
-
-            public void BeginContact(Contact contact)
-            {
-                Update(contact, true);
-            }
-
-            public void EndContact(Contact contact)
-            {
-                Update(contact, false);
-            }
-
-            public void PreSolve(Contact contact, in Manifold oldManifold)
-            {
-                Update(contact, contact.IsTouching);
-            }
-
-            public void PostSolve(Contact contact, in ContactImpulse impulse)
-            {
-                Update(contact, contact.IsTouching);
-            }
-
-            private void Update(Contact contact, bool isTouching)
-            {
-                if (contact == null || contact.FixtureA == null || contact.FixtureB == null)
-                {
-                    return;
-                }
-
-                if (contact.FixtureA.Body?.UserData is not int bodyAId || contact.FixtureB.Body?.UserData is not int bodyBId)
-                {
-                    return;
-                }
-
-                ContactKey key = new ContactKey(bodyAId, bodyBId);
-                if (!isTouching)
-                {
-                    _contacts.Remove(key);
-                    return;
-                }
-
-                _contacts[key] = new PhysicsContactSnapshot(key.BodyAId, key.BodyBId, true);
             }
         }
 

@@ -39,6 +39,7 @@ namespace GameLogic
         protected override void RegisterEvent()
         {
             AddUIEvent(IBattleUI_Event.OnBandwidthStatsUpdated, Refresh);
+            AddUIEvent(IBattleUI_Event.OnPredictionErrorUpdated, Refresh);
         }
 
         protected override void OnRefresh()
@@ -57,10 +58,20 @@ namespace GameLogic
                 return;
             }
 
+            string predictionSummary = "预测误差等待同步";
+            string rollbackSummary = "回滚 0 次 · 最近帧 —";
+            if (_controller.HasPredictionError)
+            {
+                BattleClientController.PredictionErrorSnapshot prediction = _controller.LatestPredictionError;
+                predictionSummary =
+                    $"误差 {prediction.LastCorrectionMagnitude:F3} | 平滑 {prediction.SmoothingRemainingSeconds * 1000.0f:F0}ms";
+                rollbackSummary = $"回滚 {prediction.RollbackCount} 次 · 最近帧 {prediction.LastRollbackFrame}";
+            }
+
             if (!_controller.HasBandwidthStats)
             {
-                m_textMeta.text = "等待数据...";
-                m_textResult.text = "尚未收到服务端上报（每 10 秒一次）";
+                m_textMeta.text = predictionSummary;
+                m_textResult.text = rollbackSummary + "\n尚未收到服务端带宽上报（每 10 秒一次）";
                 return;
             }
 
@@ -68,21 +79,25 @@ namespace GameLogic
 
             if (!s.MeasureFullSyncBaseline)
             {
-                m_textMeta.text = $"frame {s.FrameIndex} · 未开启对照测量";
-                m_textResult.text = "需在服务端设置环境变量\nBATTLE_BANDWIDTH_FULLSYNC_BASELINE=1\n才能计算节省量";
+                m_textMeta.text = predictionSummary;
+                m_textResult.text =
+                    rollbackSummary + "\n" +
+                    $"frame {s.FrameIndex} · 未开启带宽对照测量\n" +
+                    "BATTLE_BANDWIDTH_FULLSYNC_BASELINE=1";
                 return;
             }
 
             if (!s.HasSamples || s.FullSyncPayloadBytes <= 0)
             {
-                m_textMeta.text = $"frame {s.FrameIndex} · 本窗口无样本";
-                m_textResult.text = "—";
+                m_textMeta.text = predictionSummary;
+                m_textResult.text = rollbackSummary + $"\nframe {s.FrameIndex} · 带宽窗口无样本";
                 return;
             }
 
-            m_textMeta.text = $"frame {s.FrameIndex}";
+            m_textMeta.text = predictionSummary;
             m_textResult.text =
-                $"节省 {s.DirtySyncSavedRatio:F1}%\n" +
+                rollbackSummary + "\n" +
+                $"frame {s.FrameIndex} · 带宽节省 {s.DirtySyncSavedRatio:F1}%\n" +
                 $"全量 {s.FullSyncPayloadBytes} B → 实际 {s.ActualPayloadBytes} B\n" +
                 $"（省 {s.DirtySyncSavedBytes} B）";
         }

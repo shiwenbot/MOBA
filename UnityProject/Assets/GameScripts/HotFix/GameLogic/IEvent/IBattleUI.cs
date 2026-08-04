@@ -11,5 +11,8 @@ namespace GameLogic
     {
         /// <summary>服务端带宽统计上报到达（每 10 秒一次，对应服务端报告窗口）。</summary>
         void OnBandwidthStatsUpdated();
+
+        /// <summary>预测误差渲染状态更新。</summary>
+        void OnPredictionErrorUpdated();
     }
 }
