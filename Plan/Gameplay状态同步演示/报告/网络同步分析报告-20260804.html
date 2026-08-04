@@ -357,7 +357,7 @@
 <p><code>BattleLogic.GetStateHash()</code> 构建完整的 <code>BattleWorldSnapshot</code> 后交给 <code>StateHasher</code>。哈希用于测试框架对比服务端与客户端是否收敛到同一状态。</p>
 </section>
 
-<!-- ===================== S4 ===================== -->
+<!-- ===================== S5 ===================== -->
 <section id="s4">
 <h2><span class="num">4</span>客户端预测与回滚</h2>
 
@@ -471,7 +471,7 @@
 <p>客户端<strong>只预测自己的玩家</strong>。其他玩家的状态直接从权威快照取，不做本地预测。这让回滚成本只与自己的领先深度成正比（通常 3-20 帧），而非全场玩家数。</p>
 </section>
 
-<!-- ===================== S5 ===================== -->
+<!-- ===================== S6 ===================== -->
 <section id="s5">
 <h2><span class="num">5</span>网络协议</h2>
 
@@ -536,7 +536,7 @@ simulation.SetJoined(playerId, x, y, serverFrameIndex);
 // → 本地帧号对齐到服务端当前帧</code></pre>
 </section>
 
-<!-- ===================== S6 ===================== -->
+<!-- ===================== S7 ===================== -->
 <section id="s6">
 <h2><span class="num">6</span>确定性保证</h2>
 
@@ -612,7 +612,7 @@ simulation.SetJoined(playerId, x, y, serverFrameIndex);
 </div>
 </section>
 
-<!-- ===================== S7 ===================== -->
+<!-- ===================== S4 ===================== -->
 <section id="s7">
 <h2><span class="num">7</span>带宽优化</h2>
 
@@ -715,7 +715,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 </ul>
 
 <div class="callout danger">
-  <strong>待补缺口（S4）</strong>：目前 <code>C2B_PingHandler</code> 只回显时间戳，<strong>服务端不记录不计算 RTT</strong>。"服务端用 RTT 反推应然帧号"的能力尚不存在。注意不能让客户端上报自算的 RTT——那会变成"用客户端声称的 RTT 验证客户端"，反外挂价值归零。必须服务端独立测量。
+  <strong>待补缺口（S5）</strong>：目前 <code>C2B_PingHandler</code> 只回显时间戳，<strong>服务端不记录不计算 RTT</strong>。"服务端用 RTT 反推应然帧号"的能力尚不存在。注意不能让客户端上报自算的 RTT——那会变成"用客户端声称的 RTT 验证客户端"，反外挂价值归零。必须服务端独立测量。
 </div>
 </section>
 
@@ -853,18 +853,18 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
     <p style="font-size:13px"><strong>缺前置</strong>：服务端需新增历史哈希索引（<code>BattleLogic.GetStateHash()</code> 目前只能算最新帧）。客户端侧 <code>CheckConsistency</code> 已按帧号索引就绪。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S4 输入帧号 RTT 交叉校验 <span class="pill todo">未开始</span></h4>
+    <h4>S5 输入帧号 RTT 交叉校验 <span class="pill todo">未开始</span></h4>
     <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S5 一致时跳过重放 <span class="pill todo">部分实现</span></h4>
+    <h4>S6 一致时跳过重放 <span class="pill todo">部分实现</span></h4>
     <p style="font-size:13px">一致路径下计时和日志已跳过，但 <code>ApplyAuthoritativeSnapshot()</code> + 重放仍在跑，有真实 CPU 可省。注意不能整体 return——<code>_authoritativeSnapshots.Save()</code> 和 <code>DiscardPredictionsAtOrAfter()</code> 必须保留（S3 依赖）。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S6 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
+    <h4>S7 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
   </div>
   <div class="tl-item todo">
-    <h4>S7 弱网自动化测试 <span class="pill todo">未开始</span></h4>
+    <h4>S4 弱网自动化测试 <span class="pill todo">未开始</span></h4>
     <p style="font-size:13px">延迟 / 抖动 / 丢包场景自动化。</p>
   </div>
   <div class="tl-item todo">
@@ -880,7 +880,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 </div>
 
 <div class="callout">
-  <strong>已取消</strong>：<code>P3</code> 占点交互（进度条看不出同步难点，改由 S6 撞击击退承担职责）；<code>#6</code> epsilon 豁免（S2 全定点后浮点噪声消失，整项作废）。
+  <strong>已取消</strong>：<code>P3</code> 占点交互（进度条看不出同步难点，改由 S7 撞击击退承担职责）；<code>#6</code> epsilon 豁免（S2 全定点后浮点噪声消失，整项作废）。
 </div>
 </section>
 
@@ -934,7 +934,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 <h3>需要关注的缺口</h3>
 <table>
 <tr><th>缺口</th><th>影响</th><th>对应阶段</th></tr>
-<tr><td>服务端无 RTT 测量</td><td>S4 无法做帧号交叉校验，反外挂能力缺失</td><td>S4</td></tr>
+<tr><td>服务端无 RTT 测量</td><td>S5 无法做帧号交叉校验，反外挂能力缺失</td><td>S5</td></tr>
 <tr><td>服务端无历史哈希索引</td><td>S3 无法对比客户端上报的延迟哈希</td><td>S3</td></tr>
 <tr><td>输入逐帧不批量</td><td>上行 30 msg/s，弱网下消息开销大</td><td>—</td></tr>
 <tr><td>断线重连未实现</td><td>掉线即出局，演示容错性不足</td><td>S8</td></tr>

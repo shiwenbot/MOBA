@@ -750,7 +750,7 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <div class="card warn">
 <span class="tag t-warn">编号已统一（2026-08-03）</span>
 <p>下表的 <code>#1~#10</code> 已并入<strong>单轴 S 编号</strong>，权威表见 <code>00-总索引.md</code>。本表保留原编号仅为追溯来源。对照：</p>
-<p><code>#4</code> = <strong>S1</strong>（误差平滑）· <code>#5</code> = <strong>S3</strong>（哈希上报）· <code>#7</code> = <strong>S4</strong>（RTT 校验）· <code>#8</code> = <strong>S5</strong>（跳过重放）· <code>#9</code> = <strong>S7</strong>（弱网自动化）· <code>#10</code> = <strong>S8</strong>（断线重连）</p>
+<p><code>#4</code> = <strong>S1</strong>（误差平滑）· <code>#5</code> = <strong>S3</strong>（哈希上报）· <code>#7</code> = <strong>S5</strong>（RTT 校验）· <code>#8</code> = <strong>S6</strong>（跳过重放）· <code>#9</code> = <strong>S4</strong>（弱网自动化）· <code>#10</code> = <strong>S8</strong>（断线重连）</p>
 <p><code>#1</code> <code>#2</code> <code>#3</code> 已完成保留历史标签。<code>#6</code>（epsilon）<strong>已废止不占 S 号</strong> —— S2 全定点后无浮点噪声。原本无编号的<strong>物理层重写现为 S2</strong>，计划已补。</p>
 </div>
 
@@ -824,12 +824,12 @@ Assert( frac > 0 && frac < 1 );   // should never extrapolate</code></pre>
 <ol>
 <li><strong>S1 误差平滑</strong>（半天，原 <code>#4</code>）—— <strong>下一项，计划已就绪</strong>。落地要点：偏移量只作用于渲染层，不得写入 <code>BattleWorldState</code>，避免污染哈希与确定性。</li>
 <li><strong>S2 物理层重写</strong>（1-2 天，2026-08-03 新增决策，<strong>原本无编号</strong>）—— 拿掉 Box2D 改手写定点物理，<strong>计划已补</strong>。与 <code>#6</code>（epsilon 判定）互动：全定点后 float 容差问题<strong>整体消失</strong>，故 <code>#6</code> 已废止不占 S 号。</li>
-<li><strong>S3 / S4 / S5</strong>（各半天，原 <code>#5</code> / <code>#7</code> / <code>#8</code>）—— 哈希上报、RTT 校验、跳过重放。</li>
-<li><strong>S6</strong>（原 <code>P2</code>）—— Dash / 体力 / Recover / 撞击击退。</li>
-<li>再考虑 <strong>S7</strong> 弱网自动化（原 <code>#9</code>）/ <strong>S8</strong> 断线重连（原 <code>#10</code>）。</li>
+<li><strong>S3 / S5 / S6</strong>（各半天，原 <code>#5</code> / <code>#7</code> / <code>#8</code>）—— 哈希上报、RTT 校验、跳过重放。</li>
+<li><strong>S7</strong>（原 <code>P2</code>）—— Dash / 体力 / Recover / 撞击击退。</li>
+<li>再考虑 <strong>S4</strong> 弱网自动化（原 <code>#9</code>）/ <strong>S8</strong> 断线重连（原 <code>#10</code>）。</li>
 <li>最后 <strong>S9</strong> 远端插值+轨迹线+完整面板（原 P4 后半）、<strong>S10</strong> 求职打磨（原 <code>P5</code>）。</li>
 </ol>
-<p><strong>S6 范围调整（2026-08-03）</strong>：原判断「P2/P3 边际价值低于架构缺口」保留，但 S6（原 P2）范围已重定为<strong>移动 + Dash（体力/Recover）+ 撞击击退</strong>，<strong>占点（原 P3）取消且不占 S 号</strong>。理由：Dash 用于制造可讲解的 mismatch（资源门禁 + 状态机），击退作为<strong>故意不预测</strong>的对照项用来说清"什么该预测、什么不该"——这比多做一个 gameplay 功能有价值。占点本质是进度条，画面上看不出同步难点。</p>
+<p><strong>S7 范围调整（2026-08-03）</strong>：原判断「P2/P3 边际价值低于架构缺口」保留，但 S7（原 P2）范围已重定为<strong>移动 + Dash（体力/Recover）+ 撞击击退</strong>，<strong>占点（原 P3）取消且不占 S 号</strong>。理由：Dash 用于制造可讲解的 mismatch（资源门禁 + 状态机），击退作为<strong>故意不预测</strong>的对照项用来说清"什么该预测、什么不该"——这比多做一个 gameplay 功能有价值。占点本质是进度条，画面上看不出同步难点。</p>
 </div>
 
 <div class="card warn">
