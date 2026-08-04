@@ -492,7 +492,12 @@ namespace GameLogic
                 AdvancePredictionTo(replayTargetFrame, fixedDt);
             }
 
-            CapturePredictionErrorAfterReconciliation();
+            // Matching authoritative snapshots must not re-baseline the current
+            // render offset; otherwise each snapshot restarts the smoothing timer.
+            if (logRollback)
+            {
+                CapturePredictionErrorAfterReconciliation();
+            }
 
             if (!logRollback)
             {

@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeDoBest 物理层详解 · 手写定点物理</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e2230; --border:#2a2f3d;
+    --text:#d7dde8; --muted:#8a93a6; --accent:#5b9dff; --accent2:#7c5cff;
+    --green:#4ade80; --yellow:#fbbf24; --red:#f87171; --cyan:#22d3ee; --orange:#fb923c;
+    --code-bg:#0c0e14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7;font-size:15px;}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 24px 80px;}
+  .hero{background:linear-gradient(135deg,#1a2e3a 0%,#1b4e3a 100%);padding:56px 24px 48px;margin-bottom:40px;
+    border-bottom:1px solid var(--border);position:relative;overflow:hidden;}
+  .hero::after{content:"";position:absolute;inset:0;
+    background:radial-gradient(circle at 80% 20%,rgba(74,222,128,.2),transparent 50%),
+               radial-gradient(circle at 20% 80%,rgba(91,157,255,.18),transparent 50%);pointer-events:none;}
+  .hero-inner{max-width:1200px;margin:0 auto;position:relative;z-index:1;}
+  .hero .eyebrow{color:var(--green);font-size:13px;letter-spacing:2px;text-transform:uppercase;font-weight:600;}
+  .hero h1{font-size:38px;margin:10px 0 12px;font-weight:800;line-height:1.25;
+    background:linear-gradient(90deg,#fff,#a5ffc8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+  .hero .sub{color:#c3dceb;font-size:16px;max-width:780px;}
+  .hero .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px;}
+  .hero .meta span{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+    padding:5px 13px;border-radius:20px;font-size:12.5px;color:#c3dceb;}
+  nav.toc{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:40px;}
+  nav.toc h3{margin:0 0 12px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+  nav.toc ol{margin:0;padding-left:20px;columns:2;column-gap:40px;}
+  nav.toc a{color:var(--accent);text-decoration:none;font-size:14px;}
+  nav.toc a:hover{text-decoration:underline;}
+  section{margin-bottom:44px;scroll-margin-top:20px;}
+  h2{font-size:25px;margin:0 0 6px;padding-bottom:10px;border-bottom:2px solid var(--border);
+    display:flex;align-items:center;gap:10px;}
+  h2 .num{background:linear-gradient(135deg,var(--green),var(--accent));color:#fff;
+    width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700;flex-shrink:0;}
+  h3{font-size:19px;margin:28px 0 12px;color:#e4e9f3;border-left:3px solid var(--green);padding-left:12px;}
+  h4{font-size:16px;margin:22px 0 10px;color:#cfd6e4;}
+  p{margin:10px 0;}
+  .grid{display:grid;gap:16px;margin:18px 0;}
+  .grid-2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));}
+  .grid-3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;}
+  .card h4{margin-top:0;}
+  .card .tag{display:inline-block;font-size:11px;padding:2px 9px;border-radius:10px;
+    background:rgba(91,157,255,.15);color:var(--accent);margin-bottom:8px;font-weight:600;}
+  .card .tag.green{background:rgba(74,222,128,.14);color:var(--green);}
+  .card .tag.yellow{background:rgba(251,191,36,.14);color:var(--yellow);}
+  .card .tag.red{background:rgba(248,113,113,.14);color:var(--red);}
+  .card .tag.cyan{background:rgba(34,211,238,.14);color:var(--cyan);}
+  .card .tag.orange{background:rgba(251,146,60,.14);color:var(--orange);}
+  .callout{border-radius:10px;padding:14px 18px;margin:16px 0;border-left:4px solid var(--green);
+    background:rgba(74,222,128,.07);}
+  .callout.warn{border-left-color:var(--yellow);background:rgba(251,191,36,.07);}
+  .callout.danger{border-left-color:var(--red);background:rgba(248,113,113,.07);}
+  .callout.info{border-left-color:var(--accent);background:rgba(91,157,255,.07);}
+  .callout strong{color:#fff;}
+  pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;overflow-x:auto;margin:14px 0;font-size:13px;line-height:1.55;}
+  code{font-family:"JetBrains Mono","Fira Code",Consolas,"Courier New",monospace;}
+  :not(pre)>code{background:var(--code-bg);border:1px solid var(--border);padding:2px 6px;
+    border-radius:5px;font-size:13px;color:var(--cyan);}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+  th{background:var(--panel2);text-align:left;padding:11px 14px;color:#e4e9f3;font-weight:600;
+    border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:rgba(74,222,128,.04);}
+  td code{font-size:12.5px;}
+  .step-flow{counter-reset:step;margin:20px 0;}
+  .step-item{position:relative;padding:16px 18px 16px 60px;background:var(--panel);
+    border:1px solid var(--border);border-radius:10px;margin-bottom:10px;}
+  .step-item::before{counter-increment:step;content:counter(step);position:absolute;left:14px;top:16px;
+    width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--green),var(--accent));
+    color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;}
+  .step-item h4{margin:0 0 6px;}
+  .compare{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:18px 0;border:1px solid var(--border);
+    border-radius:10px;overflow:hidden;}
+  .compare>div{padding:16px 18px;}
+  .compare>div:first-child{border-right:1px solid var(--border);}
+  .compare h5{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;}
+  .compare .bad h5{color:var(--red);}
+  .compare .good h5{color:var(--green);}
+  .compare .bad{background:rgba(248,113,113,.05);}
+  .compare .good{background:rgba(74,222,128,.05);}
+  .ascii{font-family:monospace;background:var(--code-bg);border:1px solid var(--border);
+    border-radius:10px;padding:18px;font-size:13px;line-height:1.5;color:var(--text);overflow-x:auto;margin:14px 0;}
+  .kv{display:grid;grid-template-columns:220px 1fr;gap:6px 16px;margin:12px 0;font-size:13.5px;}
+  .kv dt{color:var(--muted);}
+  .kv dd{margin:0;}
+  .foot{margin-top:60px;padding-top:24px;border-top:1px solid var(--border);color:var(--muted);font-size:13px;}
+  @media(max-width:720px){
+    .hero h1{font-size:28px;}nav.toc ol{columns:1;}
+    .grid-2,.grid-3{grid-template-columns:1fr;}.kv{grid-template-columns:1fr;}
+    .compare{grid-template-columns:1fr;}.compare>div:first-child{border-right:none;border-bottom:1px solid var(--border);}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">Physics Deep Dive · 物理层专题</div>
+    <h1>物理层详解 · 手写定点物理</h1>
+    <p class="sub">S2 移除 Box2D 后的唯一物理方案：一个 555 行的 <code>FrameSyncPhysicsWorld</code>，全定点、bit-exact、无浮点噪声。移动积分、占用分离、边界 clamp 的完整剖析。</p>
+    <div class="meta">
+      <span>📅 2026-08-04</span>
+      <span>📁 FrameSyncPhysicsWorld.cs · 555 行</span>
+      <span>🔢 Fixed64 定点数</span>
+      <span>⚡ 4 次迭代占用解析</span>
+      <span>🎯 黄金哈希 0xD2120B5F0F5A5FE5</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <h3>目录</h3>
+  <ol>
+    <li><a href="#s1">为什么不用 Box2D</a></li>
+    <li><a href="#s2">数据结构</a></li>
+    <li><a href="#s3">Step 三段式流程</a></li>
+    <li><a href="#s4">移动积分</a></li>
+    <li><a href="#s5">占用分离（核心）</a></li>
+    <li><a href="#s6">"谁推谁"份额分配</a></li>
+    <li><a href="#s7">完全重叠兜底</a></li>
+    <li><a href="#s8">房间边界 clamp</a></li>
+    <li><a href="#s9">定点 epsilon</a></li>
+    <li><a href="#s10">确定性保障</a></li>
+    <li><a href="#s11">快照与回滚</a></li>
+    <li><a href="#s12">设计权衡总结</a></li>
+  </ol>
+</nav>
+
+<!-- ===================== S1 ===================== -->
+<section id="s1">
+<h2><span class="num">1</span>为什么不用 Box2D</h2>
+
+<p>在讲实现之前，先理解 S2（commit <code>9be6e989</code>）为什么要移除 Box2D。这不是"换一个更好的物理引擎"，而是<strong>"承认物理引擎是个累赘，把一直在干活的代码扶正"</strong>。</p>
+
+<div class="compare">
+  <div class="bad">
+    <h5>❌ 之前：两套物理并存</h5>
+    <pre style="margin:0;font-size:12px"><code>Box2DSharp
+  ├─ 挂在项目里，占 DLL
+  ├─ 所有 fixture GroupIndex = -1
+  ├─ → 全场不产生 Contact
+  ├─ → 求解器空转
+  └─ 但背着 WarmStarting 等
+     跨帧隐藏状态（确定性隐患）
+
+FrameSyncPhysicsWorld  ← 真正干活的
+  ├─ 圆-圆分离（手写）
+  ├─ 圆-矩形边界（手写）
+  └─ 从一开始就在跑</code></pre>
+  </div>
+  <div class="good">
+    <h5>✅ 现在：单一物理方案</h5>
+    <pre style="margin:0;font-size:12px"><code>FrameSyncPhysicsWorld  ← 唯一
+  ├─ 全定点（Fixed64）
+  ├─ 跨端 bit-exact
+  ├─ 无浮点噪声
+  ├─ 无隐藏跨帧状态
+  └─ 555 行，可完全掌控
+
+Box2DSharp
+  └─ DLL 引用已从 csproj 删除
+     （grep box2d 源码零命中）</code></pre>
+  </div>
+</div>
+
+<div class="callout danger">
+  <strong>Box2D 的致命问题不是性能，是确定性</strong>。Box2D 的 <code>WarmStarting</code> 会把上一帧的冲量缓存到这一帧复用——这是浮点值，跨端/跨平台无法保证 bit-exact。一旦开启，任何 1 ULP 的差异都会被客户端的 bit-exact 校验放大成"永久回滚"。所以项目在 <code>0bb9a468</code> 先关闭了它，S2 直接连根拔除。
+</div>
+
+<p class="muted" style="font-size:13px">一句话：物理层追求的不是"物理真实"，而是"<strong>可快照、可哈希、可回滚、跨端一致</strong>"。Box2D 太重、太黑盒，手写定点反而更可控。</p>
+</section>
+
+<!-- ===================== S2 ===================== -->
+<section id="s2">
+<h2><span class="num">2</span>数据结构</h2>
+
+<p><code>FrameSyncPhysicsWorld</code> 内部用 4 个字典 + 1 个有序列表管理所有状态：</p>
+
+<table>
+<tr><th>字段</th><th>类型</th><th>作用</th></tr>
+<tr><td><code>_bodies</code></td><td>Dictionary&lt;int, FixedPhysicsBody&gt;</td><td>所有物理体。key 是 bodyId（= playerId），value 是位置/速度/状态</td></tr>
+<tr><td><code>_pendingLinearVelocities</code></td><td>Dictionary&lt;int, FixedPhysicsVector&gt;</td><td><strong>本帧待应用的移动输入</strong>（玩家移动意图）</td></tr>
+<tr><td><code>_pendingImpulses</code></td><td>Dictionary&lt;int, FixedPhysicsVector&gt;</td><td><strong>本帧待应用的冲量</strong>（撞击击退）</td></tr>
+<tr><td><code>_occupancyContacts</code></td><td>Dictionary&lt;ContactKey, PhysicsContactSnapshot&gt;</td><td>当前正在接触的玩家对（用于快照/哈希）</td></tr>
+<tr><td><code>_sortedBodyIdsBuffer</code></td><td>List&lt;int&gt;</td><td><strong>排序后的 bodyId 缓冲</strong>——所有迭代都基于它</td></tr>
+</table>
+
+<h3>FixedPhysicsBody —— 单个物理体</h3>
+<pre><code>internal struct FixedPhysicsBody
+{
+    public Fixed64 PositionX, PositionY;      // 位置
+    public Fixed64 RotationRadians;           // 旋转（目前恒为 0，俯视角不需要）
+    public Fixed64 LinearVelocityX, Y;        // 线速度
+    public Fixed64 AngularVelocity;           // 角速度（目前恒为 0）
+    public bool IsAwake;                       // 是否活跃
+    public bool IsEnabled;                     // 是否启用
+}</code></pre>
+
+<div class="callout warn">
+  <strong>注意</strong>：<code>RotationRadians</code> 和 <code>AngularVelocity</code> 字段虽然存在，但代码里<strong>永远被设为 0</code></strong>（<code>Step</code> 里 <code>body.AngularVelocity = Fixed64.Zero</code>）。这是俯视角小球的设定——只有平移，没有旋转。保留字段是为了快照结构兼容和未来扩展。
+</div>
+
+<h3>ContactKey —— 接触对的规范化</h3>
+<pre><code>private readonly struct ContactKey
+{
+    public ContactKey(int bodyAId, int bodyBId)
+    {
+        // ★ 永远把较小的 ID 放前面——规范化
+        if (bodyAId <= bodyBId) { BodyAId = bodyAId; BodyBId = bodyBId; }
+        else                    { BodyAId = bodyBId; BodyBId = bodyAId; }
+    }
+}</code></pre>
+<p>这样 (玩家1, 玩家2) 和 (玩家2, 玩家1) 会被当作同一个接触，避免重复。这是确定性的基础——同一对接触在不同端必须生成相同的 key。</p>
+</section>
+
+<!-- ===================== S3 ===================== -->
+<section id="s3">
+<h2><span class="num">3</span>Step 三段式流程</h2>
+
+<p><code>Step(Fixed64 dt)</code>（<code>:92-132</code>）是物理层的入口，每帧由 <code>BattleLogic.Tick</code> 调用一次。它做三件事，<strong>顺序不能变</strong>：</p>
+
+<div class="step-flow">
+  <div class="step-item">
+    <h4>① 移动积分（Movement Integration）</h4>
+    <p>遍历所有 body，把 <code>_pendingLinearVelocities</code>（移动输入）+ <code>_pendingImpulses</code>（冲量）合并成请求速度，写入 body 速度，然后 <code>position += velocity * dt</code>。<strong>此时玩家可能已经穿进墙里、穿进别人身体里。</strong></p>
+  </div>
+  <div class="step-item">
+    <h4>② 占用分离（Occupancy Resolution）</h4>
+    <p>检测所有玩家两两之间的穿透，把互相重叠的玩家沿法线推开。<strong>迭代 4 次</strong>保证收敛。这一步处理后，玩家之间不再重叠。</p>
+  </div>
+  <div class="step-item">
+    <h4>③ 房间边界 Clamp</h4>
+    <p>把所有玩家的位置钳制到房间边界内。如果撞墙，清零往墙里钻的速度分量。<strong>放在最后</strong>，因为占用分离可能把人推过墙。</p>
+  </div>
+  <div class="step-item">
+    <h4>④ 收尾</h4>
+    <p><code>RebuildOccupancyContacts</code> 重建当前接触列表（供快照/哈希用），清空 <code>_pendingLinearVelocities</code> 和 <code>_pendingImpulses</code>（一帧一清）。</p>
+  </div>
+</div>
+
+<h3>为什么是这个顺序？</h3>
+<div class="grid grid-3">
+  <div class="card">
+    <span class="tag">积分在前</span>
+    <p style="font-size:13px">必须先让玩家"移动到新位置"，分离和 clamp 才有东西可以处理。先算出"想去哪"，再修正"能不能去"。</p>
+  </div>
+  <div class="card">
+    <span class="tag yellow">分离在中</span>
+    <p style="font-size:13px">分离可能把玩家<strong>推到墙外</strong>（比如被另一个玩家挤过去）。所以分离必须在 clamp 之前。</p>
+  </div>
+  <div class="card">
+    <span class="tag cyan">Clamp 在后</span>
+    <p style="font-size:13px">作为最终防线——不管前面怎么动，最后一定能把人拉回房间内。这是<strong>硬保证</strong>。</p>
+  </div>
+</div>
+</section>
+
+<!-- ===================== S4 ===================== -->
+<section id="s4">
+<h2><span class="num">4</span>移动积分</h2>
+
+<p>第一步积分（<code>:96-125</code>）的细节：</p>
+
+<h3>4.1 先排序再迭代</h3>
+<pre><code>BuildSortedBodyBuffer();   // _sortedBodyIdsBuffer.Clear() → 加全部 key → Sort()</code></pre>
+<p><strong>每次 Step 开头都重新排序</strong>。因为 <code>_bodies</code> 是 Dictionary，迭代顺序在 .NET 不同版本/平台间不保证一致。排序后用确定性的 bodyId 顺序迭代，是跨端 bit-exact 的前提。</p>
+
+<h3>4.2 速度合成</h3>
+<pre><code>// 每个 body 的请求速度 = 移动输入 + 冲量
+FixedPhysicsVector inputVelocity = GetRequestedVelocity(bodyId, _pendingLinearVelocities);
+FixedPhysicsVector impulse = GetPendingImpulse(bodyId);
+FixedPhysicsVector requestedVelocity = inputVelocity + impulse;
+
+body.LinearVelocityX = requestedVelocity.X;
+body.LinearVelocityY = requestedVelocity.Y;</code></pre>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h4>移动输入（LinearVelocity）</h4>
+    <p style="font-size:13px">来自 <code>SetBodyMovementInput(bodyId, dx, dy)</code>，由 <code>MoveSystem.Apply</code> 调用。值 = <code>归一化的(dx,dy) × MoveSpeed(5)</code>。这是玩家"WASD 想往哪走"。</p>
+  </div>
+  <div class="card">
+    <h4>冲量（Impulse）</h4>
+    <p style="font-size:13px">来自 <code>ApplyBodyImpulse(bodyId, ix, iy)</code>，用于<strong>撞击击退</strong>。可以叠加（<code>currentImpulse + newImpulse</code>）。这是"被别人撞飞"。</p>
+  </div>
+</div>
+
+<h3>4.3 位置更新</h3>
+<pre><code>if (body.IsEnabled && body.IsAwake)
+{
+    body.PositionX += body.LinearVelocityX * dt;   // dt = 1/30 Fixed64
+    body.PositionY += body.LinearVelocityY * dt;
+}</code></pre>
+
+<div class="callout info">
+  <strong>IsAwake 的作用</strong>：如果请求速度非零，置 <code>IsAwake = true</code>（<code>:113-116</code>）。静止的 body（<code>IsAwake = false</code> 或 <code>IsEnabled = false</code>）不更新位置。这是一种简单的"休眠"优化，但更重要的是——<strong>它影响状态哈希</strong>，所以必须确定性维护。
+</div>
+
+<h3>4.4 输入归一化</h3>
+<p><code>SetBodyMovementInput</code> 会先调用 <code>NormalizeInput</code>（<code>:484-495</code>）：</p>
+<pre><code>private static void NormalizeInput(ref Fixed64 dx, ref Fixed64 dy)
+{
+    Fixed64 lengthSquared = (dx * dx) + (dy * dy);
+    if (lengthSquared <= Fixed64.One) return;   // 向量长度 ≤ 1，不归一化
+    Fixed64 inverseLength = Fixed64.One / FixedMath.Sqrt(lengthSquared);
+    dx *= inverseLength;
+    dy *= inverseLength;
+}</code></pre>
+<p>只有当输入向量长度<strong>超过 1</strong>才归一化。这保证了斜向移动（如 dx=1, dy=1）不会比直线快——对角线的长度 √2 会被压回 1。</p>
+</section>
+
+<!-- ===================== S5 ===================== -->
+<section id="s5">
+<h2><span class="num">5</span>占用分离（核心）</h2>
+
+<p><code>ResolvePlayerOccupancy</code>（<code>:228-306</code>）是物理层最精巧的部分。它处理"两个玩家挤在一起"的情况——不是弹开，而是<strong>谁在推就推谁，都不推就对半分</strong>。</p>
+
+<h3>5.1 算法骨架</h3>
+<pre><code>for (iteration = 0; iteration < 4; iteration++)        // ★ 外层：最多迭代 4 次
+{
+    bool resolvedAnyPair = false;
+    for (i = 0; i < N-1; i++)                            // 两两组合
+        for (j = i+1; j < N; j++)
+        {
+            // 1. 算两球距离
+            // 2. 算穿透量 = 最小分离距离(2R) - 距离
+            // 3. 如果没穿透 → continue
+            // 4. 算分离法线方向
+            // 5. 算各自要推多少份额
+            // 6. 推开两个 body
+            resolvedAnyPair = true;
+        }
+
+    if (!resolvedAnyPair) break;                         // 本轮没发现任何穿透 → 提前退出
+}</code></pre>
+
+<h3>5.2 为什么需要多次迭代？</h3>
+<div class="grid grid-2">
+  <div class="card">
+    <h4>单次不够的场景</h4>
+    <p style="font-size:13px">三个玩家 A、B、C 排成一条线，A 撞 B。单次迭代：把 A 和 B 分开。但分开 B 时，B 可能又穿进 C。需要第二轮把 B 和 C 分开。</p>
+  </div>
+  <div class="card">
+    <h4>4 次为什么够？</h4>
+    <p style="font-size:13px">这是<strong>经验值</strong>。玩家数量少（演示场景 2-4 人），穿透链不会太长。加上有 <code>if (!resolvedAnyPair) break</code> 提前退出——一旦收敛就停，不浪费。对于小球演示场景，4 次绰绰有余。</p>
+  </div>
+</div>
+
+<h3>5.3 穿透检测</h3>
+<pre><code>Fixed64 deltaX = bodyB.PositionX - positionAX;
+Fixed64 deltaY = bodyB.PositionY - positionAY;
+Fixed64 distanceSquared = (deltaX * deltaX) + (deltaY * deltaY);
+Fixed64 distance = distanceSquared > OccupancyEpsilon
+    ? FixedMath.Sqrt(distanceSquared) : Fixed64.Zero;
+Fixed64 penetration = MinimumPlayerSeparation - distance;  // 2R - dist
+if (penetration <= OccupancyEpsilon) continue;             // 没穿透，跳过</code></pre>
+
+<div class="ascii">玩家分离示意（俯视）：
+
+    bodyA ●           ● bodyB
+          ←── dist ──→
+
+  MinimumPlayerSeparation = 2 × PlayerRadius = 2 × 0.45 = 0.9
+
+  如果 dist < 0.9 → penetration = 0.9 - dist > 0 → 需要分离
+  如果 dist ≥ 0.9 → penetration ≤ 0 → 不干涉，跳过</div>
+
+<div class="callout warn">
+  <strong>为什么先算 distanceSquared 再开方？</strong>开方是定点运算里较贵的操作。先用平方比较（<code>distanceSquared &gt; OccupancyEpsilon</code>）做粗筛，只在确实需要距离值时才开方。这是定点数学的常见优化。
+</div>
+</section>
+
+<!-- ===================== S6 ===================== -->
+<section id="s6">
+<h2><span class="num">6</span>"谁推谁"份额分配</h2>
+
+<p><code>CalculateSeparationShares</code>（<code>:387-433</code>）决定了分离时两个玩家各被推多少。这不是简单对半分，而是<strong>基于移动意图</strong>的三态决策。</p>
+
+<h3>6.1 移动意图（TowardIntent）</h3>
+<p>先算每个玩家"是否在朝对方推"（<code>GetTowardIntent</code>，<code>:435-444</code>）：</p>
+<pre><code>// 玩家的请求速度在法线方向上的投影
+Fixed64 towardIntent = (velocity.X * normalX) + (velocity.Y * normalY);
+return towardIntent > 0 ? towardIntent : 0;   // 负值（在远离）记为 0</code></pre>
+<p><strong>直观理解</strong>：如果玩家 A 的移动方向和"指向 B 的法线"同向，说明 A 在往 B 身上挤——A 是"推的人"。</p>
+
+<h3>6.2 三种情况</h3>
+
+<div class="grid grid-3">
+  <div class="card">
+    <span class="tag green">A 推 B 不动</span>
+    <h4>A 单向推</h4>
+    <p style="font-size:13px">A 朝 B 移动，B 没动。</p>
+    <pre style="font-size:12px;margin:8px 0 0"><code>moveBodyA = penetration  // A 全责，被推回
+moveBodyB = 0             // B 不动</code></pre>
+  </div>
+  <div class="card">
+    <span class="tag orange">双向互推</span>
+    <h4>都在推</h4>
+    <p style="font-size:13px">A 和 B 都朝对方移动。</p>
+    <pre style="font-size:12px;margin:8px 0 0"><code>// 按意图强度比例分摊
+moveBodyA = penetration × (intentA / (intentA + intentB))
+moveBodyB = penetration - moveBodyA</code></pre>
+  </div>
+  <div class="card">
+    <span class="tag cyan">都不推</span>
+    <h4>无人移动</h4>
+    <p style="font-size:13px">两人静止但重叠（如刚 Spawn）。</p>
+    <pre style="font-size:12px;margin:8px 0 0"><code>// 对半分
+moveBodyA = penetration / 2
+moveBodyB = penetration / 2</code></pre>
+  </div>
+</div>
+
+<div class="callout info">
+  <strong>这个设计对应演示玩法</strong>：README 提到"两球相撞产生击退，<strong>客户端故意不预测</strong>，由服务端权威裁决"。撞击的冲量通过 <code>ApplyBodyImpulse</code> 施加，而占用分离处理的是<strong>持续挤压</strong>（推墙、推人卡位）。两者的区别：冲量是瞬时的（飞出去），占用是持续的（贴着推）。
+</div>
+
+<h3>6.3 为什么用意图比例而不是质量？</h3>
+<p>这套物理<strong>没有质量概念</strong>——所有玩家等价。份额分配靠"谁更用力推谁就多被反推"，这比模拟质量/动量简单得多，而且对 MOBA 风格的"有卡位、无真实互推"语义更合适。这也对应总目录里提到的设计决策：<strong>"MOBA 式有卡位、无普通移动真实互推"</strong>。</p>
+</section>
+
+<!-- ===================== S7 ===================== -->
+<section id="s7">
+<h2><span class="num">7</span>完全重叠兜底</h2>
+
+<p>一个必须处理的边界情况：<strong>两个玩家完全重合</strong>（距离 ≈ 0）。这时无法算法线方向（除零），<code>DetermineSeparationNormal</code>（<code>:351-385</code>）有三级兜底：</p>
+
+<div class="step-flow">
+  <div class="step-item">
+    <h4>第一优先：用位置差算法线</h4>
+    <p><code>distanceSquared &gt; OccupancyEpsilon</code> → 正常情况，法线 = 归一化的位置差向量。</p>
+  </div>
+  <div class="step-item">
+    <h4>第二兜底：用相对速度方向</h4>
+    <p>位置重合但两人有相对速度 → 法线 = 归一化的相对速度方向。物理意义："两人迎面撞上，沿撞击方向分开"。</p>
+  </div>
+  <div class="step-item">
+    <h4>最终兜底：用 ID 比较定方向</h4>
+    <p>位置重合 + 速度也相同/为零 → <code>normalX = bodyAId ≤ bodyBId ? 1 : -1</code>。<strong>用 ID 大小决定谁往左谁往右</strong>。</p>
+  </div>
+</div>
+
+<div class="callout danger">
+  <strong>为什么最终兜底用 ID 比较？</strong>因为必须<strong>确定性</strong>。如果用随机方向或时间戳，两端会算出不同的法线 → 分离后位置不同 → 哈希不一致 → 永久回滚。用 <code>bodyAId ≤ bodyBId</code> 这种纯 ID 比较，保证两端做出完全相同的选择。这是确定性工程的典型手法：<strong>当没有物理依据时，用稳定的序关系兜底</strong>。
+</div>
+</section>
+
+<!-- ===================== S8 ===================== -->
+<section id="s8">
+<h2><span class="num">8</span>房间边界 Clamp</h2>
+
+<p><code>ClampPlayersToRoom</code>（<code>:192-226</code>）是 Step 的最后一步，把所有玩家拉回房间内。</p>
+
+<h3>8.1 房间尺寸</h3>
+<pre><code>// GameplayRoomSettings.cs
+RoomHalfWidth  = 12.0    // 房间半宽
+RoomHalfHeight = 8.0     // 房间半高
+PlayerRadius   = 0.45    // 玩家半径
+
+// 玩家可达边界（留出半径，防止半身出墙）
+PlayerMaxX = RoomHalfWidth  - PlayerRadius = 11.55
+PlayerMinX = -11.55
+PlayerMaxY = RoomHalfHeight - PlayerRadius = 7.55
+PlayerMinY = -7.55</code></pre>
+
+<div class="ascii">房间边界示意：
+
+   ┌─────────────────────────────┐  Y = +8.0
+   │                             │
+   │    ●  ← 玩家中心            │  玩家可达 Y = +7.55
+   │    ↑ PlayerRadius = 0.45    │
+   │                             │
+   │                             │
+   └─────────────────────────────┘  Y = -8.0
+  X=-12.0                      X=+12.0</div>
+
+<h3>8.2 智能速度清零</h3>
+<p>撞墙时不是粗暴地把速度全清零，而是<strong>只清掉往墙里钻的那个分量</strong>：</p>
+<pre><code>// 撞左墙且正在往左钻 → 清零 X 速度
+if (clampedX <= PlayerMinX && body.LinearVelocityX < 0)
+    body.LinearVelocityX = 0;
+
+// 撞右墙且正在往右钻 → 清零 X 速度
+if (clampedX >= PlayerMaxX && body.LinearVelocityX > 0)
+    body.LinearVelocityX = 0;</code></pre>
+
+<div class="compare">
+  <div class="bad">
+    <h5>❌ 简单做法（清零全部速度）</h5>
+    <p style="font-size:13px">贴着墙往斜方向走时，速度全清零 → <strong>贴墙滑动失效</strong>，玩家感觉"卡住"。</p>
+  </div>
+  <div class="good">
+    <h5>✅ 本项目（只清法向分量）</h5>
+    <p style="font-size:13px">撞左墙时只清 X，保留 Y → 玩家可以<strong>沿墙滑动</strong>，手感自然。</p>
+  </div>
+</div>
+
+<h3>8.3 一个有趣的注释</h3>
+<pre><code>// Quantize bounds from the same float geometry used by Box2D before entering Fixed64.
+public static readonly Fixed64 PlayerMaxX = (Fixed64)((float)RoomHalfWidth - (float)PlayerRadius);</code></pre>
+<p>这个注释说明边界值<strong>先转 float 做减法，再转 Fixed64</strong>——刻意复刻 Box2D 时代的几何值，保证 S2 前后的房间边界完全一致，让哈希基线变化最小化。这是一个"迁移时保持兼容"的细节。</p>
+</section>
+
+<!-- ===================== S9 ===================== -->
+<section id="s9">
+<h2><span class="num">9</span>定点 epsilon</h2>
+
+<p>物理层定义了 4 个定点 epsilon 常量，每个都有具体用途：</p>
+
+<table>
+<tr><th>常量</th><th>值</th><th>用途</th></tr>
+<tr><td><code>OccupancyEpsilon</code></td><td>1/10000 = 0.0001</td><td>占用分离的穿透判定阈值。穿透量 ≤ 此值视为不干涉。也用于距离平方的比较（避免除零）。</td></tr>
+<tr><td><code>ContactTolerance</code></td><td>1/1000 = 0.001</td><td>接触判定的容差。距离 ≤ (2R + tolerance) 视为"正在接触"，记入 <code>_occupancyContacts</code>。</td></tr>
+<tr><td><code>MovementIntentEpsilon</code></td><td>1/10000</td><td>移动意图判定阈值。意图投影 ≤ 此值视为"没在推"。</td></tr>
+<tr><td><code>MinimumPlayerSeparation</code></td><td>2R = 0.9</td><td>不是 epsilon，是最小分离距离——两球圆心间的最小允许距离。</td></tr>
+</table>
+
+<div class="callout warn">
+  <strong>为什么用这么小的值？</strong>因为是<strong>定点数</strong>。<code>Fixed64</code> 的精度是确定的（不像浮点会随数值大小波动），0.0001 在定点域里是一个稳定的小量。用这么小的阈值意味着——<strong>任何超过 0.0001 的穿透都会被处理</strong>，几乎没有"漏网之鱼"。这与浮点物理需要较大容差（如 0.01）形成对比。
+</div>
+</section>
+
+<!-- ===================== S10 ===================== -->
+<section id="s10">
+<h2><span class="num">10</span>确定性保障</h2>
+
+<p>这套物理的每个设计都服务于一个目标：<strong>给定相同输入，两端产出 bit-exact 相同的结果</strong>。具体手段：</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag green">① 全定点运算</span>
+    <h4>无浮点</h4>
+    <ul style="font-size:13px">
+      <li>所有位置、速度、距离用 <code>Fixed64</code></li>
+      <li>开方用 <code>FixedMath.Sqrt</code>（定点实现）</li>
+      <li>没有 <code>float</code> / <code>double</code> 参与计算</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">② 排序迭代</span>
+    <h4>顺序确定</h4>
+    <ul style="font-size:13px">
+      <li><code>BuildSortedBodyBuffer</code> 每帧重排</li>
+      <li>所有循环基于排序后的列表</li>
+      <li>不依赖 Dictionary 迭代顺序</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">③ 接触规范化</span>
+    <h4>ContactKey 归一</h4>
+    <ul style="font-size:13px">
+      <li>小 ID 在前，大 ID 在后</li>
+      <li>(A,B) 和 (B,A) 生成相同 key</li>
+      <li>快照/哈希时接触列表也排序</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">④ 兜底可复现</span>
+    <h4>无随机/无时间</h4>
+    <ul style="font-size:13px">
+      <li>完全重叠时用 ID 比较定方向</li>
+      <li>没有 <code>Random</code>、<code>DateTime</code></li>
+      <li>没有 <code>async</code>（调度顺序不定）</li>
+    </ul>
+  </div>
+</div>
+
+<h3>黄金哈希验证</h3>
+<p><code>BattlePredictionSelfTestSuite</code> 里有一个 <code>fixed-physics-bit-exact</code> 用例，跑固定物理场景后断言哈希等于 <code>0xD2120B5F0F5A5FE5</code>。这个哈希是<strong>全定点物理跨端一致性的硬保证</strong>——只要任何平台的计算结果偏离这个值，测试就会报错并打印实际哈希。</p>
+
+<div class="callout">
+  <strong>对比 Box2D 的根本差异</strong>：Box2D 的 <code>WarmStarting</code> 把上一帧的冲量缓存（浮点）复用到这一帧，跨端无法保证 bit 一致。而这套手写物理<strong>每帧独立计算，无跨帧隐藏状态</strong>——给定 (位置, 速度, 输入) 就能算出确定的 (新位置, 新速度)。这是"可快照、可哈希、可回滚"的根本前提。
+</div>
+</section>
+
+<!-- ===================== S11 ===================== -->
+<section id="s11">
+<h2><span class="num">11</span>快照与回滚</h2>
+
+<p>物理世界必须支持 <code>TakeSnapshot</code> / <code>RestoreSnapshot</code>，这是客户端回滚的基础。</p>
+
+<h3>TakeSnapshot（:146-166）</h3>
+<pre><code>public PhysicsWorldSnapshot TakeSnapshot()
+{
+    // 1. 收集所有 body，转成 PhysicsBodySnapshot[]
+    // 2. Array.Sort(bodies, BodyId 比较)        ★ 排序保证哈希确定
+    // 3. 收集所有 contact，转成 PhysicsContactSnapshot[]
+    // 4. Array.Sort(contacts, BodyAId→BodyBId 比较)  ★ 排序
+    // 5. 返回 new PhysicsWorldSnapshot(bodies, contacts)
+}</code></pre>
+
+<h3>RestoreSnapshot（:168-190）</h3>
+<pre><code>public void RestoreSnapshot(PhysicsWorldSnapshot snapshot)
+{
+    ClearBodies();                    // 清空所有状态
+    foreach (body in snapshot.Bodies)
+        _bodies[body.BodyId] = new FixedPhysicsBody(body);   // 逐个恢复
+    foreach (contact in snapshot.Contacts)
+        _occupancyContacts[key] = contact;                   // 恢复接触
+}</code></pre>
+
+<div class="callout info">
+  <strong>注意</strong>：<code>RestoreSnapshot</code> <strong>不恢复</strong> <code>_pendingLinearVelocities</code> 和 <code>_pendingImpulses</code>——这两个是"本帧待处理输入"，回滚后会由上层（<code>BattleLogic.Tick</code> / <code>BattleSimulation</code>）根据输入历史重新填充。物理世界只负责"状态"，不负责"输入意图"。
+</div>
+
+<h3>在回滚链路中的位置</h3>
+<pre><code>客户端收到权威快照（不一致时）
+  └─ BattleSimulation.ReconcileAuthoritativeSnapshot
+      └─ ApplyAuthoritativeSnapshot
+          └─ _worldState.RestoreSnapshot(snapshot)
+              └─ <strong>PhysicsWorld.RestoreSnapshot</strong>    ← 物理世界被重置到权威帧
+      └─ AdvancePredictionTo(replayTarget)            ← 用本地输入重新跑
+          └─ BattleLogic/BattleSimulation.Tick
+              └─ SetBodyMovementInput(...)             ← 重新填输入
+              └─ <strong>PhysicsWorld.Step</strong>                  ← 物理重新积分</code></pre>
+</section>
+
+<!-- ===================== S12 ===================== -->
+<section id="s12">
+<h2><span class="num">12</span>设计权衡总结</h2>
+
+<h3>这套物理做了什么 / 没做什么</h3>
+<table>
+<tr><th>维度</th><th>做了</th><th>没做（刻意取舍）</th></tr>
+<tr><td>运动</td><td>平移积分、输入归一化、冲量叠加</td><td>旋转、角动量（俯视角不需要）</td></tr>
+<tr><td>碰撞</td><td>圆-圆占用分离、圆-矩形边界 clamp</td><td>真实弹性碰撞、摩擦、 restitution</td></tr>
+<tr><td>互推</td><td>基于移动意图的份额分配（三态）</td><td>质量、动量守恒（MOBA 卡位语义）</td></tr>
+<tr><td>求解</td><td>4 次迭代 + 提前退出</td><td>连续碰撞检测（CCD）、亚步进</td></tr>
+<tr><td>休眠</td><td>IsAwake 标志（静止不积分）</td><td>完整的 Broadphase/Narrowphase 分层</td></tr>
+</table>
+
+<h3>核心设计哲学</h3>
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag">简单优先</span>
+    <h4>555 行解决战斗</h4>
+    <p style="font-size:13px">没有 Broadphase 树、没有约束求解器、没有 manifold。玩家数少（2-4），两两暴力检测完全够用。简单 = 可控 = 可验证。</p>
+  </div>
+  <div class="card">
+    <span class="tag green">确定性优先</span>
+    <h4>一切为了 bit-exact</h4>
+    <p style="font-size:13px">排序迭代、定点 epsilon、ID 兜底、无跨帧状态——每个决策都是为了"两端算出相同结果"。物理真实可以妥协，一致性不能。</p>
+  </div>
+  <div class="card">
+    <span class="tag cyan">演示导向</span>
+    <h4>够用就好</h4>
+    <p style="font-size:13px">这是求职演示，不是商业引擎。撞击击退 + body blocking 足够展示同步难点，不需要 ragdoll、布料、关节。</p>
+  </div>
+  <div class="card">
+    <span class="tag yellow">可解释</span>
+    <h4>每行代码能讲清"为什么"</h4>
+    <p style="font-size:13px">面试场景下，能讲清楚 4 次迭代为什么够、份额分配为什么用意图、clamp 为什么放最后——这比物理精度更重要。</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>一句话总结</strong>：这套物理不是"强大的物理引擎"，而是"恰到好处的确定性物理"。它用最小的复杂度，换来了<strong>完全可控、跨端一致、可快照可回滚</strong>——这三点正是帧同步游戏的命脉。S2 移除 Box2D 不是降级，是<strong>卸下了一个看起来强大实则不适合的包袱</strong>。
+</div>
+
+<div class="foot">
+  <p>本报告基于 <code>FrameSyncPhysicsWorld.cs</code>（555 行，commit <code>9be6e989</code>）的完整源码分析。</p>
+  <p>所有结论均有 <code>文件:行号</code> 可追溯。配合<a href="网络同步分析报告-20260804.html">《网络同步系统分析报告》</a>阅读，可理解物理层在整个同步链路中的位置。</p>
+</div>
+
+</section>
+
+</div>
+</body>
+</html>

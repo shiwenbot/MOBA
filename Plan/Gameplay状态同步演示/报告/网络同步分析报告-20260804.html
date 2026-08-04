@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeDoBest 网络同步系统分析报告</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e2230; --border:#2a2f3d;
+    --text:#d7dde8; --muted:#8a93a6; --accent:#5b9dff; --accent2:#7c5cff;
+    --green:#4ade80; --yellow:#fbbf24; --red:#f87171; --cyan:#22d3ee; --orange:#fb923c;
+    --code-bg:#0c0e14;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7; font-size:15px;
+  }
+  .wrap{max-width:1200px; margin:0 auto; padding:0 24px 80px;}
+  /* Hero */
+  .hero{
+    background:linear-gradient(135deg,#1a1f3a 0%,#2d1b4e 100%);
+    padding:56px 24px 48px; margin-bottom:40px; position:relative; overflow:hidden;
+    border-bottom:1px solid var(--border);
+  }
+  .hero::after{content:""; position:absolute; inset:0;
+    background:radial-gradient(circle at 80% 20%, rgba(124,92,255,.25), transparent 50%),
+               radial-gradient(circle at 20% 80%, rgba(91,157,255,.18), transparent 50%);
+    pointer-events:none;
+  }
+  .hero-inner{max-width:1200px; margin:0 auto; position:relative; z-index:1;}
+  .hero .eyebrow{color:var(--accent); font-size:13px; letter-spacing:2px; text-transform:uppercase; font-weight:600;}
+  .hero h1{font-size:38px; margin:10px 0 12px; font-weight:800; line-height:1.25;
+    background:linear-gradient(90deg,#fff,#a5c8ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent;}
+  .hero .sub{color:#c3cbdb; font-size:16px; max-width:780px;}
+  .hero .meta{display:flex; flex-wrap:wrap; gap:10px; margin-top:22px;}
+  .hero .meta span{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14);
+    padding:5px 13px; border-radius:20px; font-size:12.5px; color:#c3cbdb;}
+  /* TOC */
+  nav.toc{background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:20px 24px; margin-bottom:40px;}
+  nav.toc h3{margin:0 0 12px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:1px;}
+  nav.toc ol{margin:0; padding-left:20px; columns:2; column-gap:40px;}
+  nav.toc a{color:var(--accent); text-decoration:none; font-size:14px;}
+  nav.toc a:hover{text-decoration:underline;}
+  /* Section */
+  section{margin-bottom:44px; scroll-margin-top:20px;}
+  h2{font-size:25px; margin:0 0 6px; padding-bottom:10px; border-bottom:2px solid var(--border);
+    display:flex; align-items:center; gap:10px;}
+  h2 .num{background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+    width:34px; height:34px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center;
+    font-size:15px; font-weight:700; flex-shrink:0;}
+  h3{font-size:19px; margin:28px 0 12px; color:#e4e9f3; border-left:3px solid var(--accent); padding-left:12px;}
+  h4{font-size:16px; margin:22px 0 10px; color:#cfd6e4;}
+  p{margin:10px 0;}
+  /* Cards */
+  .grid{display:grid; gap:16px; margin:18px 0;}
+  .grid-2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));}
+  .grid-3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px;}
+  .card.accent{border-color:var(--accent);}
+  .card h4{margin-top:0;}
+  .card .tag{display:inline-block; font-size:11px; padding:2px 9px; border-radius:10px;
+    background:rgba(91,157,255,.15); color:var(--accent); margin-bottom:8px; font-weight:600;}
+  .card .tag.green{background:rgba(74,222,128,.14); color:var(--green);}
+  .card .tag.yellow{background:rgba(251,191,36,.14); color:var(--yellow);}
+  .card .tag.red{background:rgba(248,113,113,.14); color:var(--red);}
+  .card .tag.cyan{background:rgba(34,211,238,.14); color:var(--cyan);}
+  .card .tag.orange{background:rgba(251,146,60,.14); color:var(--orange);}
+  /* Callout */
+  .callout{border-radius:10px; padding:14px 18px; margin:16px 0; border-left:4px solid var(--accent);
+    background:rgba(91,157,255,.07);}
+  .callout.warn{border-left-color:var(--yellow); background:rgba(251,191,36,.07);}
+  .callout.danger{border-left-color:var(--red); background:rgba(248,113,113,.07);}
+  .callout.ok{border-left-color:var(--green); background:rgba(74,222,128,.07);}
+  .callout strong{color:#fff;}
+  /* Code */
+  pre{background:var(--code-bg); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; overflow-x:auto; margin:14px 0; font-size:13px; line-height:1.55;}
+  code{font-family:"JetBrains Mono","Fira Code",Consolas,"Courier New",monospace;}
+  :not(pre)>code{background:var(--code-bg); border:1px solid var(--border); padding:2px 6px;
+    border-radius:5px; font-size:13px; color:var(--cyan);}
+  /* Table */
+  table{width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px;
+    background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden;}
+  th{background:var(--panel2); text-align:left; padding:11px 14px; color:#e4e9f3; font-weight:600;
+    border-bottom:1px solid var(--border); white-space:nowrap;}
+  td{padding:10px 14px; border-bottom:1px solid var(--border); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:rgba(91,157,255,.04);}
+  td code{font-size:12.5px;}
+  .pill{display:inline-block; padding:2px 9px; border-radius:10px; font-size:11.5px; font-weight:600;}
+  .pill.done{background:rgba(74,222,128,.14); color:var(--green);}
+  .pill.next{background:rgba(251,191,36,.14); color:var(--yellow);}
+  .pill.todo{background:rgba(138,147,166,.16); color:var(--muted);}
+  .pill.cancel{background:rgba(248,113,113,.14); color:var(--red);}
+  /* Flow diagram */
+  .flow{display:flex; flex-direction:column; gap:0; margin:20px 0;}
+  .flow-row{display:flex; align-items:stretch; gap:0;}
+  .flow-col{flex:1; display:flex; flex-direction:column; gap:8px; padding:0 8px;}
+  .flow-col h5{font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);
+    text-align:center; margin:0 0 8px;}
+  .flow-box{background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:9px 12px; font-size:12.5px; position:relative;}
+  .flow-box.client{border-color:rgba(91,157,255,.4);}
+  .flow-box.server{border-color:rgba(124,92,255,.4);}
+  .flow-box.net{border-color:rgba(34,211,238,.4); text-align:center; color:var(--cyan);}
+  .flow-box strong{color:#fff;}
+  .arrow{font-size:18px; text-align:center; color:var(--muted); padding:2px 0;}
+  /* Timeline bar */
+  .timeline{position:relative; padding-left:8px;}
+  .tl-item{position:relative; padding:0 0 24px 28px; border-left:2px solid var(--border);}
+  .tl-item:last-child{border-left-color:transparent;}
+  .tl-item::before{content:""; position:absolute; left:-7px; top:2px; width:12px; height:12px;
+    border-radius:50%; background:var(--accent); border:2px solid var(--bg);}
+  .tl-item.done::before{background:var(--green);}
+  .tl-item.next::before{background:var(--yellow);}
+  .tl-item.todo::before{background:var(--muted);}
+  .tl-item h4{margin:0 0 4px;}
+  .tl-item .when{font-size:12px; color:var(--muted);}
+  ul,ol{padding-left:22px;} li{margin:4px 0;}
+  .kv{display:grid; grid-template-columns:200px 1fr; gap:6px 16px; margin:12px 0; font-size:13.5px;}
+  .kv dt{color:var(--muted);}
+  .kv dd{margin:0;}
+  .foot{margin-top:60px; padding-top:24px; border-top:1px solid var(--border); color:var(--muted); font-size:13px;}
+  @media(max-width:720px){
+    .hero h1{font-size:28px;} nav.toc ol{columns:1;}
+    .grid-2,.grid-3{grid-template-columns:1fr;} .kv{grid-template-columns:1fr;}
+    .flow-row{flex-direction:column;}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">Codebase Analysis · 代码库分析</div>
+    <h1>WeDoBest 网络同步系统分析报告</h1>
+    <p class="sub">一个面向求职演示的极简俯视角 Gameplay 状态同步沙盒：服务端权威 30Hz 帧同步 + 客户端预测 / 回滚重播 / 一致性校验的全链路剖析。</p>
+    <div class="meta">
+      <span>📅 2026-08-04</span>
+      <span>🌿 feature/gameplay-sync-sandbox</span>
+      <span>⚡ Fantasy + Unity/TEngine</span>
+      <span>🎯 定点确定性物理</span>
+      <span>📦 54 个 FrameSync 源文件</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <h3>目录 · Table of Contents</h3>
+  <ol>
+    <li><a href="#s1">项目速览</a></li>
+    <li><a href="#s2">同步架构总览</a></li>
+    <li><a href="#s3">服务端权威推进</a></li>
+    <li><a href="#s4">客户端预测与回滚</a></li>
+    <li><a href="#s5">网络协议</a></li>
+    <li><a href="#s6">确定性保证</a></li>
+    <li><a href="#s7">带宽优化</a></li>
+    <li><a href="#s8">闭环反馈控制</a></li>
+    <li><a href="#s9">测试与验收</a></li>
+    <li><a href="#s10">关键文件索引</a></li>
+    <li><a href="#s11">演进路线</a></li>
+    <li><a href="#s12">总结</a></li>
+  </ol>
+</nav>
+
+<!-- ===================== S1 ===================== -->
+<section id="s1">
+<h2><span class="num">1</span>项目速览</h2>
+
+<p><strong>一句话定位</strong>：这不是一个商业游戏，而是一个<strong>面试用的 Gameplay 状态同步技术演示</strong>。它用一个小球角色 + 极简房间，集中展示弱网条件下的按帧输入、客户端预测、服务端权威校验、不一致诊断与回滚重播能力。</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag">技术底座</span>
+    <h4>技术栈</h4>
+    <dl class="kv">
+      <dt>客户端</dt><dd>Unity + TEngine（HybridCLR 热更、YooAsset 资源、模块系统）</dd>
+      <dt>服务端</dt><dd>Fantasy 框架（认证 / Gate / Battle 三类 Scene）</dd>
+      <dt>网络传输</dt><dd>KCP（可靠 UDP）</dd>
+      <dt>序列化</dt><dd>protobuf-net（Fantasy 自带）</dd>
+      <dt>异步模型</dt><dd>UniTask（客户端）/ FTask（服务端）</dd>
+      <dt>逻辑帧率</dt><dd><strong>30Hz 固定</strong>，dt = 1/30 s</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <span class="tag green">玩法闭环</span>
+    <h4>演示玩法</h4>
+    <ol>
+      <li>WASD 控制小球移动</li>
+      <li>Shift Dash，消耗体力并进入 Recover</li>
+      <li>体力 / 冷却 / Recover 都按逻辑帧推进</li>
+      <li>两球相撞产生击退（<strong>服务端权威裁决，客户端故意不预测</strong>）</li>
+      <li>弱网下预测本地移动，收到快照后 diff → rollback → replay</li>
+    </ol>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>核心设计哲学</strong>：<code>FrameIndex</code> 是唯一的逻辑帧语义——输入和状态变化都绑定到具体帧。服务端权威推进，客户端可预测本地移动 / Dash / 体力，收到权威快照后做<strong>逐字段 bit-exact 校验</strong>，不一致就回滚到权威帧再用本地缓冲输入重放。
+</div>
+</section>
+
+<!-- ===================== S2 ===================== -->
+<section id="s2">
+<h2><span class="num">2</span>同步架构总览</h2>
+
+<p>本项目采用<strong>服务端权威的状态帧同步</strong>（Server-Authoritative State Sync），而非传统 lockstep。核心特征：服务端跑唯一权威仿真，每帧广播完整状态快照；客户端本地预测自己的玩家，收到权威快照后对账并回滚。</p>
+
+<h3>整体数据流</h3>
+
+<div class="flow">
+  <div class="flow-row">
+    <div class="flow-col">
+      <h5>客户端 (Unity / 客户端)</h5>
+      <div class="flow-box client"><strong>读取输入</strong> WASD/Shift<br><code>ClientTickDriver.Update</code></div>
+      <div class="flow-box client"><strong>本地预测</strong> 推进 1 帧<br><code>BattleSimulation.AdvancePredictionTo</code></div>
+      <div class="flow-box client"><strong>发送输入</strong> 每帧一条<br><code>SendInputCommand → C2B_PlayerInput</code></div>
+      <div class="flow-box client" style="border-color:rgba(74,222,128,.4)"><strong>收到快照</strong><br><code>S2C_FrameSnapshot → EnqueueServerSnapshot</code></div>
+      <div class="flow-box client" style="border-color:rgba(248,113,113,.4)"><strong>对账</strong> bit-exact 校验<br>不一致 → <strong>回滚 + 重放</strong></div>
+      <div class="flow-box client"><strong>渲染</strong> 误差平滑 + Ghost 球</div>
+    </div>
+    <div class="flow-col" style="max-width:180px; flex:0 0 160px;">
+      <h5>网络 (KCP)</h5>
+      <div class="flow-box net">⬅ C2B_PlayerInput<br>（每帧输入）</div>
+      <div class="arrow">⇅</div>
+      <div class="flow-box net">➡ S2C_FrameSnapshot<br>（每帧广播）</div>
+      <div class="arrow">⇅</div>
+      <div class="flow-box net">⬅ C2B_Ping<br>➡ S2C_Pong<br>（RTT 测量）</div>
+      <div class="arrow">⇅</div>
+      <div class="flow-box net">➡ S2C_BandwidthStats<br>（每 300 帧 / 10s）</div>
+    </div>
+    <div class="flow-col">
+      <h5>服务端 (Fantasy Battle Scene)</h5>
+      <div class="flow-box server"><strong>收到输入</strong> 校验 + 缓冲<br><code>BattleLogic.SubmitInput</code></div>
+      <div class="flow-box server" style="border-color:rgba(251,191,36,.5)"><strong>30Hz Tick</strong> 固定步长<br><code>TickDispatcher → BattleLogic.Tick</code></div>
+      <div class="flow-box server"><strong>权威推进</strong><br>输入消费 → 物理 → Buff → 数值</div>
+      <div class="flow-box server"><strong>构建快照</strong><br><code>BuildBattleWorldSnapshot</code></div>
+      <div class="flow-box server"><strong>脏同步编码</strong><br>属性 mask + Buff 增量</div>
+      <div class="flow-box server"><strong>广播 + 带宽测量</strong><br><code>BattleComponent.BroadcastSnapshot</code></div>
+    </div>
+  </div>
+</div>
+
+<h3>三种角色的职责边界</h3>
+<table>
+<tr><th>组件</th><th>职责</th><th>关键文件</th></tr>
+<tr><td><strong>BattleLogic</strong></td><td>纯权威仿真核心。无网络、无 Unity，完全确定性。输入消费、物理推进、Buff/数值结算、状态哈希。</td><td><code>GameServer/.../Entity/Battle/BattleLogic.cs</code></td></tr>
+<tr><td><strong>BattleComponent</strong></td><td>联网包装。围绕 <code>BattleLogic</code>，负责快照广播、脏同步编码、带宽测量、玩家进出。</td><td><code>GameServer/.../Entity/Battle/BattleComponent.cs</code></td></tr>
+<tr><td><strong>BattleSimulation</strong></td><td>客户端核心。本地预测、输入发送、快照对账、一致性校验、回滚重播、闭环领先量控制。</td><td><code>UnityProject/.../GameLogic/Battle/BattleSimulation.cs</code></td></tr>
+<tr><td><strong>BattleClientController</strong></td><td>Unity 粘合层。键盘输入、网络消息注册、驱动 Tick、渲染（含 Ghost 球 + 误差平滑）。</td><td><code>UnityProject/.../GameLogic/Battle/BattleClientController.cs</code></td></tr>
+<tr><td><strong>GameShared/FrameSync/*</strong></td><td><strong>双端共享</strong>的确定性仿真内核。服务端和客户端跑的是同一套代码。</td><td><code>UnityProject/.../GameShared/FrameSync/</code></td></tr>
+</table>
+
+<div class="callout ok">
+  <strong>关键洞察</strong>：服务端<strong>从不回滚</strong>——它只向前推进。预测、一致性校验、回滚重放全部发生在客户端。服务端的唯一职责是：推进权威仿真 + 广播结果。这是一种典型的 <em>"Server is authoritative, clients are optimistic"</em> 架构。
+</div>
+</section>
+
+<!-- ===================== S3 ===================== -->
+<section id="s3">
+<h2><span class="num">3</span>服务端权威推进</h2>
+
+<h3>3.1 帧驱动链路（从挂钟时间到逻辑帧）</h3>
+<p>服务端的固定步长推进通过一条清晰的调用链实现，把真实的 wall-clock 时间转换成整数个 1/30s 的逻辑帧：</p>
+
+<pre><code>ServerTickDriverUpdateSystem.Update()          // 每个 Unity/主循环 tick
+    └─ ServerTickDriver.TickOnce()              // 用 Stopwatch 测真实 dt
+        └─ TickDispatcher.Update(realDt)        // 喂给累加器
+            └─ TickAccumulator.Accumulate(dt)   // 累积，输出本帧要跑几个逻辑帧
+                └─ ExecuteTick(frame, fixedDt)  // 按优先级调用每个 ITickable
+                    └─ BattleComponent.Tick()
+                        └─ BattleLogic.Tick()   // 权威推进 + 广播</code></pre>
+
+<div class="grid grid-3">
+  <div class="card">
+    <h4>TickAccumulator</h4>
+    <p class="tag">核心常量</p>
+    <dl class="kv">
+      <dt>FixedDeltaTime</dt><dd><code>1/30 s</code></dd>
+      <dt>MaxDeltaTime</dt><dd><code>0.5s</code>（防死亡螺旋，单次最多补 ~15 帧）</dd>
+    </dl>
+    <p style="font-size:13px;color:var(--muted)">所有数学运算用 <code>Fixed64</code> 定点数，保持确定性。</p>
+  </div>
+  <div class="card">
+    <h4>TickDispatcher</h4>
+    <p style="font-size:13px">一个 Update 可能触发<strong>多个</strong> fixed tick（追帧）。<code>ITickable</code> 按优先级 + 注册顺序调用。</p>
+    <p style="font-size:13px;color:var(--muted)">迭代期间注册/注销会延迟到 tick 批次结束后，避免边迭代边改集合。</p>
+  </div>
+  <div class="card">
+    <h4>DeterminismRules</h4>
+    <p style="font-size:13px"><code>AssertFixedDt</code>（DEBUG）按<strong>位模式</strong>比较 dt，不是近似相等。</p>
+    <pre style="margin:8px 0 0;font-size:11.5px"><code>BitConverter.SingleToInt32Bits(dt)
+  != FixedDeltaBits → throw</code></pre>
+  </div>
+</div>
+
+<h3>3.2 BattleLogic.Tick —— 权威推进的每一步</h3>
+<p>这是权威仿真每帧执行的动作序列（<code>BattleLogic.cs:159-233</code>）：</p>
+
+<table>
+<tr><th style="width:40px">#</th><th>动作</th><th>说明</th></tr>
+<tr><td>1</td><td>断言 fixedDt</td><td>DEBUG 下按位校验 dt 必须精确等于 1/30</td></tr>
+<tr><td>2</td><td>构建有序玩家缓冲</td><td><strong>Sort() 玩家 ID</strong>——Dictionary 迭代顺序不确定，必须排序保证确定性</td></tr>
+<tr><td>3</td><td>QueueSkillRequests</td><td>把本帧带 SkillId 的输入排入技能图运行时</td></tr>
+<tr><td>4</td><td>SkillGraphRuntime.Step</td><td>推进技能图，产生 Buff 命令</td></tr>
+<tr><td>5</td><td>ProcessBuffCommands</td><td>按帧序处理待执行的 Buff 添加/移除命令</td></tr>
+<tr><td>6</td><td><strong>逐玩家输入消费</strong></td><td>见下文"输入解析三态"</td></tr>
+<tr><td>7</td><td>PhysicsWorld.Step</td><td>定点物理积分（移动 + body blocking）</td></tr>
+<tr><td>8</td><td>SyncPlayerStatesFromPhysics</td><td>把物理体位置回写到 PlayerState</td></tr>
+<tr><td>9</td><td>RecalculateNumericStates</td><td>重算 HP/MP/Attack 等数值属性</td></tr>
+<tr><td>10</td><td>ApplyBuffTicks</td><td>推进 Buff 计时（剩余帧数、效果）</td></tr>
+<tr><td>11</td><td><strong>OnBroadcast</strong></td><td>触发 <code>BroadcastSnapshot</code> 构建并广播快照</td></tr>
+</table>
+
+<h3>3.3 输入解析的三态机</h3>
+<p>服务端为每个玩家、每一帧查找输入时，存在三种情况（<code>BattleLogic.cs:170-222</code>）：</p>
+
+<div class="grid grid-3">
+  <div class="card">
+    <span class="tag green">命中</span>
+    <h4>有输入</h4>
+    <p style="font-size:13px">从 <code>_pendingInputsByPlayerId[player][frame]</code> 取出，<strong>消费后删除</strong>该帧条目。记录为 lastConsumed。</p>
+  </div>
+  <div class="card">
+    <span class="tag yellow">缺帧</span>
+    <h4>复用上一帧</h4>
+    <p style="font-size:13px">本帧没收到输入但之前有 → <strong>复用 lastConsumed 输入</strong>。<code>ReusedInputCount++</code>。这是"按住方向键不松手"的容错。</p>
+  </div>
+  <div class="card">
+    <span class="tag red">冷启动</span>
+    <h4>零输入兜底</h4>
+    <p style="font-size:13px">从未收到过任何输入 → 用零向量。<code>ZeroInputFallbackCount++</code>。</p>
+  </div>
+</div>
+
+<h3>3.4 输入校验四道防线</h3>
+<p><code>BattleLogic.SubmitInput</code>（<code>:99-157</code>）对每个进来的输入做四层校验：</p>
+
+<table>
+<tr><th>防线</th><th>条件</th><th>动作</th><th>计数器</th></tr>
+<tr><td>① 未知玩家</td><td>playerId 不存在</td><td>直接丢弃</td><td>—</td></tr>
+<tr><td>② 迟到输入</td><td>frame ≤ LastFrameIndex（已跑过的帧）</td><td>丢弃，输入边沿时告警</td><td><code>LateInputDropCount</code></td></tr>
+<tr><td>③ 过远未来帧</td><td>frame > LastFrameIndex + 24</td><td>拒绝（防恶意囤积）</td><td><code>FutureInputRejectCount</code></td></tr>
+<tr><td>④ 序列号去重</td><td>同帧已有更新的 inputSeq</td><td>丢弃旧序号</td><td>—</td></tr>
+</table>
+
+<div class="callout">
+  <strong>序列号回绕处理</strong>：用模运算比较 <code>IsInputNewerOrEqual</code>——<code>a - b &lt; 0x80000000</code> 判断 a 是否更新，正确处理 uint 回绕。<code>MaxFutureInputFrames = 24</code> 帧 ≈ 800ms 的未来输入缓冲窗口。
+</div>
+
+<h3>3.5 状态哈希</h3>
+<p><code>BattleLogic.GetStateHash()</code> 构建完整的 <code>BattleWorldSnapshot</code> 后交给 <code>StateHasher</code>。哈希用于测试框架对比服务端与客户端是否收敛到同一状态。</p>
+</section>
+
+<!-- ===================== S4 ===================== -->
+<section id="s4">
+<h2><span class="num">4</span>客户端预测与回滚</h2>
+
+<p>这是整个系统最精巧的部分。客户端不是被动接收服务端状态，而是<strong>乐观地本地预测</strong>自己的玩家，跑在服务端前面，收到权威快照后再对账。</p>
+
+<h3>4.1 核心数据结构</h3>
+<table>
+<tr><th>结构</th><th>类型</th><th>容量</th><th>用途</th></tr>
+<tr><td><code>_selfPredictions</code></td><td>Dict&lt;uint, SelfPrediction&gt;</td><td>32</td><td>每帧的本地预测结果，用于对账</td></tr>
+<tr><td><code>_inputHistory</code></td><td>Dict&lt;uint, BufferedInput&gt;</td><td>128</td><td>本地输入历史，回滚后重放用</td></tr>
+<tr><td><code>_authoritativeSnapshots</code></td><td>SnapshotBuffer&lt;BattleWorldSnapshot&gt;</td><td>32</td><td>收到的权威快照历史，手动回滚目标</td></tr>
+<tr><td><code>_pendingServerSnapshots</code></td><td>Queue&lt;PendingAuthoritativeSnapshot&gt;</td><td>4</td><td>抖动缓冲——解耦网络线程与 tick 线程</td></tr>
+</table>
+
+<h3>4.2 客户端每个 Tick 做什么</h3>
+<pre><code>BattleSimulation.Tick(frameIndex, fixedDt, dx, dy, skillId)
+  ├─ 归一化输入（|dx,dy| ≤ 1）
+  ├─ SaveInputHistory(frame, dx, dy, skillId)     // 存入输入历史，供回滚重放
+  ├─ SendPingIfNeeded()                            // 每 30 帧测一次 RTT
+  ├─ _onSendInput(frame, ++seq, dx, dy, skillId)   // ★ 每帧发一条 C2B_PlayerInput
+  ├─ ApplyPendingServerSnapshot()                  // ★ 处理收到的权威快照（对账）
+  └─ AdvancePredictionTo(frame, ...)               // ★ 本地推进 1 帧预测</code></pre>
+
+<div class="callout warn">
+  <strong>注意</strong>：输入是<strong>逐帧、不批量</strong>发送的——每个逻辑帧发一条 <code>C2B_PlayerInput</code>。这是为了简化设计、保证每帧输入语义清晰，代价是上行消息频率高（30 msg/s）。
+</div>
+
+<h3>4.3 一致性校验（CheckConsistency）</h3>
+<p>收到权威快照后，客户端从 <code>_selfPredictions</code> 里取出该帧的本地预测，和权威结果做<strong>逐字段 bit-exact 比较</strong>（<code>BattleSimulation.cs:389-427</code>）：</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag">比较内容</span>
+    <h4>逐字段精确比对</h4>
+    <ul style="font-size:13px">
+      <li><strong>位置</strong>：比较 <code>Fixed64.m_rawValue</code>（原始定点值），不是浮点近似</li>
+      <li>属性：HP / MaxHP / MP / MaxMP / Attack</li>
+      <li>NextRuntimeBuffId</li>
+      <li><strong>每个 Buff</strong>：RuntimeId / BuffId / Caster / Target / Stack / Remaining / AppliedFrame / Flags</li>
+      <li><strong>每个数值修饰</strong>：SourceBuffId / ValueType / AttributeKind / Value</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag cyan">统计</span>
+    <h4>计数器</h4>
+    <dl class="kv" style="font-size:12.5px">
+      <dt>_checked</dt><dd>总校验次数</dd>
+      <dt>_hits</dt><dd>预测命中（一致）</dd>
+      <dt>_misses</dt><dd>预测偏差（触发回滚）</dd>
+      <dt>_skippedNoRecord</dt><dd>无预测记录（刚加入/被驱逐）</dd>
+      <dt>_skippedEvicted</dt><dd>预测缓冲溢出</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="callout danger">
+  <strong>关键</strong>：比较是<strong>bit-exact</strong>的，没有任何 epsilon 容差。任何 1 ULP 的差异都会触发回滚。这正是"全定点物理"决策的动机——只要物理是 bit-exact 的，真正的不一致就一定是逻辑分叉，而非浮点噪声。
+</div>
+
+<h3>4.4 回滚重放流程（ReconcileAuthoritativeSnapshot）</h3>
+<p>当检测到不一致时，执行回滚 + 重放（<code>BattleSimulation.cs:471-510</code>）：</p>
+
+<pre><code>ReconcileAuthoritativeSnapshot(snapshot, replayTargetFrame)
+  │
+  ├─ 1. _authoritativeSnapshots.Save(frame, snapshot)      // 存入权威历史
+  │
+  ├─ 2. ApplyAuthoritativeSnapshot(snapshot)               // ★ 回滚到权威帧
+  │     ├─ _worldState.RestoreSnapshot(snapshot)           //   整个世界状态恢复
+  │     ├─ _lastAppliedFrame = snapshot.FrameIndex
+  │     ├─ 移除已确认的输入历史
+  │     └─ 清空技能图
+  │
+  ├─ 3. DiscardPredictionsAtOrAfter(snapshot.FrameIndex)   // 丢弃该帧之后的预测
+  │
+  ├─ 4. if (replayTargetFrame > snapshot.FrameIndex):      // ★ 重放
+  │     └─ AdvancePredictionTo(replayTargetFrame, fixedDt) //   用 _inputHistory 重新跑
+  │                                                           //   (move + physics + buff + numerics)
+  │
+  ├─ 5. CapturePredictionErrorAfterReconciliation()        // 喂给表现层平滑器
+  │
+  └─ 6. _rollbackCount++; 记录帧号/重放帧数/耗时</code></pre>
+
+<div class="callout">
+  <strong>重放的本质</strong>：回滚到权威帧 N 后，客户端从 N+1 重新跑到当前帧 M，每一步都从 <code>_inputHistory</code> 取本地输入。这就是为什么 <code>InputHistoryCapacity = 128</code> 必须大于最大可能回滚深度——回滚深度受 <code>MaxLeadFrames = 20</code> 限制，128 足够安全。
+</div>
+
+<h3>4.5 表现层平滑（PredictionErrorSmoother）</h3>
+<p>回滚会让逻辑状态"硬跳"到权威位置，看起来很扎眼。解法：逻辑状态立刻采用权威值，但<strong>表现层保留误差偏移并逐帧衰减</strong>。</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h4>PredictionErrorSmoother</h4>
+    <ul style="font-size:13px">
+      <li>记录"渲染位置 − 权威位置"的误差偏移</li>
+      <li>每帧按衰减系数收敛到零</li>
+      <li>误差超过阈值 <code>6.0</code> → 走硬跳（太大收不回来）</li>
+      <li><strong>绝不进入逻辑状态或哈希</strong>——纯表现层</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Authoritative Ghost 球</h4>
+    <ul style="font-size:13px">
+      <li>一个<strong>半透明黄色球</strong>，显示最近权威位置</li>
+      <li>和玩家球并排，直观对比"预测 vs 权威"</li>
+      <li>演示用的核心可视化——面试官一眼能看懂误差</li>
+    </ul>
+  </div>
+</div>
+
+<h3>4.6 远端玩家不预测</h3>
+<p>客户端<strong>只预测自己的玩家</strong>。其他玩家的状态直接从权威快照取，不做本地预测。这让回滚成本只与自己的领先深度成正比（通常 3-20 帧），而非全场玩家数。</p>
+</section>
+
+<!-- ===================== S5 ===================== -->
+<section id="s5">
+<h2><span class="num">5</span>网络协议</h2>
+
+<p>协议定义在单一 proto 文件中，服务端和客户端各有一份代码生成镜像。</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h4>协议源文件</h4>
+    <pre style="margin:0;font-size:12px"><code>GameServer/Tools/NetworkProtocol/
+  └─ Outer/OuterMessage.proto   ← 唯一真源</code></pre>
+  </div>
+  <div class="card">
+    <h4>生成代码位置</h4>
+    <pre style="margin:0;font-size:12px"><code>服务端: Entity/Generate/NetworkProtocol/
+客户端: GameProto/Generate/NetworkProtoco/
+        （注意文件夹名拼写少了个 l）</code></pre>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>命名约定修正</strong>：本项目实际使用的消息前缀和通用说法不同。<strong>没有 <code>B2C_</code> 或 <code>C2G_</code></strong>。广播消息用 <code>S2C_</code>（Server→Client），战斗请求用 <code>C2B_</code>（Client→Battle），认证用 <code>C2A_</code>（Client→Authentication），Gate 推送用 <code>G2C_</code>。
+</div>
+
+<h3>5.1 消息一览表</h3>
+<table>
+<tr><th>消息</th><th>方向</th><th>类型</th><th>关键字段</th><th>用途</th></tr>
+<tr><td><code>C2A_RegisterRequest</code></td><td>C→A</td><td>RPC</td><td>UserName, Password</td><td>注册</td></tr>
+<tr><td><code>C2A_LoginRequest</code></td><td>C→A</td><td>RPC</td><td>UserName, Password, LoginType</td><td>登录，返回 Token</td></tr>
+<tr><td><code>G2C_LoginMessage</code></td><td>G→C</td><td>单向</td><td>Msg</td><td>登录后推送欢迎消息</td></tr>
+<tr><td><code>C2B_JoinBattle</code></td><td>C→B</td><td>RPC</td><td>（空请求）</td><td>加入战斗，返回 PlayerId/出生点/服务端帧号</td></tr>
+<tr><td><code>C2B_PlayerInput</code></td><td>C→B</td><td>单向</td><td><strong>FrameIndex, InputSeq, Dx, Dy, SkillId</strong></td><td><strong>每帧玩家输入</strong></td></tr>
+<tr><td><code>S2C_FrameSnapshot</code></td><td>S→C</td><td>单向广播</td><td><strong>FrameIndex, Players[], Contacts[]</strong></td><td><strong>每帧权威快照</strong></td></tr>
+<tr><td><code>C2B_Ping</code></td><td>C→B</td><td>单向</td><td>SendTimestampMs</td><td>RTT 测量请求</td></tr>
+<tr><td><code>S2C_Pong</code></td><td>S→C</td><td>单向</td><td>SendTimestampMs（原样回显）</td><td>RTT 测量响应</td></tr>
+<tr><td><code>S2C_BandwidthStats</code></td><td>S→C</td><td>单向广播</td><td>ActualPayloadBytes, FullSyncPayloadBytes, DirtySyncSavedRatio</td><td>每 10s 带宽节省报告</td></tr>
+</table>
+
+<h3>5.2 PlayerSnapshot —— 每玩家权威状态（22 个字段）</h3>
+<p>这是快照里最核心的嵌套消息，承载了脏同步的全部信息：</p>
+
+<table>
+<tr><th>字段组</th><th>字段</th><th>说明</th></tr>
+<tr><td rowspan="3">基础</td><td>PlayerId, X, Y</td><td>身份与位置</td></tr>
+<tr><td>LatestAcceptedInputFrame</td><td><strong>服务端回显</strong>：已接受到第几帧输入（闭环反馈信号）</td></tr>
+<tr><td>Angle, LinearVelocityX/Y, AngularVelocity, IsAwake, IsEnabled</td><td>物理体状态</td></tr>
+<tr><td rowspan="3">脏同步</td><td><strong>AttributeDirtyMask</strong></td><td>属性位掩码：哪些属性变了</td></tr>
+<tr><td><strong>BuffDirtyMask</strong>, <strong>IsBuffFullSync</strong>, BuffSnapshotFrameIndex</td><td>Buff 增量同步标志 + 基线帧</td></tr>
+<tr><td>Health, MaxHealth, Mana, MaxMana, Attack</td><td>（只有 dirty 的才有意义）</td></tr>
+<tr><td>Buff</td><td>ActiveBuffs[]</td><td>当前生效的 Buff 列表</td></tr>
+<tr><td>数值</td><td>NextRuntimeBuffId, Numeric</td><td>下一个 Buff 运行时 ID + 数值修饰快照</td></tr>
+</table>
+
+<h3>5.3 JoinBattle 的帧对齐</h3>
+<p>客户端加入战斗时，服务端返回 <code>ServerFrameIndex = battleComponent.LastFrameIndex</code>，客户端用它对齐本地帧计数器。这是新客户端能正确接入正在进行的战斗的前提。</p>
+
+<pre><code>// 服务端
+response.ServerFrameIndex = battleComponent.LastFrameIndex;
+
+// 客户端
+simulation.SetJoined(playerId, x, y, serverFrameIndex);
+// → _lastAppliedFrame = serverFrameIndex
+// → 本地帧号对齐到服务端当前帧</code></pre>
+</section>
+
+<!-- ===================== S6 ===================== -->
+<section id="s6">
+<h2><span class="num">6</span>确定性保证</h2>
+
+<p>确定性是这个系统的命脉。任何非确定性都会被 bit-exact 校验放大成"持续回滚"，让游戏不可玩。项目从多个层面封锁不确定性来源。</p>
+
+<h3>6.1 定点数学（Fixed64）</h3>
+<div class="grid grid-2">
+  <div class="card">
+    <h4>Fixed64 定点数</h4>
+    <ul style="font-size:13px">
+      <li>来源：<code>FixedMathSharp</code> 第三方库</li>
+      <li>所有仿真数学（位置、速度、物理）都用 <code>Fixed64</code></li>
+      <li>跨平台 bit-exact——同样的输入一定产生同样的二进制结果</li>
+      <li>哈希时直接取 <code>m_rawValue</code>（原始整数），不是转成 float</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>为什么放弃 Box2D</h4>
+    <p style="font-size:13px">原方案用 Box2D/Box2DSharp，但：</p>
+    <ul style="font-size:13px">
+      <li>所有 fixture <code>GroupIndex = -1</code> → 全场<strong>不产生 Contact</strong></li>
+      <li>求解器实际<strong>空转</strong>，却背负全部代价</li>
+      <li>边界和分离本来就是手写的</li>
+      <li>浮点积分无法保证跨端 bit-exact</li>
+    </ul>
+    <p style="font-size:13px;color:var(--muted)">→ 2026-08-03 决策：<strong>拿掉 Box2D，手写定点物理</strong></p>
+  </div>
+</div>
+
+<h3>6.2 手写定点物理</h3>
+<p><code>FrameSyncPhysicsWorld</code>（<code>GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs</code>）实现了：</p>
+<ul>
+  <li><strong>圆-圆分离</strong>：玩家间 body blocking，最小分离距离 = 2 × 玩家半径</li>
+  <li><strong>圆-矩形边界</strong>：房间边界 clamp</li>
+  <li>占用解析迭代：<code>OccupancyResolveIterations = 4</code></li>
+  <li>所有 epsilon 都用定点常量：<code>OccupancyEpsilon = 1/10000</code> 等</li>
+</ul>
+
+<h3>6.3 确定性扫描（静态检查）</h3>
+<p><code>FrameSyncValidator</code> 会对 <code>GameShared/FrameSync/*.cs</code> 做静态扫描，<strong>禁止</strong>以下出现在确定性路径中：</p>
+<table>
+<tr><th>禁止项</th><th>原因</th></tr>
+<tr><td><code>UnityEngine</code> 命名空间</td><td>引擎相关，非确定性</td></tr>
+<tr><td><code>Fantasy</code> 命名空间</td><td>网络框架，非确定性</td></tr>
+<tr><td><code>DateTime</code> / <code>Stopwatch</code></td><td>挂钟时间非确定</td></tr>
+<tr><td><code>System.Random</code></td><td>随机数非确定</td></tr>
+<tr><td><code>async</code> / <code>await</code></td><td>调度顺序非确定</td></tr>
+<tr><td><code>Dictionary&lt;&gt;</code> / <code>HashSet&lt;&gt;</code></td><td><strong>建议避免</strong>——迭代顺序在某些平台不一致</td></tr>
+</table>
+
+<div class="callout warn">
+  <strong>关于 Dictionary 的处理</strong>：扫描只是"建议避免"而非硬禁止。实际代码里仍用了 Dictionary，但<strong>关键迭代路径都先 Sort()</strong>（如 <code>BattleLogic.Tick</code> 里 <code>BuildSortedPlayerBuffer()</code>）。这是一种务实的折中。
+</div>
+
+<h3>6.4 FNV-1a 状态哈希</h3>
+<p><code>StateHasher</code>（<code>GameShared/FrameSync/Snapshot/StateHasher.cs</code>）用 FNV-1a 64 位哈希整个世界状态：</p>
+<pre><code>FNV-1a 64-bit
+  offset = 14695981039346656037
+  prime  = 1099511628211
+
+混合顺序（确定性）：
+  每个玩家（按 ID 排序）:
+    PlayerId (hi+lo), X.m_rawValue, Y.m_rawValue,
+    Health, MaxHealth, Mana, MaxMana, Attack,
+    buff count + 每个 buff 的全部字段,
+    NextRuntimeBuffId (hi+lo), 基础属性,
+    modifier count + 每个 modifier 全字段
+  物理体: count + 每个体的 raw 值 + IsAwake/IsEnabled
+  接触: count + 每对接触</code></pre>
+
+<div class="callout ok">
+  <strong>帧号不参与哈希</strong>：故意设计——两帧的世界状态如果完全相同，哈希应该相同。这样才能对比"服务端第 N 帧"和"客户端第 N 帧"是否收敛。
+</div>
+</section>
+
+<!-- ===================== S7 ===================== -->
+<section id="s7">
+<h2><span class="num">7</span>带宽优化</h2>
+
+<p>30Hz 广播完整快照给所有玩家，带宽会很大。项目实现了<strong>脏同步</strong>（dirty sync）+ <strong>增量编码</strong>来压缩下行流量，并做实时测量和反事实对比。</p>
+
+<h3>7.1 两条优化轴</h3>
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag">属性脏同步</span>
+    <h4>PlayerAttributeSync</h4>
+    <p style="font-size:13px">每个观察者维护一个 <code>_lastBroadcastAttributesByPlayerId</code> 基线。每帧计算 <code>AttributeDirtyMask</code>——只有变化的属性位被置 1。</p>
+    <p style="font-size:13px">序列化时只有 dirty 字段携带有效值，客户端用 <code>PlayerAttributeSync.Merge</code> 合并回完整状态。</p>
+  </div>
+  <div class="card">
+    <span class="tag">Buff 增量同步</span>
+    <h4>BuffSync</h4>
+    <p style="font-size:13px">每个 (观察者, 目标玩家) 维护一个 <code>BuffBroadcastBaseline</code>。首次全量同步，之后 <code>BuffSync.ComputeChanges</code> 只发变化的 Buff。</p>
+    <p style="font-size:13px">带 <code>BuffSnapshotFrameIndex</code>（基线帧）+ <code>IsBuffFullSync</code> 标志。客户端基线不匹配时丢弃增量，请求全量。</p>
+  </div>
+</div>
+
+<h3>7.2 带宽测量与反事实对比</h3>
+<p><code>BattleBandwidthStats</code> 不只是统计实际发送量，还会做<strong>反事实计算</strong>——"如果不做脏同步，全量同步要多少字节"：</p>
+
+<table>
+<tr><th>指标</th><th>含义</th></tr>
+<tr><td><code>ActualPayloadBytes</code></td><td>实际发送的字节数（含脏同步）</td></tr>
+<tr><td><code>FullSyncPayloadBytes</code></td><td><strong>反事实</strong>：假设全量同步的字节数（强制 DirtyMask=All 重序列化）</td></tr>
+<tr><td><code>DirtySyncSavedBytes</code></td><td>节省量 = FullSync − Actual</td></tr>
+<tr><td><code>DirtySyncSavedRatio</code></td><td>节省比例 = Saved / FullSync × 100%</td></tr>
+</table>
+
+<div class="callout">
+  <strong>测量方法</strong>：<code>MeasureFullSyncBytes</code> 克隆快照，强制 <code>AttributeDirtyMask = All</code>、<code>BuffDirtyMask = uint.MaxValue</code>、<code>IsBuffFullSync = true</code>，重新序列化得到全量字节数。用真实的 protobuf 序列化（<code>SerializerManager.ProtoBufHelper.Serialize</code>）进复用的 <code>MemoryStreamBuffer</code>，<strong>零每帧分配</strong>。
+</div>
+
+<h3>7.3 报告节奏</h3>
+<ul>
+  <li>每 <code>ReportIntervalFrames = 300</code> 帧（= 10s @ 30Hz）生成一次报告</li>
+  <li>通过 <code>S2C_BandwidthStats</code> 推送给所有客户端</li>
+  <li>客户端 UI 实时显示节省量（带宽节省量调试面板）</li>
+  <li>每包外层头 <code>OuterPacketHeadBytes = 20</code> 字节（PacketLength 4 + ProtocolCode 4 + RpcId 4 + Address 8）</li>
+</ul>
+
+<div class="callout warn">
+  <strong>配置项</strong>（环境变量，默认全开）：
+  <ul style="margin:6px 0">
+    <li><code>BATTLE_BANDWIDTH_STATS=true</code> —— 开启统计</li>
+    <li><code>BATTLE_BANDWIDTH_FULLSYNC_BASELINE=true</code> —— 开启反事实基线测量</li>
+    <li><code>BATTLE_BANDWIDTH_REPORT_FRAMES=300</code> —— 报告间隔</li>
+  </ul>
+</div>
+</section>
+
+<!-- ===================== S8 ===================== -->
+<section id="s8">
+<h2><span class="num">8</span>闭环反馈控制</h2>
+
+<p>这是一个容易被忽略但非常精妙的设计：客户端不是固定领先服务端 N 帧，而是通过<strong>闭环反馈</strong>动态调整领先量，确保服务端的输入队列始终健康。</p>
+
+<h3>8.1 问题：为什么要动态调整领先量？</h3>
+<p>客户端领先服务端越多，预测越远 → 回滚越深 → 体验越差。领先太少 → 服务端缺帧 → 输入迟到被丢弃 → 玩家操作"丢失"。需要找到一个平衡点，并随网络波动自适应。</p>
+
+<h3>8.2 反馈信号：LatestAcceptedInputFrame</h3>
+<p>服务端在每条 <code>S2C_FrameSnapshot</code> 里，<strong>每个玩家</strong>都回显一个 <code>LatestAcceptedInputFrame</code>——"我已经接受到你的第几帧输入了"。</p>
+
+<h3>8.3 闭环控制算法（UpdateLeadFramesFromAcceptedInput）</h3>
+<pre><code>// 客户端收到快照后
+serverBufferedFrames = latestAcceptedInputFrame - snapshotFrame
+
+if (serverBufferedFrames &lt; MinAcceptedInputBufferFrames=4):
+    // 服务端队列快空了！危险，要掉帧了
+    _leadFrames += deficit            // ★ 加大领先量
+
+else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
+    // 服务端队列太满，可以收敛
+    if (冷却结束):  _leadFrames--     // ★ 减小领先量（限速）
+
+// 钳制到 [MinLeadFrames=3, MaxLeadFrames=20]</code></pre>
+
+<h3>8.4 RTT 驱动的基线</h3>
+<p>除了服务端反馈，客户端还根据 RTT 设定领先量基线（<code>RefreshBaselineLeadFrames</code>）：</p>
+<pre><code>baseline = JitterBufferFrames(2) 
+         + InputSendSafetyFrames(1) 
+         + ceil(rttEmaMs / 2 / fixedDtMs)
+// 钳制到 [3, 20]</code></pre>
+
+<div class="grid grid-3">
+  <div class="card"><h4>JitterBufferFrames = 2</h4><p style="font-size:12.5px">吸收网络抖动的缓冲帧</p></div>
+  <div class="card"><h4>InputSendSafetyFrames = 1</h4><p style="font-size:12.5px">输入发送安全余量</p></div>
+  <div class="card"><h4>RTT 项</h4><p style="font-size:12.5px">半 RTT 对应的帧数（信号单程时间）</p></div>
+</div>
+
+<h3>8.5 RTT 测量</h3>
+<ul>
+  <li>客户端每 30 帧（1s）发一次 <code>C2B_Ping</code>，带 <code>SendTimestampMs</code></li>
+  <li>服务端 <code>C2B_PingHandler</code> 原样回显时间戳到 <code>S2C_Pong</code></li>
+  <li>客户端 <code>OnPongMessage</code>：<code>rttMs = nowMs - pong.SendTimestampMs</code></li>
+  <li>EMA 平滑：<code>_rttEmaMs = α·rtt + (1-α)·_rttEmaMs</code>，<code>α = 0.2</code></li>
+</ul>
+
+<div class="callout danger">
+  <strong>待补缺口（S4）</strong>：目前 <code>C2B_PingHandler</code> 只回显时间戳，<strong>服务端不记录不计算 RTT</strong>。"服务端用 RTT 反推应然帧号"的能力尚不存在。注意不能让客户端上报自算的 RTT——那会变成"用客户端声称的 RTT 验证客户端"，反外挂价值归零。必须服务端独立测量。
+</div>
+</section>
+
+<!-- ===================== S9 ===================== -->
+<section id="s9">
+<h2><span class="num">9</span>测试与验收</h2>
+
+<p>项目有<strong>非常扎实</strong>的测试基础设施，这是它作为求职演示的核心竞争力之一。</p>
+
+<h3>9.1 无头逻辑测试（TestRunner）</h3>
+<p>服务端 <code>--mode=test</code> 启动无头测试，不依赖 Unity，纯逻辑验证。入口：<code>GameServer/Server/Main/Program.cs</code>。</p>
+
+<table>
+<tr><th>测试套件</th><th>覆盖场景</th><th>文件</th></tr>
+<tr><td><strong>SnapshotSelfTestSuite</strong></td><td>20 例：快照往返、容量驱逐、同帧覆盖、哈希归一化、物理/Buff/属性对哈希的影响</td><td><code>SnapshotSelfTestSuite.cs</code></td></tr>
+<tr><td><strong>BattlePredictionSelfTestSuite</strong></td><td>23 例：加入对齐帧、预测移动、房间边界 clamp、一致性命中/偏差、回滚重放、手动回滚、误差平滑衰减、<strong>定点物理 bit-exact（黄金哈希 0xD2120B5F0F5A5FE5）</strong></td><td><code>BattlePredictionSelfTestSuite.cs</code></td></tr>
+<tr><td><strong>ServerInputModelSelfTest</strong></td><td>迟到输入丢弃、未来输入缓冲、过远未来输入拒绝、缺帧复用上一帧</td><td><code>TestRunner.cs:400-526</code></td></tr>
+<tr><td><strong>FrameScheduleSelfTest</strong></td><td>未来帧输入在目标帧生效（第 5 帧输入在第 0-4 帧不动，第 5 帧动）</td><td><code>TestRunner.cs:452-470</code></td></tr>
+</table>
+
+<h3>9.2 多客户端场景测试</h3>
+<table>
+<tr><th>场景</th><th>验证目标</th></tr>
+<tr><td><strong>DeterminismScenario</strong></td><td>N 个客户端共享移动脚本，断言所有客户端状态哈希一致</td></tr>
+<tr><td><strong>ServerClientConsistencyScenario</strong></td><td>1 服务端 + 1 客户端，每 30 帧对比 <code>BattleLogic.GetStateHash()</code> vs <code>client.GetStateHash()</code></td></tr>
+<tr><td><strong>ConvergenceScenario</strong></td><td>前 50 帧分叉输入，之后无输入，断言哈希收敛并稳定</td></tr>
+<tr><td><strong>PlayerCollisionScenario</strong></td><td>静止 + 对撞 body block，断言无穿透、阻挡者不被推、哈希一致</td></tr>
+<tr><td><strong>PlayerLeaveScenario</strong></td><td>第 100 帧移除玩家 B，断言 A 继续移动、B 消失、哈希一致</td></tr>
+</table>
+
+<h3>9.3 确定性验收工具（FrameSyncValidationRunner）</h3>
+<p>服务端 <code>validate</code> 模式运行，专门验证确定性：</p>
+<ul>
+  <li><strong>静态扫描</strong>：禁止 UnityEngine/Fantasy/DateTime/Stopwatch/Random/async 出现在确定性路径</li>
+  <li><strong>Tick 循环压测</strong>：测量 Tick 间隔 P95（阈值 40ms）、漂移（阈值 1s）、帧序连续性</li>
+  <li><strong>FrameTimerService 行为测试</strong></li>
+  <li><strong>CommandPool 复用/重置测试</strong></li>
+  <li>输出 console / markdown / json 报告</li>
+</ul>
+
+<h3>9.4 进程内仿真客户端（SimulatedClient）</h3>
+<p><code>SimulatedClient</code> 包装一个 <code>BattleWorldState</code>，把 <code>BattleLogic.OnBroadcast</code> 的快照直接注入——这是<strong>网络在进程内的替身</strong>，让测试无需真实网络即可验证预测-回滚全链路。</p>
+
+<h3>9.5 黄金哈希基线</h3>
+<p>"定点物理 bit-exact"用例有一个黄金哈希值 <code>0xD2120B5F0F5A5FE5</code>。物理仿真跑固定场景后，哈希必须精确等于这个值，否则报错并打印实际哈希。这是跨平台 bit-exact 的硬保证。</p>
+
+<div class="callout ok">
+  <strong>运行命令</strong>（注意必须用 Rider 的 dotnet，系统 dotnet 无 net9.0 SDK）：
+  <pre style="margin:8px 0 0"><code>"C:/Users/shiwe/.dotnet/dotnet.exe" run \
+  --project "GameServer/Server/Main/Main.csproj" \
+  -- --mode=test --scenario=all</code></pre>
+</div>
+</section>
+
+<!-- ===================== S10 ===================== -->
+<section id="s10">
+<h2><span class="num">10</span>关键文件索引</h2>
+
+<h3>服务端（GameServer/Server/）</h3>
+<table>
+<tr><th>文件</th><th>职责</th></tr>
+<tr><td><code>Entity/Battle/BattleLogic.cs</code></td><td>权威仿真核心：输入消费、物理、Buff、数值、哈希</td></tr>
+<tr><td><code>Entity/Battle/BattleComponent.cs</code></td><td>联网包装：快照广播、脏同步、带宽测量、玩家进出</td></tr>
+<tr><td><code>Entity/Battle/BattleBandwidthStats.cs</code></td><td>带宽统计 + 反事实对比</td></tr>
+<tr><td><code>Entity/FrameSync/ServerTickDriver.cs</code></td><td>挂钟→固定 tick 的驱动器</td></tr>
+<tr><td><code>Entity/TestHarness/TestRunner.cs</code></td><td>无头测试入口</td></tr>
+<tr><td><code>Entity/TestHarness/SimulatedClient.cs</code></td><td>进程内仿真客户端</td></tr>
+<tr><td><code>Entity/TestHarness/FrameSyncValidationRunner.cs</code></td><td>确定性验收工具</td></tr>
+<tr><td><code>Hotfix/Battle/Handler/C2B_PlayerInputHandler.cs</code></td><td>玩家输入消息处理器</td></tr>
+<tr><td><code>Hotfix/Battle/Handler/C2B_JoinBattleHandler.cs</code></td><td>加入战斗 RPC 处理器</td></tr>
+<tr><td><code>Hotfix/Battle/Handler/C2B_PingHandler.cs</code></td><td>Ping 处理器（回显时间戳）</td></tr>
+<tr><td><code>Tools/NetworkProtocol/Outer/OuterMessage.proto</code></td><td>协议唯一真源</td></tr>
+</table>
+
+<h3>客户端（UnityProject/Assets/GameScripts/HotFix/）</h3>
+<table>
+<tr><th>文件</th><th>职责</th></tr>
+<tr><td><code>GameLogic/Battle/BattleSimulation.cs</code></td><td><strong>客户端核心</strong>：预测、对账、回滚重放、闭环领先量</td></tr>
+<tr><td><code>GameLogic/Battle/BattleClientController.cs</code></td><td>Unity 粘合：输入、网络、渲染（Ghost 球 + 平滑）</td></tr>
+<tr><td><code>GameLogic/Battle/PredictionErrorSmoother.cs</code></td><td>表现层误差平滑（不进逻辑状态）</td></tr>
+<tr><td><code>GameLogic/Battle/BattlePredictionSelfTestSuite.cs</code></td><td>23 例预测自测</td></tr>
+<tr><td><code>GameLogic/FrameSync/ClientTickDriver.cs</code></td><td>客户端固定步长 + 追帧驱动</td></tr>
+</table>
+
+<h3>双端共享内核（GameShared/FrameSync/）</h3>
+<table>
+<tr><th>文件</th><th>职责</th></tr>
+<tr><td><code>Battle/BattleWorldState.cs</code></td><td>世界状态容器：TakeSnapshot / RestoreSnapshot</td></tr>
+<tr><td><code>Battle/FrameSyncPhysicsWorld.cs</code></td><td>手写定点物理：圆-圆分离 + 圆-矩形边界</td></tr>
+<tr><td><code>Battle/MoveSystem.cs</code></td><td>移动系统：输入 → 物理体</td></tr>
+<tr><td><code>Battle/InputBufferTuning.cs</code></td><td>领先量 / 缓冲区调谐常量</td></tr>
+<tr><td><code>Battle/BuffSystem.cs</code> / <code>BuffSync.cs</code></td><td>Buff 系统 + 增量同步</td></tr>
+<tr><td><code>Battle/PlayerAttributeSync.cs</code></td><td>属性脏同步</td></tr>
+<tr><td><code>Core/TickAccumulator.cs</code> / <code>TickDispatcher.cs</code></td><td>固定步长累加器 + tick 分发</td></tr>
+<tr><td><code>Snapshot/StateHasher.cs</code></td><td>FNV-1a 64 位确定性哈希</td></tr>
+<tr><td><code>Snapshot/SnapshotBuffer.cs</code></td><td>帧索引环形缓冲</td></tr>
+<tr><td><code>Determinism/DeterminismRules.cs</code></td><td>固定 dt 断言（位比较）</td></tr>
+<tr><td><code>Command/CommandPool.cs</code></td><td>零 GC 命令对象池</td></tr>
+</table>
+</section>
+
+<!-- ===================== S11 ===================== -->
+<section id="s11">
+<h2><span class="num">11</span>演进路线</h2>
+
+<p>项目用 <strong>S1~S10 单轴编号</strong>（序号即执行顺序）管理演进。截至 2026-08-04 的状态：</p>
+
+<div class="timeline">
+  <div class="tl-item done">
+    <h4>P0 方向收敛 <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">从"弹珠技术演示"收敛为"Gameplay 状态同步演示"。</p>
+  </div>
+  <div class="tl-item done">
+    <h4>P1 小球移动最小闭环 <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">预测-回滚最小闭环跑通（<code>55d8c97d</code>），19 条自测用例全绿。</p>
+  </div>
+  <div class="tl-item done">
+    <h4>带宽统计 <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">脏同步收益量化 + 调试 UI（<code>4c1104cb</code> + <code>70e9aad7</code>）。</p>
+  </div>
+  <div class="tl-item done">
+    <h4>关闭 Box2D WarmStarting <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">消除跨帧隐藏状态（<code>0bb9a468</code>）。</p>
+  </div>
+  <div class="tl-item done">
+    <h4>S1 预测误差平滑 + Ghost 可视化 <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">硬跳修正改为多帧收敛 + Ghost 球对比。基线哈希 <code>0xA565C15299DDC667</code>。</p>
+  </div>
+  <div class="tl-item done">
+    <h4>S2 物理层重写（手写定点） <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">拿掉 Box2D，全定点物理，跨端 bit-exact。哈希基线合法变化。</p>
+  </div>
+  <div class="tl-item next">
+    <h4>S3 客户端哈希上报 + 服务端告警 <span class="pill next">下一项</span></h4>
+    <p style="font-size:13px"><strong>缺前置</strong>：服务端需新增历史哈希索引（<code>BattleLogic.GetStateHash()</code> 目前只能算最新帧）。客户端侧 <code>CheckConsistency</code> 已按帧号索引就绪。</p>
+  </div>
+  <div class="tl-item todo">
+    <h4>S4 输入帧号 RTT 交叉校验 <span class="pill todo">未开始</span></h4>
+    <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。</p>
+  </div>
+  <div class="tl-item todo">
+    <h4>S5 一致时跳过重放 <span class="pill todo">部分实现</span></h4>
+    <p style="font-size:13px">一致路径下计时和日志已跳过，但 <code>ApplyAuthoritativeSnapshot()</code> + 重放仍在跑，有真实 CPU 可省。注意不能整体 return——<code>_authoritativeSnapshots.Save()</code> 和 <code>DiscardPredictionsAtOrAfter()</code> 必须保留（S3 依赖）。</p>
+  </div>
+  <div class="tl-item todo">
+    <h4>S6 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
+  </div>
+  <div class="tl-item todo">
+    <h4>S7 弱网自动化测试 <span class="pill todo">未开始</span></h4>
+    <p style="font-size:13px">延迟 / 抖动 / 丢包场景自动化。</p>
+  </div>
+  <div class="tl-item todo">
+    <h4>S8 断线重连最小版 <span class="pill todo">未开始</span></h4>
+  </div>
+  <div class="tl-item todo">
+    <h4>S9 远端插值 + 轨迹线 + 完整调试面板 <span class="pill todo">未开始</span></h4>
+  </div>
+  <div class="tl-item todo">
+    <h4>S10 求职展示打磨 <span class="pill todo">未开始</span></h4>
+    <p style="font-size:13px">README / 录屏 / 讲解。</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>已取消</strong>：<code>P3</code> 占点交互（进度条看不出同步难点，改由 S6 撞击击退承担职责）；<code>#6</code> epsilon 豁免（S2 全定点后浮点噪声消失，整项作废）。
+</div>
+</section>
+
+<!-- ===================== S12 ===================== -->
+<section id="s12">
+<h2><span class="num">12</span>总结</h2>
+
+<h3>这个项目做对了什么</h3>
+<div class="grid grid-2">
+  <div class="card">
+    <span class="tag green">架构清晰</span>
+    <h4>职责单一，分层干净</h4>
+    <ul style="font-size:13px">
+      <li><code>BattleLogic</code> 纯仿真，无网络无 Unity</li>
+      <li>双端共享同一套 <code>GameShared</code> 内核</li>
+      <li>服务端只推进不回滚，客户端负责对账</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">确定性优先</span>
+    <h4>全链路 bit-exact</h4>
+    <ul style="font-size:13px">
+      <li>定点数学（Fixed64）</li>
+      <li>手写定点物理（拿掉 Box2D）</li>
+      <li>位级 dt 断言 + 静态扫描禁令</li>
+      <li>黄金哈希基线硬保证</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">可验证性强</span>
+    <h4>测试基础设施扎实</h4>
+    <ul style="font-size:13px">
+      <li>无头测试 + 进程内仿真客户端</li>
+      <li>23 + 20 例自测套件</li>
+      <li>多客户端收敛/碰撞/离场场景</li>
+      <li>确定性验收工具</li>
+    </ul>
+  </div>
+  <div class="card">
+    <span class="tag green">工程务实</span>
+    <h4>闭环设计</h4>
+    <ul style="font-size:13px">
+      <li>服务端回显领先量反馈</li>
+      <li>RTT 驱动的领先量基线</li>
+      <li>脏同步 + 反事实带宽测量</li>
+      <li>表现层与逻辑层解耦（平滑器不进哈希）</li>
+    </ul>
+  </div>
+</div>
+
+<h3>需要关注的缺口</h3>
+<table>
+<tr><th>缺口</th><th>影响</th><th>对应阶段</th></tr>
+<tr><td>服务端无 RTT 测量</td><td>S4 无法做帧号交叉校验，反外挂能力缺失</td><td>S4</td></tr>
+<tr><td>服务端无历史哈希索引</td><td>S3 无法对比客户端上报的延迟哈希</td><td>S3</td></tr>
+<tr><td>输入逐帧不批量</td><td>上行 30 msg/s，弱网下消息开销大</td><td>—</td></tr>
+<tr><td>断线重连未实现</td><td>掉线即出局，演示容错性不足</td><td>S8</td></tr>
+<tr><td>Dictionary 迭代顺序</td><td>靠 Sort 兜底，非编译期保证</td><td>—</td></tr>
+</table>
+
+<div class="callout ok">
+  <strong>总体评价</strong>：作为一个求职演示项目，这套网络同步系统的<strong>架构成熟度、确定性工程化、测试覆盖率</strong>都明显高于同类演示。它不是在"做一个游戏"，而是在"把状态同步这件事讲清楚"——每一处设计都能回答"为什么这么做"。闭环领先量控制、反事实带宽测量、bit-exact 校验这几个细节尤其能体现深度。
+</div>
+
+<div class="foot">
+  <p>本报告基于代码库分支 <code>feature/gameplay-sync-sandbox</code>（commit <code>9be6e989</code>，2026-08-04）生成。</p>
+  <p>数据来源：源码静态分析 + 三个并行探索 Agent 的交叉验证。关键结论均有 <code>文件:行号</code> 可追溯。</p>
+</div>
+
+</section>
+
+</div>
+</body>
+</html>

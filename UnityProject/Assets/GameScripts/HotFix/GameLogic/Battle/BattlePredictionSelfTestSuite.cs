@@ -35,6 +35,7 @@ namespace GameLogic
             "error-smoothing-large-error-snaps",
             "error-smoothing-does-not-affect-logic-state",
             "error-smoothing-overlapping-corrections-rebaseline",
+            "error-smoothing-matching-snapshots-decay",
             "fixed-physics-bit-exact"
         };
 
@@ -82,6 +83,7 @@ namespace GameLogic
                     "error-smoothing-large-error-snaps" => ErrorSmoothingLargeErrorSnaps(),
                     "error-smoothing-does-not-affect-logic-state" => ErrorSmoothingDoesNotAffectLogicState(),
                     "error-smoothing-overlapping-corrections-rebaseline" => ErrorSmoothingOverlappingCorrectionsRebaseline(),
+                    "error-smoothing-matching-snapshots-decay" => ErrorSmoothingMatchingSnapshotsDecay(),
                     "fixed-physics-bit-exact" => FixedPhysicsBitExact(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
@@ -655,6 +657,7 @@ namespace GameLogic
             Fixed64 authoritativeX = F(2.0f);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
             simulation.RecordRenderedSelfPosition(0.0f, 0.0f);
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
@@ -718,6 +721,44 @@ namespace GameLogic
                    NearlyEqual(
                        simulation.RenderErrorOffsetY,
                        previousRenderedY);
+        }
+
+        private static bool ErrorSmoothingMatchingSnapshotsDecay()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            simulation.RecordRenderedSelfPosition(1.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, F(2.0f), Fixed64.Zero)
+                    }),
+                11);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+
+            float initialOffset = simulation.RenderErrorOffsetX;
+            simulation.AdvancePredictionErrorSmoothing(PredictionErrorSmoother.SmoothingDurationSeconds * 0.5f);
+            simulation.RecordRenderedSelfPosition(
+                2.0f + simulation.RenderErrorOffsetX,
+                simulation.RenderErrorOffsetY);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    12,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, F(2.0f), Fixed64.Zero)
+                    }),
+                12);
+            simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+
+            return MathF.Abs(initialOffset) > 0.0f &&
+                   MathF.Abs(simulation.RenderErrorOffsetX) < MathF.Abs(initialOffset) &&
+                   simulation.PredictionSmoothingRemainingSeconds <= PredictionErrorSmoother.SmoothingDurationSeconds * 0.5f;
         }
 
         private static bool FixedPhysicsBitExact()
