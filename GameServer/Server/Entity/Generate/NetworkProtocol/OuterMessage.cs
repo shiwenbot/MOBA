@@ -320,8 +320,8 @@ namespace Fantasy
             if (!IsPool()) return; 
             ErrorCode = 0;
             PlayerId = default;
-            X = default;
-            Y = default;
+            XRaw = default;
+            YRaw = default;
             ServerFrameIndex = default;
             MessageObjectPool<C2B_JoinBattleResponse>.Return(this);
         }
@@ -331,9 +331,9 @@ namespace Fantasy
         [ProtoMember(2)]
         public long PlayerId { get; set; }
         [ProtoMember(3)]
-        public float X { get; set; }
+        public long XRaw { get; set; }
         [ProtoMember(4)]
-        public float Y { get; set; }
+        public long YRaw { get; set; }
         [ProtoMember(5)]
         public uint ServerFrameIndex { get; set; }
     }
@@ -593,15 +593,15 @@ namespace Fantasy
         {
             if (!IsPool()) return; 
             PlayerId = default;
-            X = default;
-            Y = default;
+            XRaw = default;
+            YRaw = default;
             LatestAcceptedInputFrame = default;
-            Angle = default;
-            LinearVelocityX = default;
-            LinearVelocityY = default;
-            AngularVelocity = default;
-            IsAwake = default;
-            IsEnabled = default;
+            ReservedField5 = default;
+            LinearVelocityXRaw = default;
+            LinearVelocityYRaw = default;
+            ReservedField8 = default;
+            ReservedField9 = default;
+            ReservedField10 = default;
             AttributeDirtyMask = default;
             Health = default;
             MaxHealth = default;
@@ -623,23 +623,23 @@ namespace Fantasy
         [ProtoMember(1)]
         public long PlayerId { get; set; }
         [ProtoMember(2)]
-        public float X { get; set; }
+        public long XRaw { get; set; }
         [ProtoMember(3)]
-        public float Y { get; set; }
+        public long YRaw { get; set; }
         [ProtoMember(4)]
         public uint LatestAcceptedInputFrame { get; set; }
         [ProtoMember(5)]
-        public float Angle { get; set; }
+        public uint ReservedField5 { get; set; }
         [ProtoMember(6)]
-        public float LinearVelocityX { get; set; }
+        public long LinearVelocityXRaw { get; set; }
         [ProtoMember(7)]
-        public float LinearVelocityY { get; set; }
+        public long LinearVelocityYRaw { get; set; }
         [ProtoMember(8)]
-        public float AngularVelocity { get; set; }
+        public uint ReservedField8 { get; set; }
         [ProtoMember(9)]
-        public bool IsAwake { get; set; }
+        public uint ReservedField9 { get; set; }
         [ProtoMember(10)]
-        public bool IsEnabled { get; set; }
+        public uint ReservedField10 { get; set; }
         [ProtoMember(11)]
         public uint AttributeDirtyMask { get; set; }
         [ProtoMember(12)]
@@ -898,5 +898,49 @@ namespace Fantasy
         public double DirtySyncSavedRatio { get; set; }
         [ProtoMember(7)]
         public long DirtySyncSavedBytes { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class C2B_StateHashReport : AMessage, IMessage
+    {
+        public static C2B_StateHashReport Create(bool autoReturn = true)
+        {
+            var c2B_StateHashReport = MessageObjectPool<C2B_StateHashReport>.Rent();
+            c2B_StateHashReport.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                c2B_StateHashReport.SetIsPool(false);
+            }
+            
+            return c2B_StateHashReport;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            FrameIndex = default;
+            StateHash = default;
+            MessageObjectPool<C2B_StateHashReport>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2B_StateHashReport; } 
+        [ProtoMember(1)]
+        public uint FrameIndex { get; set; }
+        [ProtoMember(2)]
+        public ulong StateHash { get; set; }
     }
 }

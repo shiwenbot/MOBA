@@ -32,6 +32,10 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     /// <summary>对照测量是否开启（未开启则算不出「省了多少」）。</summary>
     public bool BandwidthMeasureFullSyncBaseline => _bandwidthConfig.MeasureFullSyncBaseline;
 
+    public int HashReportsMatched => _battleLogic.HashReportsMatched;
+    public int HashMismatchCount => _battleLogic.HashMismatchCount;
+    public int HashNoRecordCount => _battleLogic.HashNoRecordCount;
+
     private long _nextPlayerId = 1;
     private bool _automationPlayerThresholdObserved;
     private bool _automationBuffCommandsQueued;
@@ -66,8 +70,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         long playerId = _nextPlayerId++;
-        (float spawnX, float spawnY) = GetSpawnPosition(_sessionsByPlayerId.Count);
-        PlayerState newState = _battleLogic.JoinPlayer(playerId, (Fixed64)spawnX, (Fixed64)spawnY);
+        (Fixed64 spawnX, Fixed64 spawnY) = GetSpawnPosition(_sessionsByPlayerId.Count);
+        PlayerState newState = _battleLogic.JoinPlayer(playerId, spawnX, spawnY);
 
         _sessionsByPlayerId[playerId] = new PlayerSession(playerId, session);
         _playerIdBySessionId[session.Id] = playerId;
@@ -88,6 +92,21 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.Dx, input.Dy, input.SkillId);
+    }
+
+    public void SubmitStateHashReport(Session session, C2B_StateHashReport report)
+    {
+        if (session == null || report == null)
+        {
+            return;
+        }
+
+        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId))
+        {
+            return;
+        }
+
+        _battleLogic.TryCompareReportedHash(playerId, report.FrameIndex, report.StateHash);
     }
 
     public void Tick(uint frameIndex, Fixed64 fixedDt)
@@ -188,15 +207,11 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 frameSnapshot.Players.Add(new PlayerSnapshot
                 {
                     PlayerId = player.PlayerId,
-                    X = (float)player.X,
-                    Y = (float)player.Y,
+                    XRaw = player.X.m_rawValue,
+                    YRaw = player.Y.m_rawValue,
                     LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
-                    Angle = hasPhysics ? (float)bodySnapshot.RotationRadians : 0.0f,
-                    LinearVelocityX = hasPhysics ? (float)bodySnapshot.LinearVelocityX : 0.0f,
-                    LinearVelocityY = hasPhysics ? (float)bodySnapshot.LinearVelocityY : 0.0f,
-                    AngularVelocity = hasPhysics ? (float)bodySnapshot.AngularVelocity : 0.0f,
-                    IsAwake = hasPhysics && bodySnapshot.IsAwake,
-                    IsEnabled = !hasPhysics || bodySnapshot.IsEnabled,
+                    LinearVelocityXRaw = hasPhysics ? bodySnapshot.LinearVelocityX.m_rawValue : 0L,
+                    LinearVelocityYRaw = hasPhysics ? bodySnapshot.LinearVelocityY.m_rawValue : 0L,
                     AttributeDirtyMask = (uint)dirtyMask,
                     Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, currentAttributes.Health),
                     MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
@@ -304,15 +319,11 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             fullSync.Players.Add(new PlayerSnapshot
             {
                 PlayerId = source.PlayerId,
-                X = source.X,
-                Y = source.Y,
+                XRaw = source.XRaw,
+                YRaw = source.YRaw,
                 LatestAcceptedInputFrame = source.LatestAcceptedInputFrame,
-                Angle = source.Angle,
-                LinearVelocityX = source.LinearVelocityX,
-                LinearVelocityY = source.LinearVelocityY,
-                AngularVelocity = source.AngularVelocity,
-                IsAwake = source.IsAwake,
-                IsEnabled = source.IsEnabled,
+                LinearVelocityXRaw = source.LinearVelocityXRaw,
+                LinearVelocityYRaw = source.LinearVelocityYRaw,
                 AttributeDirtyMask = (uint)PlayerAttributeDirtyFlags.All,
                 Health = hasAttributes ? attributes.Health : source.Health,
                 MaxHealth = hasAttributes ? attributes.MaxHealth : source.MaxHealth,
@@ -639,12 +650,12 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
     }
 
-    private static (float x, float y) GetSpawnPosition(int playerCount)
+    private static (Fixed64 x, Fixed64 y) GetSpawnPosition(int playerCount)
     {
-        const float spacing = 3.0f;
+        Fixed64 spacing = (Fixed64)3;
         int row = playerCount / 2;
-        float x = (playerCount & 1) == 0 ? -spacing : spacing;
-        float y = row * spacing;
+        Fixed64 x = (playerCount & 1) == 0 ? -spacing : spacing;
+        Fixed64 y = row * spacing;
         return (x, y);
     }
 

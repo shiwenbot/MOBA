@@ -280,6 +280,7 @@ namespace GameLogic
                 consistencyChecked = _simulation?.ConsistencyChecked ?? 0,
                 consistencyHits = _simulation?.ConsistencyHits ?? 0,
                 consistencyMisses = _simulation?.ConsistencyMisses ?? 0,
+                hashReportsSent = _simulation?.HashReportsSent ?? 0,
                 consistencySkippedNoRecord = _simulation?.ConsistencySkippedNoRecord ?? 0,
                 consistencySkippedEvicted = _simulation?.ConsistencySkippedEvicted ?? 0,
                 rollbackCount = _simulation?.RollbackCount ?? 0,
@@ -318,6 +319,7 @@ namespace GameLogic
                 _tickDriver.WorldState,
                 SendInputCommand,
                 SendPingCommand,
+                SendHashReportCommand,
                 _tickDriver.Logger);
 
 #if BATTLE_PREDICTION_SELF_TEST
@@ -372,7 +374,11 @@ namespace GameLogic
 
             _joinSucceeded = true;
             _joinFailureReason = string.Empty;
-            _simulation?.SetJoined(response.PlayerId, response.ServerFrameIndex, (Fixed64)response.X, (Fixed64)response.Y);
+            _simulation?.SetJoined(
+                response.PlayerId,
+                response.ServerFrameIndex,
+                Fixed64.FromRaw(response.XRaw),
+                Fixed64.FromRaw(response.YRaw));
             if (_tickDriver != null && _simulation != null)
             {
                 uint alignedFrame = _simulation.InitialAlignedFrame;
@@ -599,22 +605,22 @@ namespace GameLogic
                 _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
                 players[i] = new PlayerStateSnapshot(
                     player.PlayerId,
-                    (Fixed64)player.X,
-                    (Fixed64)player.Y,
+                    Fixed64.FromRaw(player.XRaw),
+                    Fixed64.FromRaw(player.YRaw),
                     mergedAttributes,
                     authoritativeBuffs,
                     nextRuntimeBuffId,
                     BuildNumericSnapshot(player.Numeric, mergedAttributes));
                 bodies[i] = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
-                    (Fixed64)player.X,
-                    (Fixed64)player.Y,
-                    (Fixed64)player.Angle,
-                    (Fixed64)player.LinearVelocityX,
-                    (Fixed64)player.LinearVelocityY,
-                    (Fixed64)player.AngularVelocity,
-                    player.IsAwake,
-                    player.IsEnabled);
+                    Fixed64.FromRaw(player.XRaw),
+                    Fixed64.FromRaw(player.YRaw),
+                    Fixed64.Zero,
+                    Fixed64.FromRaw(player.LinearVelocityXRaw),
+                    Fixed64.FromRaw(player.LinearVelocityYRaw),
+                    Fixed64.Zero,
+                    true,
+                    true);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
                     selfLatestAcceptedInputFrame = player.LatestAcceptedInputFrame;
@@ -857,6 +863,15 @@ namespace GameLogic
             GameClient.Instance.Send(new C2B_Ping
             {
                 SendTimestampMs = sendTimestampMs
+            });
+        }
+
+        private static void SendHashReportCommand(uint frameIndex, ulong stateHash)
+        {
+            GameClient.Instance.Send(new C2B_StateHashReport
+            {
+                FrameIndex = frameIndex,
+                StateHash = stateHash
             });
         }
 

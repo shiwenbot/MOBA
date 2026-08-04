@@ -16,6 +16,7 @@ namespace GameLogic
     public sealed class BattleSimulation : IBuffCommandSink
     {
         private const int PingIntervalFrames = 30;
+        private const int HashReportIntervalFrames = 30;
         private const int PredictionBufferCapacity = 32;
         private const int InputHistoryCapacity = 128;
         private const int AuthoritativeSnapshotHistoryCapacity = 32;
@@ -26,6 +27,7 @@ namespace GameLogic
         private readonly BattleWorldState _worldState;
         private readonly BattleInputSender _onSendInput;
         private readonly Action<ulong> _onSendPing;
+        private readonly Action<uint, ulong>? _onSendHashReport;
         private readonly GameShared.FrameSync.Core.IFrameSyncLogger? _logger;
         private readonly BattleSkillGraphRuntime _skillGraphRuntime;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
@@ -55,6 +57,7 @@ namespace GameLogic
         private uint _baselineLeadFrames = InputBufferTuning.MinLeadFrames;
         private float _rttEmaMs = InitialRttEmaMs;
         private int _pingCount;
+        private int _hashReportCount;
         private int _checked;
         private int _hits;
         private int _misses;
@@ -87,6 +90,7 @@ namespace GameLogic
                 worldState,
                 AdaptInputSender(onSendInput),
                 onSendPing,
+                null,
                 logger,
                 null)
         {
@@ -98,10 +102,22 @@ namespace GameLogic
             Action<ulong> onSendPing,
             GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
             IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
+            : this(worldState, onSendInput, onSendPing, null, logger, skillGraphs)
+        {
+        }
+
+        public BattleSimulation(
+            BattleWorldState worldState,
+            BattleInputSender onSendInput,
+            Action<ulong> onSendPing,
+            Action<uint, ulong>? onSendHashReport,
+            GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
+            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
         {
             _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
             _onSendPing = onSendPing ?? throw new ArgumentNullException(nameof(onSendPing));
+            _onSendHashReport = onSendHashReport;
             _logger = logger;
             _buffConfigProvider = new DefaultBuffConfigProvider();
             _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
@@ -119,6 +135,7 @@ namespace GameLogic
         public int ConsistencyMisses => _misses;
         public int ConsistencySkippedNoRecord => _skippedNoRecord;
         public int ConsistencySkippedEvicted => _skippedEvicted;
+        public int HashReportsSent { get; private set; }
         public int LastServerBufferedInputFrames => _lastServerBufferedInputFrames;
         public int RollbackCount => _rollbackCount;
         public int LastRollbackReplayFrames => _lastRollbackReplayFrames;
@@ -221,6 +238,7 @@ namespace GameLogic
                     out uint targetFrameExclusive,
                     out bool consistencyMismatch);
                 AdvancePredictionTo(frameIndex, fixedDt);
+                SendHashReportIfNeeded(frameIndex);
 
                 return new TickResult(
                     snapshotApplied,
@@ -256,6 +274,8 @@ namespace GameLogic
             _hasRttSample = false;
             RefreshBaselineLeadFrames();
             _pingCount = 0;
+            _hashReportCount = 0;
+            HashReportsSent = 0;
             _checked = 0;
             _hits = 0;
             _misses = 0;
@@ -538,6 +558,25 @@ namespace GameLogic
 
             _pingCount = 0;
             _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
+        private void SendHashReportIfNeeded(uint frameIndex)
+        {
+            if (_onSendHashReport == null)
+            {
+                return;
+            }
+
+            _hashReportCount++;
+            if (_hashReportCount < HashReportIntervalFrames)
+            {
+                return;
+            }
+
+            _hashReportCount = 0;
+            BattleWorldSnapshot snapshot = _worldState.TakeSnapshot().WithFrameIndex(frameIndex);
+            _onSendHashReport(frameIndex, StateHasher.Hash(snapshot));
+            HashReportsSent++;
         }
 
         private void LogInputEdgeIfNeeded(uint frameIndex, Fixed64 dx, Fixed64 dy)

@@ -341,6 +341,10 @@ public static class TestRunner
         {
             generatedAt = report.GeneratedAt.ToString("O", CultureInfo.InvariantCulture),
             passed = report.Passed,
+            hashReportsSent = report.HashReportsSent,
+            hashReportsMatched = report.HashReportsMatched,
+            hashMismatchCount = report.HashMismatchCount,
+            hashNoRecordCount = report.HashNoRecordCount,
             options = new
             {
                 scenario = report.Options.Scenario,
@@ -359,14 +363,22 @@ public static class TestRunner
             {
                 name = scenario.Name,
                 passed = scenario.Passed,
-                details = scenario.Details
+                details = scenario.Details,
+                hashReportsSent = scenario.HashReportsSent,
+                hashReportsMatched = scenario.HashReportsMatched,
+                hashMismatchCount = scenario.HashMismatchCount,
+                hashNoRecordCount = scenario.HashNoRecordCount
             }),
             summary = new
             {
                 passedChecks = report.PassedChecks,
                 totalChecks = report.Checks.Count,
                 passedScenarios = report.PassedScenarios,
-                totalScenarios = report.Scenarios.Count
+                totalScenarios = report.Scenarios.Count,
+                hashReportsSent = report.HashReportsSent,
+                hashReportsMatched = report.HashReportsMatched,
+                hashMismatchCount = report.HashMismatchCount,
+                hashNoRecordCount = report.HashNoRecordCount
             }
         };
 
@@ -452,7 +464,7 @@ public static class TestRunner
     private static bool FutureFrameInputAppliesOnTargetFrame()
     {
         BattleLogic battleLogic = new BattleLogic();
-        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState state = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
         for (uint frame = 0; frame < 5; frame++)
@@ -472,7 +484,7 @@ public static class TestRunner
     private static bool ExpiredInputIsDropped()
     {
         BattleLogic battleLogic = new BattleLogic();
-        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState state = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         battleLogic.Tick(0, DeterminismRules.FixedDeltaTimeFixed64);
         battleLogic.SubmitInput(1, 0, 1, 1.0f, 0.0f);
@@ -484,7 +496,7 @@ public static class TestRunner
     private static bool FutureInputIsBuffered()
     {
         BattleLogic battleLogic = new BattleLogic();
-        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState state = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         battleLogic.SubmitInput(1, 5, 1, 1.0f, 0.0f);
         for (uint frame = 0; frame < 5; frame++)
@@ -506,7 +518,7 @@ public static class TestRunner
     private static bool TooFarFutureInputIsRejected()
     {
         BattleLogic battleLogic = new BattleLogic();
-        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState state = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         uint rejectedFrame = (uint)(InputBufferTuning.MaxFutureInputFrames + 1);
         battleLogic.SubmitInput(1, rejectedFrame, 1, 1.0f, 0.0f);
@@ -521,7 +533,7 @@ public static class TestRunner
     private static bool MissingInputReusesLast()
     {
         BattleLogic battleLogic = new BattleLogic();
-        PlayerState state = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState state = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         battleLogic.Tick(0, DeterminismRules.FixedDeltaTimeFixed64);
         if (!NearZero(state.X))
@@ -580,6 +592,8 @@ public static class TestRunner
     {
         Harness harness = CreateHarness(1);
         SimulatedClient client = harness.Clients[0];
+        int framesSinceHashReport = 0;
+        int hashReportsSent = 0;
 
         for (uint frame = 0; frame < options.Frames; frame++)
         {
@@ -587,22 +601,53 @@ public static class TestRunner
             client.SubmitInput(frame, dx, dy);
             harness.BattleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
 
-            if (frame % 30 != 0)
+            framesSinceHashReport++;
+            bool shouldSendHashReport = framesSinceHashReport >= 30;
+            bool shouldCheckConsistency = frame % 30 == 0;
+            if (!shouldSendHashReport && !shouldCheckConsistency)
             {
                 continue;
             }
 
             ulong serverHash = harness.BattleLogic.GetStateHash();
             ulong clientHash = client.GetStateHash();
-            if (serverHash != clientHash)
+            if (shouldCheckConsistency && serverHash != clientHash)
             {
                 return ScenarioResult.Fail(
                     $"Consistency (server-client, {options.Frames} frames)",
-                    $"server=0x{serverHash:X16} client=0x{clientHash:X16} frame={frame}");
+                    $"server=0x{serverHash:X16} client=0x{clientHash:X16} frame={frame}",
+                    hashReportsSent,
+                    harness.BattleLogic.HashReportsMatched,
+                    harness.BattleLogic.HashMismatchCount,
+                    harness.BattleLogic.HashNoRecordCount);
+            }
+
+            if (!shouldSendHashReport)
+            {
+                continue;
+            }
+
+            framesSinceHashReport = 0;
+            hashReportsSent++;
+            HashReportResult reportResult = harness.BattleLogic.TryCompareReportedHash(client.PlayerId, frame, clientHash);
+            if (reportResult != HashReportResult.Matched)
+            {
+                return ScenarioResult.Fail(
+                    $"Consistency (server-client, {options.Frames} frames)",
+                    $"hash report result={reportResult} frame={frame} hash=0x{clientHash:X16}",
+                    hashReportsSent,
+                    harness.BattleLogic.HashReportsMatched,
+                    harness.BattleLogic.HashMismatchCount,
+                    harness.BattleLogic.HashNoRecordCount);
             }
         }
 
-        return ScenarioResult.Pass($"Consistency (server-client, {options.Frames} frames)");
+        return ScenarioResult.Pass(
+            $"Consistency (server-client, {options.Frames} frames)",
+            hashReportsSent: hashReportsSent,
+            hashReportsMatched: harness.BattleLogic.HashReportsMatched,
+            hashMismatchCount: harness.BattleLogic.HashMismatchCount,
+            hashNoRecordCount: harness.BattleLogic.HashNoRecordCount);
     }
 
     private static ScenarioResult RunConvergenceScenario(TestRunOptions options)
@@ -709,8 +754,8 @@ public static class TestRunner
             2,
             playerIndex => playerIndex switch
             {
-                0 => (moverStartX, 0.0f),
-                1 => (stationaryPlayerX, 0.0f),
+                0 => ((Fixed64)moverStartX, Fixed64.Zero),
+                1 => ((Fixed64)stationaryPlayerX, Fixed64.Zero),
                 _ => GetSpawnPosition(playerIndex)
             });
 
@@ -782,7 +827,7 @@ public static class TestRunner
         int skillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
         int expectedBuffId = BattleSkillGraphLibrary.ResolveConfiguredBuffId();
         BattleLogic battleLogic = new BattleLogic(skillGraphs: BattleSkillGraphLibrary.CreateBuiltInGraphs());
-        PlayerState player = battleLogic.JoinPlayer(1, 0.0f, 0.0f);
+        PlayerState player = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
 
         battleLogic.SubmitInput(1, 5, 1, 0.0f, 0.0f, skillId);
         for (uint frame = 0; frame <= 5; frame++)
@@ -807,8 +852,8 @@ public static class TestRunner
             2,
             playerIndex => playerIndex switch
             {
-                0 => (-initialOffset, 0.0f),
-                1 => (initialOffset, 0.0f),
+                0 => ((Fixed64)(-initialOffset), Fixed64.Zero),
+                1 => ((Fixed64)initialOffset, Fixed64.Zero),
                 _ => GetSpawnPosition(playerIndex)
             });
 
@@ -984,7 +1029,7 @@ public static class TestRunner
                worldState.TryGetPlayer(rightPlayerId, out rightPlayer);
     }
 
-    private static Harness CreateHarness(int clientCount, Func<int, (float x, float y)> spawnProvider = null)
+    private static Harness CreateHarness(int clientCount, Func<int, (Fixed64 x, Fixed64 y)> spawnProvider = null)
     {
         BattleLogic battleLogic = new BattleLogic();
         List<SimulatedClient> clients = new(clientCount);
@@ -1005,7 +1050,7 @@ public static class TestRunner
                 (id, frameIndex, inputSeq, dx, dy) => battleLogic.SubmitInput(id, frameIndex, inputSeq, dx, dy));
             clients.Add(client);
 
-            (float x, float y) = spawnProvider != null ? spawnProvider(i) : GetSpawnPosition(i);
+            (Fixed64 x, Fixed64 y) = spawnProvider != null ? spawnProvider(i) : GetSpawnPosition(i);
             battleLogic.JoinPlayer(playerId, x, y);
         }
 
@@ -1043,12 +1088,12 @@ public static class TestRunner
         return clientIndex == 0 ? (0.0f, 1.0f) : (0.0f, -1.0f);
     }
 
-    private static (float x, float y) GetSpawnPosition(int playerCount)
+    private static (Fixed64 x, Fixed64 y) GetSpawnPosition(int playerCount)
     {
-        const float spacing = 3.0f;
+        Fixed64 spacing = (Fixed64)3;
         int row = playerCount / 2;
-        float x = (playerCount & 1) == 0 ? -spacing : spacing;
-        float y = row * spacing;
+        Fixed64 x = (playerCount & 1) == 0 ? -spacing : spacing;
+        Fixed64 y = (Fixed64)row * spacing;
         return (x, y);
     }
 
@@ -1092,25 +1137,66 @@ public static class TestRunner
 
     private readonly struct ScenarioResult
     {
-        private ScenarioResult(string name, bool passed, string details)
+        private ScenarioResult(
+            string name,
+            bool passed,
+            string details,
+            int hashReportsSent,
+            int hashReportsMatched,
+            int hashMismatchCount,
+            int hashNoRecordCount)
         {
             Name = name;
             Passed = passed;
             Details = details;
+            HashReportsSent = hashReportsSent;
+            HashReportsMatched = hashReportsMatched;
+            HashMismatchCount = hashMismatchCount;
+            HashNoRecordCount = hashNoRecordCount;
         }
 
         public string Name { get; }
         public bool Passed { get; }
         public string Details { get; }
+        public int HashReportsSent { get; }
+        public int HashReportsMatched { get; }
+        public int HashMismatchCount { get; }
+        public int HashNoRecordCount { get; }
 
-        public static ScenarioResult Pass(string name, string details = "")
+        public static ScenarioResult Pass(
+            string name,
+            string details = "",
+            int hashReportsSent = 0,
+            int hashReportsMatched = 0,
+            int hashMismatchCount = 0,
+            int hashNoRecordCount = 0)
         {
-            return new ScenarioResult(name, true, details);
+            return new ScenarioResult(
+                name,
+                true,
+                details,
+                hashReportsSent,
+                hashReportsMatched,
+                hashMismatchCount,
+                hashNoRecordCount);
         }
 
-        public static ScenarioResult Fail(string name, string details)
+        public static ScenarioResult Fail(
+            string name,
+            string details,
+            int hashReportsSent = 0,
+            int hashReportsMatched = 0,
+            int hashMismatchCount = 0,
+            int hashNoRecordCount = 0)
         {
-            return new ScenarioResult(name, false, details);
+            return new ScenarioResult(
+                name,
+                false,
+                details,
+                hashReportsSent,
+                hashReportsMatched,
+                hashMismatchCount,
+                hashNoRecordCount);
         }
     }
 
@@ -1130,6 +1216,10 @@ public static class TestRunner
         public DateTimeOffset GeneratedAt { get; }
         public int PassedChecks => CountPassedChecks();
         public int PassedScenarios => CountPassedScenarios();
+        public int HashReportsSent => SumScenarioMetric(static scenario => scenario.HashReportsSent);
+        public int HashReportsMatched => SumScenarioMetric(static scenario => scenario.HashReportsMatched);
+        public int HashMismatchCount => SumScenarioMetric(static scenario => scenario.HashMismatchCount);
+        public int HashNoRecordCount => SumScenarioMetric(static scenario => scenario.HashNoRecordCount);
         public bool Passed => PassedChecks == Checks.Count && PassedScenarios == Scenarios.Count;
 
         private int CountPassedChecks()
@@ -1158,6 +1248,17 @@ public static class TestRunner
             }
 
             return passed;
+        }
+
+        private int SumScenarioMetric(Func<ScenarioResult, int> selector)
+        {
+            int total = 0;
+            for (int i = 0; i < Scenarios.Count; i++)
+            {
+                total += selector(Scenarios[i]);
+            }
+
+            return total;
         }
     }
 

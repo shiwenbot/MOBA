@@ -52,8 +52,8 @@ message C2B_JoinBattle // IRequest,C2B_JoinBattleResponse
 message C2B_JoinBattleResponse // IResponse
 {
 	int64 PlayerId = 1;
-	float X = 2;
-	float Y = 3;
+	int64 XRaw = 2;
+	int64 YRaw = 3;
 	uint32 ServerFrameIndex = 4;
 }
 
@@ -101,15 +101,17 @@ message NumericSnapshot
 message PlayerSnapshot
 {
 	int64 PlayerId = 1;
-	float X = 2;
-	float Y = 3;
+	int64 XRaw = 2;
+	int64 YRaw = 3;
 	uint32 LatestAcceptedInputFrame = 4;
-	float Angle = 5;
-	float LinearVelocityX = 6;
-	float LinearVelocityY = 7;
-	float AngularVelocity = 8;
-	bool IsAwake = 9;
-	bool IsEnabled = 10;
+	// Compatibility slot: keep field number 5 unused by gameplay code.
+	uint32 ReservedField5 = 5;
+	int64 LinearVelocityXRaw = 6;
+	int64 LinearVelocityYRaw = 7;
+	// Compatibility slots: keep field numbers 8-10 unused by gameplay code.
+	uint32 ReservedField8 = 8;
+	uint32 ReservedField9 = 9;
+	uint32 ReservedField10 = 10;
 	uint32 AttributeDirtyMask = 11;
 	int32 Health = 12;
 	int32 MaxHealth = 13;
@@ -161,6 +163,13 @@ message S2C_BandwidthStats // IMessage
 	int64  FullSyncPayloadBytes = 5;     // 假设全量同步的 payload 累计
 	double DirtySyncSavedRatio = 6;      // 节省百分比 %
 	int64  DirtySyncSavedBytes = 7;      // 节省的绝对字节数
+}
+
+// 客户端逐帧状态哈希上报（单向消息）
+message C2B_StateHashReport // IMessage
+{
+	uint32 FrameIndex = 1;
+	uint64 StateHash = 2;
 }
 
 

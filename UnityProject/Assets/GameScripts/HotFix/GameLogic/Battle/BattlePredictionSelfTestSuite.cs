@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using FixedMathSharp;
+using Fantasy.Serialize;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Snapshot;
@@ -36,7 +38,11 @@ namespace GameLogic
             "error-smoothing-does-not-affect-logic-state",
             "error-smoothing-overlapping-corrections-rebaseline",
             "error-smoothing-matching-snapshots-decay",
-            "fixed-physics-bit-exact"
+            "fixed-physics-bit-exact",
+            "snapshot-raw-roundtrip-bit-exact",
+            "hash-report-matches-reported-frame",
+            "server-hash-history-detects-mismatch",
+            "hash-report-interval-is-30-frames"
         };
 
         public static bool Run(out string failedCase)
@@ -85,6 +91,10 @@ namespace GameLogic
                     "error-smoothing-overlapping-corrections-rebaseline" => ErrorSmoothingOverlappingCorrectionsRebaseline(),
                     "error-smoothing-matching-snapshots-decay" => ErrorSmoothingMatchingSnapshotsDecay(),
                     "fixed-physics-bit-exact" => FixedPhysicsBitExact(),
+                    "snapshot-raw-roundtrip-bit-exact" => SnapshotRawRoundTripBitExact(),
+                    "hash-report-matches-reported-frame" => HashReportMatchesReportedFrame(),
+                    "server-hash-history-detects-mismatch" => ServerHashHistoryDetectsMismatch(),
+                    "hash-report-interval-is-30-frames" => HashReportIntervalIs30Frames(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -761,6 +771,255 @@ namespace GameLogic
                    simulation.PredictionSmoothingRemainingSeconds <= PredictionErrorSmoother.SmoothingDurationSeconds * 0.5f;
         }
 
+        private static bool SnapshotRawRoundTripBitExact()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, F(0.1234567f), F(-0.7654321f));
+            if (!worldState.TryGetPlayer(1, out PlayerState player))
+            {
+                throw new InvalidOperationException("snapshot-raw-roundtrip player missing before step");
+            }
+
+            for (uint frame = 1; frame <= 7; frame++)
+            {
+                MoveSystem.Apply(worldState, player, F(0.73f), F(-0.41f), DeterminismRules.FixedDeltaTimeFixed64);
+                worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTimeFixed64);
+                MoveSystem.SyncFromPhysics(worldState, player);
+            }
+
+            BattleWorldSnapshot sourceSnapshot = worldState.TakeSnapshot().WithFrameIndex(7);
+            PhysicsBodySnapshot body = sourceSnapshot.PhysicsSnapshot.Bodies[0];
+            Fantasy.PlayerSnapshot wirePlayer = new Fantasy.PlayerSnapshot
+            {
+                PlayerId = player.PlayerId,
+                XRaw = player.X.m_rawValue,
+                YRaw = player.Y.m_rawValue,
+                LatestAcceptedInputFrame = 7,
+                LinearVelocityXRaw = body.LinearVelocityX.m_rawValue,
+                LinearVelocityYRaw = body.LinearVelocityY.m_rawValue
+            };
+            Fantasy.S2C_FrameSnapshot wireSnapshot = new Fantasy.S2C_FrameSnapshot
+            {
+                FrameIndex = sourceSnapshot.FrameIndex
+            };
+            wireSnapshot.Players.Add(wirePlayer);
+
+            EnsureProtoSerializer();
+            byte[] payload = SerializerManager.ProtoBufHelper.Serialize(typeof(Fantasy.S2C_FrameSnapshot), wireSnapshot);
+            Fantasy.S2C_FrameSnapshot roundTripped = (Fantasy.S2C_FrameSnapshot)SerializerManager.ProtoBufHelper.Deserialize(
+                typeof(Fantasy.S2C_FrameSnapshot),
+                payload);
+            Fantasy.PlayerSnapshot decodedPlayer = roundTripped.Players[0];
+
+            if (decodedPlayer.XRaw != wirePlayer.XRaw ||
+                decodedPlayer.YRaw != wirePlayer.YRaw ||
+                decodedPlayer.LinearVelocityXRaw != wirePlayer.LinearVelocityXRaw ||
+                decodedPlayer.LinearVelocityYRaw != wirePlayer.LinearVelocityYRaw)
+            {
+                throw new InvalidOperationException(
+                    $"snapshot-raw-roundtrip mismatch " +
+                    $"x={wirePlayer.XRaw}/{decodedPlayer.XRaw} " +
+                    $"y={wirePlayer.YRaw}/{decodedPlayer.YRaw} " +
+                    $"vx={wirePlayer.LinearVelocityXRaw}/{decodedPlayer.LinearVelocityXRaw} " +
+                    $"vy={wirePlayer.LinearVelocityYRaw}/{decodedPlayer.LinearVelocityYRaw}");
+            }
+
+            if (Fixed64.FromRaw(decodedPlayer.XRaw).m_rawValue != player.X.m_rawValue ||
+                Fixed64.FromRaw(decodedPlayer.YRaw).m_rawValue != player.Y.m_rawValue)
+            {
+                throw new InvalidOperationException(
+                    $"snapshot-raw-roundtrip decoded raw differs from source " +
+                    $"x={player.X.m_rawValue}/{decodedPlayer.XRaw} " +
+                    $"y={player.Y.m_rawValue}/{decodedPlayer.YRaw}");
+            }
+
+            Fantasy.C2B_JoinBattleResponse joinWire = new Fantasy.C2B_JoinBattleResponse
+            {
+                PlayerId = player.PlayerId,
+                XRaw = player.X.m_rawValue,
+                YRaw = player.Y.m_rawValue,
+                ServerFrameIndex = sourceSnapshot.FrameIndex
+            };
+            byte[] joinPayload = SerializerManager.ProtoBufHelper.Serialize(
+                typeof(Fantasy.C2B_JoinBattleResponse),
+                joinWire);
+            Fantasy.C2B_JoinBattleResponse joinRoundTripped =
+                (Fantasy.C2B_JoinBattleResponse)SerializerManager.ProtoBufHelper.Deserialize(
+                    typeof(Fantasy.C2B_JoinBattleResponse),
+                    joinPayload);
+            if (joinRoundTripped.XRaw != joinWire.XRaw ||
+                joinRoundTripped.YRaw != joinWire.YRaw ||
+                joinRoundTripped.ServerFrameIndex != joinWire.ServerFrameIndex)
+            {
+                throw new InvalidOperationException(
+                    $"join-raw-roundtrip mismatch " +
+                    $"x={joinWire.XRaw}/{joinRoundTripped.XRaw} " +
+                    $"y={joinWire.YRaw}/{joinRoundTripped.YRaw} " +
+                    $"frame={joinWire.ServerFrameIndex}/{joinRoundTripped.ServerFrameIndex}");
+            }
+
+            return true;
+        }
+
+        private static bool HashReportMatchesReportedFrame()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            SentInputRecorder inputRecorder = new SentInputRecorder();
+            HashReportRecorder hashRecorder = new HashReportRecorder();
+            BattleSimulation simulation = new BattleSimulation(
+                worldState,
+                (frameIndex, inputSeq, dx, dy, skillId) => inputRecorder.Record(
+                    frameIndex,
+                    inputSeq,
+                    (float)dx,
+                    (float)dy),
+                _ => { },
+                hashRecorder.Record);
+            simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
+
+            Dictionary<uint, ulong> hashesByFrame = new Dictionary<uint, ulong>();
+            for (uint frame = 1; frame <= 35; frame++)
+            {
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+                hashesByFrame[frame] = StateHasher.Hash(worldState.TakeSnapshot().WithFrameIndex(frame));
+            }
+
+            if (hashRecorder.Reports.Count != 1)
+            {
+                throw new InvalidOperationException($"hash-report count={hashRecorder.Reports.Count}");
+            }
+
+            (uint frameIndex, ulong reportedHash) = hashRecorder.Reports[0];
+            if (!hashesByFrame.TryGetValue(frameIndex, out ulong expectedHash))
+            {
+                throw new InvalidOperationException($"hash-report frame={frameIndex}");
+            }
+
+            if (reportedHash != expectedHash)
+            {
+                throw new InvalidOperationException(
+                    $"hash-report frame={frameIndex} " +
+                    $"reported=0x{reportedHash:X16} expected=0x{expectedHash:X16}");
+            }
+
+            return true;
+        }
+
+        private static bool ServerHashHistoryDetectsMismatch()
+        {
+#if FANTASY_UNITY
+            // The shared suite is linked into the Unity client project as well as the server.
+            // BattleLogic is server-only; the full probe runs from the server build.
+            return true;
+#else
+            List<string> warnings = new List<string>();
+            Dictionary<uint, ulong> hashesByFrame = new Dictionary<uint, ulong>();
+            Fantasy.BattleLogic battleLogic = new Fantasy.BattleLogic(logWarning: warnings.Add);
+            battleLogic.OnBroadcast = snapshot =>
+            {
+                hashesByFrame[snapshot.FrameIndex] = StateHasher.Hash(snapshot.ToBattleWorldSnapshot());
+            };
+            battleLogic.JoinPlayer(1, F(0.25f), F(-0.5f));
+
+            for (uint frame = 0; frame <= 5; frame++)
+            {
+                battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
+            }
+
+            ulong expectedHash = hashesByFrame[3];
+            Fantasy.HashReportResult matched = battleLogic.TryCompareReportedHash(1, 3, expectedHash);
+            Fantasy.HashReportResult mismatch = battleLogic.TryCompareReportedHash(1, 3, expectedHash ^ 0x1UL);
+            Fantasy.HashReportResult noRecord = battleLogic.TryCompareReportedHash(1, 999, expectedHash);
+
+            if (matched != Fantasy.HashReportResult.Matched ||
+                mismatch != Fantasy.HashReportResult.Mismatch ||
+                noRecord != Fantasy.HashReportResult.NoRecord)
+            {
+                throw new InvalidOperationException(
+                    $"server-hash-history results={matched}/{mismatch}/{noRecord}");
+            }
+
+            if (battleLogic.HashReportsMatched != 1 ||
+                battleLogic.HashMismatchCount != 1 ||
+                battleLogic.HashNoRecordCount != 1)
+            {
+                throw new InvalidOperationException(
+                    $"server-hash-history counts=" +
+                    $"{battleLogic.HashReportsMatched}/{battleLogic.HashMismatchCount}/{battleLogic.HashNoRecordCount}");
+            }
+
+            if (warnings.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    $"server-hash-history warning-count={warnings.Count}");
+            }
+
+            string warning = warnings.Find(value => value.Contains("[Battle][HashMismatch]", StringComparison.Ordinal)) ?? string.Empty;
+            if (!warning.Contains("player=1", StringComparison.Ordinal) ||
+                !warning.Contains("frame=3", StringComparison.Ordinal) ||
+                !warning.Contains($"authoritative=0x{expectedHash:X16}", StringComparison.Ordinal) ||
+                !warning.Contains($"reported=0x{(expectedHash ^ 0x1UL):X16}", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"server-hash-history warning={warning}");
+            }
+
+            return true;
+#endif
+        }
+
+        private static bool HashReportIntervalIs30Frames()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            SentInputRecorder inputRecorder = new SentInputRecorder();
+            HashReportRecorder hashRecorder = new HashReportRecorder();
+            BattleSimulation simulation = new BattleSimulation(
+                worldState,
+                (frameIndex, inputSeq, dx, dy, skillId) => inputRecorder.Record(
+                    frameIndex,
+                    inputSeq,
+                    (float)dx,
+                    (float)dy),
+                _ => { },
+                hashRecorder.Record);
+            simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
+
+            for (uint frame = 1; frame <= 100; frame++)
+            {
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.One);
+            }
+
+            if (hashRecorder.Reports.Count != 3)
+            {
+                throw new InvalidOperationException($"hash-report-interval count={hashRecorder.Reports.Count}");
+            }
+
+            uint[] expectedFrames = { 30, 60, 90 };
+            for (int i = 0; i < expectedFrames.Length; i++)
+            {
+                uint actualFrame = hashRecorder.Reports[i].FrameIndex;
+                if (actualFrame != expectedFrames[i])
+                {
+                    throw new InvalidOperationException(
+                        $"hash-report-interval index={i} expectedFrame={expectedFrames[i]} actualFrame={actualFrame}");
+                }
+            }
+
+            return true;
+        }
+
+        private static void EnsureProtoSerializer()
+        {
+            if (SerializerManager.ProtoBufHelper == null)
+            {
+                SerializerManager.Initialize().GetAwaiter().GetResult();
+            }
+
+            if (SerializerManager.ProtoBufHelper == null)
+            {
+                throw new InvalidOperationException("ProtoBuf serializer is not initialized");
+            }
+        }
+
         private static bool FixedPhysicsBitExact()
         {
             BattleWorldState worldState = new BattleWorldState();
@@ -922,6 +1181,17 @@ namespace GameLogic
             public void Record(ulong sendTimestampMs)
             {
                 LastTimestamp = sendTimestampMs;
+            }
+        }
+
+        private sealed class HashReportRecorder
+        {
+            public List<(uint FrameIndex, ulong StateHash)> Reports { get; } =
+                new List<(uint FrameIndex, ulong StateHash)>();
+
+            public void Record(uint frameIndex, ulong stateHash)
+            {
+                Reports.Add((frameIndex, stateHash));
             }
         }
     }

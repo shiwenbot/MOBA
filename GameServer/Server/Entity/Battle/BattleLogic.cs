@@ -9,6 +9,13 @@ using GameShared.SkillGraph;
 
 namespace Fantasy;
 
+public enum HashReportResult
+{
+    Matched,
+    Mismatch,
+    NoRecord
+}
+
 public sealed class BattleLogic : IBuffCommandSink
 {
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
@@ -26,6 +33,7 @@ public sealed class BattleLogic : IBuffCommandSink
     private readonly BattleSkillGraphRuntime _skillGraphRuntime;
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
+    private readonly SnapshotBuffer<ulong> _authoritativeHashHistory = new(64);
     private bool _hasProcessedFrame;
 
     public BattleLogic(
@@ -46,11 +54,9 @@ public sealed class BattleLogic : IBuffCommandSink
     public int FutureInputRejectCount { get; private set; }
     public int ReusedInputCount { get; private set; }
     public int ZeroInputFallbackCount { get; private set; }
-
-    public PlayerState JoinPlayer(long playerId, float x, float y)
-    {
-        return JoinPlayer(playerId, (Fixed64)x, (Fixed64)y);
-    }
+    public int HashReportsMatched { get; private set; }
+    public int HashMismatchCount { get; private set; }
+    public int HashNoRecordCount { get; private set; }
 
     public PlayerState JoinPlayer(long playerId, Fixed64 x, Fixed64 y)
     {
@@ -226,15 +232,35 @@ public sealed class BattleLogic : IBuffCommandSink
         RecalculateNumericStates();
         ApplyBuffTicks(frameIndex);
 
-        if (OnBroadcast != null)
-        {
-            OnBroadcast(BuildTestSnapshot(frameIndex));
-        }
+        TestSnapshot snapshot = BuildTestSnapshot(frameIndex);
+        _authoritativeHashHistory.Save(frameIndex, StateHasher.Hash(snapshot.ToBattleWorldSnapshot()));
+        OnBroadcast?.Invoke(snapshot);
     }
 
     public ulong GetStateHash()
     {
         return StateHasher.Hash(BuildBattleWorldSnapshot(LastFrameIndex));
+    }
+
+    public HashReportResult TryCompareReportedHash(long playerId, uint frameIndex, ulong reportedHash)
+    {
+        if (!_authoritativeHashHistory.TryGet(frameIndex, out ulong authoritativeHash))
+        {
+            HashNoRecordCount++;
+            return HashReportResult.NoRecord;
+        }
+
+        if (authoritativeHash == reportedHash)
+        {
+            HashReportsMatched++;
+            return HashReportResult.Matched;
+        }
+
+        HashMismatchCount++;
+        _logWarning?.Invoke(
+            $"[Battle][HashMismatch] player={playerId} frame={frameIndex} " +
+            $"authoritative=0x{authoritativeHash:X16} reported=0x{reportedHash:X16}");
+        return HashReportResult.Mismatch;
     }
 
     private TestSnapshot BuildTestSnapshot(uint frameIndex)

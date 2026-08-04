@@ -130,6 +130,19 @@ namespace Fantasy
 			S2C_BandwidthStats_message.DirtySyncSavedBytes = dirtySyncSavedBytes;
 			session.Send(S2C_BandwidthStats_message);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_StateHashReport(this Session session, C2B_StateHashReport C2B_StateHashReport_message)
+		{
+			session.Send(C2B_StateHashReport_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_StateHashReport(this Session session, uint frameIndex, ulong stateHash)
+		{
+			using var C2B_StateHashReport_message = Fantasy.C2B_StateHashReport.Create();
+			C2B_StateHashReport_message.FrameIndex = frameIndex;
+			C2B_StateHashReport_message.StateHash = stateHash;
+			session.Send(C2B_StateHashReport_message);
+		}
 
    }
 }

@@ -1561,6 +1561,7 @@ namespace GameLogic
         public int consistencyChecked;
         public int consistencyHits;
         public int consistencyMisses;
+        public int hashReportsSent;
         public int consistencySkippedNoRecord;
         public int consistencySkippedEvicted;
         public int rollbackCount;
