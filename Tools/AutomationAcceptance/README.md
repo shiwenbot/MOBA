@@ -12,6 +12,12 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 - `two-client-basic-move` - 两客户端基础移动
 - `two-client-disconnect` - 断线测试
 
+S4 新增三个按需执行的弱网场景（不加入默认场景，避免普通回归主动注入丢包）：
+
+- `two-client-weaknet-delay` - 双向 100ms 延迟 + 30ms 抖动
+- `two-client-weaknet-uplink-loss` - 20% 上行永久丢包
+- `two-client-weaknet-downlink-loss` - 20% 下行永久丢包，用于暴露属性脏同步基线缺陷
+
 ## 当前状态
 
 - 默认 bridge：`puerts`
@@ -22,6 +28,7 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 - 当前验证结论：
   - 双客户端均运行在 `puerts-runtime`
   - JS controller 已实际驱动输入与完成判定
+- S4 弱网状态：代码、无头用例和场景入口已接入；Unity 实机场景按本次委托未执行，结果以 `弱网自动化测试-验收测试指南-20260805.md` 的负责人记录为准
 
 ## 架构说明
 
@@ -50,7 +57,8 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 Assets/StreamingAssets/BattleAutomation/Puerts/
 ├── two-client-join.js.txt       # 加入房间场景
 ├── two-client-basic-move.js.txt # 基础移动场景
-└── two-client-disconnect.js.txt # 断线测试场景
+├── two-client-disconnect.js.txt # 断线测试场景
+└── weaknet-controller.js.txt    # 三个 S4 弱网场景共用
 ```
 
 脚本需要实现以下接口：
@@ -94,6 +102,16 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -Scenario 'two-client-join'
 ```
 
+### 运行弱网场景
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -Scenario 'two-client-weaknet-delay' -Bridge 'puerts' -InteractiveEditor
+powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -Scenario 'two-client-weaknet-uplink-loss' -Bridge 'puerts' -InteractiveEditor
+powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -Scenario 'two-client-weaknet-downlink-loss' -Bridge 'puerts' -InteractiveEditor
+```
+
+场景默认参数可用 `-NetSimUplinkDelayMs`、`-NetSimDownlinkDelayMs`、`-NetSimUplinkJitterMs`、`-NetSimDownlinkJitterMs`、`-NetSimUplinkLossPercent`、`-NetSimDownlinkLossPercent` 和 `-NetSimSeed` 覆盖。最终 `report.json` 会回显生效配置、种子、上下行发送/丢弃计数、最大队列深度和溢出丢弃计数。
+
 ### 使用 builtin bridge
 
 ```powershell
@@ -118,6 +136,12 @@ powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\Automati
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -UnityExePath 'C:\Path\To\Unity.exe'
+```
+
+脚本会优先使用 `-DotnetExePath`，其次查找用户目录和 PATH 中带 .NET 9 SDK 的 `dotnet`。需要显式指定时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1 -DotnetExePath 'C:\Users\shiwe\.dotnet\dotnet.exe'
 ```
 
 如果本机 Unity 在 batchmode 下出现 `LicensingClient` 或退出码 `199`，可以切到交互式 Editor 自动运行：

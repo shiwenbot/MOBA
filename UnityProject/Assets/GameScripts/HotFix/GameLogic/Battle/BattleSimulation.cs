@@ -4,15 +4,15 @@ using System.Diagnostics;
 using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Command;
+using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Network;
 using GameShared.FrameSync.Snapshot;
 using GameShared.SkillGraph;
 using Log = TEngine.Log;
 
 namespace GameLogic
 {
-    public delegate void BattleInputSender(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId);
-
     public sealed class BattleSimulation : IBuffCommandSink
     {
         private const int PingIntervalFrames = 30;
@@ -28,6 +28,7 @@ namespace GameLogic
         private readonly BattleInputSender _onSendInput;
         private readonly Action<ulong> _onSendPing;
         private readonly Action<uint, ulong>? _onSendHashReport;
+        private readonly IBattleClock _clock;
         private readonly GameShared.FrameSync.Core.IFrameSyncLogger? _logger;
         private readonly BattleSkillGraphRuntime _skillGraphRuntime;
         private readonly HashSet<long> _stalePlayerIds = new HashSet<long>();
@@ -86,8 +87,9 @@ namespace GameLogic
             BattleInputSender onSendInput,
             Action<ulong> onSendPing,
             GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
-            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
-            : this(worldState, onSendInput, onSendPing, null, logger, skillGraphs)
+            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null,
+            IBattleClock? clock = null)
+            : this(worldState, onSendInput, onSendPing, null, logger, skillGraphs, clock)
         {
         }
 
@@ -97,12 +99,14 @@ namespace GameLogic
             Action<ulong> onSendPing,
             Action<uint, ulong>? onSendHashReport,
             GameShared.FrameSync.Core.IFrameSyncLogger? logger = null,
-            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null)
+            IReadOnlyDictionary<int, RuntimeSkillGraph>? skillGraphs = null,
+            IBattleClock? clock = null)
         {
             _worldState = worldState ?? throw new ArgumentNullException(nameof(worldState));
             _onSendInput = onSendInput ?? throw new ArgumentNullException(nameof(onSendInput));
             _onSendPing = onSendPing ?? throw new ArgumentNullException(nameof(onSendPing));
             _onSendHashReport = onSendHashReport;
+            _clock = clock ?? SystemBattleClock.Instance;
             _logger = logger;
             _buffConfigProvider = new DefaultBuffConfigProvider();
             _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
@@ -544,7 +548,7 @@ namespace GameLogic
             }
 
             _pingCount = 0;
-            _onSendPing((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            _onSendPing(checked((ulong)_clock.NowMs));
         }
 
         private void SendHashReportIfNeeded()

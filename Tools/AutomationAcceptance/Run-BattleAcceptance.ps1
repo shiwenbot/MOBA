@@ -1,9 +1,18 @@
 param(
     [string[]]$Scenario = @('two-client-join', 'two-client-basic-move', 'two-client-disconnect'),
     [string]$UnityExePath = '',
+    [string]$DotnetExePath = '',
     [int]$ClientTimeoutSeconds = 120,
     [string]$Bridge = 'puerts',
     [string]$ControllerScriptPath = '',
+    [switch]$EnableNetworkSimulation,
+    [int]$NetSimUplinkDelayMs = -1,
+    [int]$NetSimDownlinkDelayMs = -1,
+    [int]$NetSimUplinkJitterMs = -1,
+    [int]$NetSimDownlinkJitterMs = -1,
+    [int]$NetSimUplinkLossPercent = -1,
+    [int]$NetSimDownlinkLossPercent = -1,
+    [UInt64]$NetSimSeed = 20260804,
     [switch]$InteractiveEditor,
     [switch]$SkipCloneCreation,
     [switch]$NoBuild
@@ -51,6 +60,46 @@ function Resolve-UnityExePath {
     }
 
     throw "Unity.exe was not found. Pass it explicitly with -UnityExePath."
+}
+
+function Resolve-DotnetExePath {
+    param([string]$PreferredPath)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath)) {
+        $candidates += $PreferredPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $candidates += (Join-Path $env:USERPROFILE '.dotnet\dotnet.exe')
+    }
+
+    $pathDotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -ne $pathDotnet) {
+        $candidates += $pathDotnet.Source
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) {
+            continue
+        }
+
+        $sdkList = & $candidate --list-sdks 2>$null
+        if ($LASTEXITCODE -eq 0 -and ($sdkList | Where-Object { $_ -match '^9\.' })) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw '.NET 9 SDK was not found. Pass a dotnet executable with -DotnetExePath.'
+}
+
+function Invoke-Dotnet {
+    param([string[]]$Arguments)
+
+    & $script:dotnetExe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet failed with exit code ${LASTEXITCODE}: $($Arguments -join ' ')"
+    }
 }
 
 function ConvertTo-CustomArgsString {
@@ -145,6 +194,53 @@ function Stop-StaleAutomationClients {
 function Get-ScenarioCustomArgs {
     param([string]$ScenarioName)
 
+    $netsimEnabled = $EnableNetworkSimulation.IsPresent
+    $uplinkDelayMs = 0
+    $downlinkDelayMs = 0
+    $uplinkJitterMs = 0
+    $downlinkJitterMs = 0
+    $uplinkLossPercent = 0
+    $downlinkLossPercent = 0
+
+    switch ($ScenarioName) {
+        'two-client-weaknet-delay' {
+            $netsimEnabled = $true
+            $uplinkDelayMs = 100
+            $downlinkDelayMs = 100
+            $uplinkJitterMs = 30
+            $downlinkJitterMs = 30
+        }
+        'two-client-weaknet-uplink-loss' {
+            $netsimEnabled = $true
+            $uplinkLossPercent = 20
+        }
+        'two-client-weaknet-downlink-loss' {
+            $netsimEnabled = $true
+            $downlinkLossPercent = 20
+        }
+    }
+
+    $overrides = @(
+        @{ Name = 'NetSimUplinkDelayMs'; Value = $NetSimUplinkDelayMs; Maximum = [int]::MaxValue },
+        @{ Name = 'NetSimDownlinkDelayMs'; Value = $NetSimDownlinkDelayMs; Maximum = [int]::MaxValue },
+        @{ Name = 'NetSimUplinkJitterMs'; Value = $NetSimUplinkJitterMs; Maximum = [int]::MaxValue },
+        @{ Name = 'NetSimDownlinkJitterMs'; Value = $NetSimDownlinkJitterMs; Maximum = [int]::MaxValue },
+        @{ Name = 'NetSimUplinkLossPercent'; Value = $NetSimUplinkLossPercent; Maximum = 100 },
+        @{ Name = 'NetSimDownlinkLossPercent'; Value = $NetSimDownlinkLossPercent; Maximum = 100 }
+    )
+    foreach ($override in $overrides) {
+        if ($override.Value -lt -1 -or $override.Value -gt $override.Maximum) {
+            throw "$($override.Name) is out of range: $($override.Value)"
+        }
+    }
+
+    if ($NetSimUplinkDelayMs -ge 0) { $uplinkDelayMs = $NetSimUplinkDelayMs; $netsimEnabled = $true }
+    if ($NetSimDownlinkDelayMs -ge 0) { $downlinkDelayMs = $NetSimDownlinkDelayMs; $netsimEnabled = $true }
+    if ($NetSimUplinkJitterMs -ge 0) { $uplinkJitterMs = $NetSimUplinkJitterMs; $netsimEnabled = $true }
+    if ($NetSimDownlinkJitterMs -ge 0) { $downlinkJitterMs = $NetSimDownlinkJitterMs; $netsimEnabled = $true }
+    if ($NetSimUplinkLossPercent -ge 0) { $uplinkLossPercent = $NetSimUplinkLossPercent; $netsimEnabled = $true }
+    if ($NetSimDownlinkLossPercent -ge 0) { $downlinkLossPercent = $NetSimDownlinkLossPercent; $netsimEnabled = $true }
+
     $args = @{
         minimumPlayerCount = $defaultMinimumPlayerCount
         movementDistanceThreshold = $defaultMovementDistanceThreshold
@@ -153,6 +249,14 @@ function Get-ScenarioCustomArgs {
         expectedBuffId = $defaultExpectedBuffId
         buffApplyDelayFrames = $defaultBuffApplyDelayFrames
         buffDurationFrames = $defaultBuffDurationFrames
+        netsimEnabled = $(if ($netsimEnabled) { '1' } else { '0' })
+        netsimUplinkDelayMs = [string]$uplinkDelayMs
+        netsimDownlinkDelayMs = [string]$downlinkDelayMs
+        netsimUplinkJitterMs = [string]$uplinkJitterMs
+        netsimDownlinkJitterMs = [string]$downlinkJitterMs
+        netsimUplinkLossPercent = [string]$uplinkLossPercent
+        netsimDownlinkLossPercent = [string]$downlinkLossPercent
+        netsimSeed = [string]$NetSimSeed
     }
 
     return $args
@@ -177,6 +281,13 @@ function Resolve-ControllerScriptPath {
 
     if (Test-Path -LiteralPath $scriptPath) {
         return $scriptPath
+    }
+
+    if ($ScenarioName.StartsWith('two-client-weaknet-', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $weakNetworkScriptPath = Join-Path $unityProjectPath 'Assets\StreamingAssets\BattleAutomation\Puerts\weaknet-controller.js.txt'
+        if (Test-Path -LiteralPath $weakNetworkScriptPath) {
+            return $weakNetworkScriptPath
+        }
     }
 
     return ''
@@ -248,30 +359,21 @@ function Start-ServerProcess {
     $scenarioArgs = Get-ScenarioCustomArgs -ScenarioName $ScenarioName
     Stop-ExistingBattleServer -ScenarioName $ScenarioName
 
-    $args = @(
-        'run',
-        '--project', $serverProjectPath,
-        '--framework', 'net8.0'
-    )
-
-    if ($NoBuild) {
-        $args += '--no-build'
+    # 通过环境变量传递 automation 配置，避免与 Fantasy 框架的 CommandLine.Parser 冲突
+    $serverScenarioName = $ScenarioName
+    if ($ScenarioName -eq 'two-client-weaknet-downlink-loss') {
+        $serverScenarioName = 'two-client-buff-lifecycle'
     }
 
-    $args += '--'
-    $args += '-m'
-    $args += 'Develop'
-
-    # 通过环境变量传递 automation 配置，避免与 Fantasy 框架的 CommandLine.Parser 冲突
+    $escapedDotnetExe = $script:dotnetExe.Replace("'", "''")
     $serverCommand = @(
-        '$env:BATTLE_AUTOMATION_SCENARIO = ''' + $ScenarioName + ''';',
+        '$env:BATTLE_AUTOMATION_SCENARIO = ''' + $serverScenarioName + ''';',
         '$env:BATTLE_AUTOMATION_MINIMUM_PLAYER_COUNT = ''' + $scenarioArgs.minimumPlayerCount + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_ID = ''' + $scenarioArgs.expectedBuffId + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_APPLY_DELAY_FRAMES = ''' + $scenarioArgs.buffApplyDelayFrames + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_DURATION_FRAMES = ''' + $scenarioArgs.buffDurationFrames + ''';',
-        'dotnet run',
+        '& ''' + $escapedDotnetExe + ''' run',
         '--project "' + $serverProjectPath + '"',
-        '--framework net8.0',
         $(if ($NoBuild) { '--no-build' } else { '' }),
         '-- -m Develop',
         '1>> "' + $serverLogPath + '"',
@@ -356,6 +458,14 @@ function Start-AutomationClient {
         expectedBuffId = $scenarioArgs.expectedBuffId
         buffApplyDelayFrames = $scenarioArgs.buffApplyDelayFrames
         buffDurationFrames = $scenarioArgs.buffDurationFrames
+        netsimEnabled = $scenarioArgs.netsimEnabled
+        netsimUplinkDelayMs = $scenarioArgs.netsimUplinkDelayMs
+        netsimDownlinkDelayMs = $scenarioArgs.netsimDownlinkDelayMs
+        netsimUplinkJitterMs = $scenarioArgs.netsimUplinkJitterMs
+        netsimDownlinkJitterMs = $scenarioArgs.netsimDownlinkJitterMs
+        netsimUplinkLossPercent = $scenarioArgs.netsimUplinkLossPercent
+        netsimDownlinkLossPercent = $scenarioArgs.netsimDownlinkLossPercent
+        netsimSeed = $scenarioArgs.netsimSeed
         timeoutSeconds = $ClientTimeoutSeconds.ToString()
     }
 
@@ -407,6 +517,61 @@ function Stop-ClientProcess {
         Stop-Process -Id $ClientState.Process.Id -Force
         $ClientState.Process.WaitForExit()
     }
+}
+
+function Get-NetworkSimulationEvidence {
+    param(
+        [string]$ScenarioName,
+        $ClientAReport,
+        $ClientBReport,
+        [string]$ServerLogPath
+    )
+
+    if (-not $ScenarioName.StartsWith('two-client-weaknet-', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @{ Passed = $true; Details = 'not-a-weaknet-scenario' }
+    }
+
+    $snapshots = @($ClientAReport.snapshot, $ClientBReport.snapshot)
+    foreach ($snapshot in $snapshots) {
+        if ($null -eq $snapshot -or -not [bool]$snapshot.networkSimulationEnabled) {
+            return @{ Passed = $false; Details = 'networkSimulationEnabled was false' }
+        }
+
+        if ([UInt64]$snapshot.networkSeed -ne $NetSimSeed) {
+            return @{ Passed = $false; Details = "seed mismatch expected=$NetSimSeed actual=$($snapshot.networkSeed)" }
+        }
+    }
+
+    switch ($ScenarioName) {
+        'two-client-weaknet-delay' {
+            $passed = ($snapshots | Where-Object {
+                [int]$_.leadFrames -le 3 -or [int]$_.networkMaxQueueDepth -le 0
+            }).Count -eq 0
+            $details = "lead=$($snapshots[0].leadFrames)/$($snapshots[1].leadFrames) maxQueue=$($snapshots[0].networkMaxQueueDepth)/$($snapshots[1].networkMaxQueueDepth)"
+        }
+        'two-client-weaknet-uplink-loss' {
+            $passed = ($snapshots | Where-Object { [long]$_.networkUplinkDropped -le 0 }).Count -eq 0
+            $details = "uplinkDropped=$($snapshots[0].networkUplinkDropped)/$($snapshots[1].networkUplinkDropped)"
+        }
+        'two-client-weaknet-downlink-loss' {
+            $passed = ($snapshots | Where-Object { [long]$_.networkDownlinkDropped -le 0 }).Count -eq 0
+            $details = "downlinkDropped=$($snapshots[0].networkDownlinkDropped)/$($snapshots[1].networkDownlinkDropped)"
+        }
+        default {
+            $passed = $false
+            $details = "unknown weaknet scenario: $ScenarioName"
+        }
+    }
+
+    if ($passed -and $ScenarioName -ne 'two-client-weaknet-downlink-loss' -and (Test-Path -LiteralPath $ServerLogPath)) {
+        $hashMismatch = Select-String -LiteralPath $ServerLogPath -Pattern '\[Battle\]\[HashMismatch\]' -ErrorAction SilentlyContinue
+        if ($hashMismatch) {
+            $passed = $false
+            $details += '; unexpected HashMismatch in zero-downlink-loss path'
+        }
+    }
+
+    return @{ Passed = $passed; Details = $details }
 }
 
 function Wait-BothClients {
@@ -491,11 +656,12 @@ function Write-CombinedReports {
 }
 
 $script:unityExe = Resolve-UnityExePath -PreferredPath $UnityExePath
+$script:dotnetExe = Resolve-DotnetExePath -PreferredPath $DotnetExePath
 
 if (-not $NoBuild) {
-    dotnet build (Join-Path $repoRoot 'GameServer\Server\Server.sln') -c Debug -v minimal -m:1
-    dotnet build (Join-Path $repoRoot 'UnityProject\GameLogic.csproj') -c Debug -v minimal -m:1
-    dotnet build (Join-Path $repoRoot 'UnityProject\Assembly-CSharp-Editor.csproj') -c Debug -v minimal -m:1
+    Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'GameServer\Server\Server.sln'), '-c', 'Debug', '-v', 'minimal', '-m:1')
+    Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'UnityProject\GameLogic.csproj'), '-c', 'Debug', '-v', 'minimal', '-m:1')
+    Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'UnityProject\Assembly-CSharp-Editor.csproj'), '-c', 'Debug', '-v', 'minimal', '-m:1')
 }
 
 $cloneProjectPath = Ensure-ParrelSyncClone
@@ -513,7 +679,15 @@ foreach ($scenarioName in $Scenario) {
         $clientAReport = $bothReports.ReportA
         $clientBReport = $bothReports.ReportB
 
-        $passed = [bool]$clientAReport.passed -and [bool]$clientBReport.passed -and -not $serverState.Process.HasExited
+        $networkEvidence = Get-NetworkSimulationEvidence `
+            -ScenarioName $scenarioName `
+            -ClientAReport $clientAReport `
+            -ClientBReport $clientBReport `
+            -ServerLogPath $serverState.LogPath
+        $passed = [bool]$clientAReport.passed -and `
+            [bool]$clientBReport.passed -and `
+            -not $serverState.Process.HasExited -and `
+            [bool]$networkEvidence.Passed
         $scenarioResults.Add([pscustomobject]@{
             Scenario = $scenarioName
             Passed = $passed
@@ -525,6 +699,7 @@ foreach ($scenarioName in $Scenario) {
             ClientBUnityLogPath = $clientB.UnityLogPath
             ClientAReason = $clientAReport.reason
             ClientBReason = $clientBReport.reason
+            NetworkEvidence = $networkEvidence.Details
         })
     }
     finally {

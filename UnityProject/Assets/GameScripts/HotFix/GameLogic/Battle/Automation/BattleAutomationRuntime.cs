@@ -5,6 +5,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using GameShared.FrameSync.Battle;
+using GameShared.FrameSync.Network;
 using GameShared.SkillGraph;
 using TEngine;
 using UnityEngine;
@@ -141,7 +142,8 @@ namespace GameLogic
             int buffDurationFrames,
             float movementDistanceThreshold,
             bool autoOpenBattleUi,
-            bool autoCloseAfterFinish)
+            bool autoCloseAfterFinish,
+            NetworkConditionConfig networkCondition)
         {
             Enabled = enabled;
             Scenario = scenario;
@@ -165,6 +167,7 @@ namespace GameLogic
             MovementDistanceThreshold = movementDistanceThreshold;
             AutoOpenBattleUi = autoOpenBattleUi;
             AutoCloseAfterFinish = autoCloseAfterFinish;
+            NetworkCondition = networkCondition;
         }
 
         public bool Enabled { get; }
@@ -189,6 +192,7 @@ namespace GameLogic
         public float MovementDistanceThreshold { get; }
         public bool AutoOpenBattleUi { get; }
         public bool AutoCloseAfterFinish { get; }
+        public NetworkConditionConfig NetworkCondition { get; }
 
         public static BattleAutomationConfig Current => s_cachedCurrent ??= CreateCurrent();
 
@@ -212,6 +216,7 @@ namespace GameLogic
             BattleAutomationBridgeMode bridgeMode = bridgeName.Equals("puerts", StringComparison.OrdinalIgnoreCase)
                 ? BattleAutomationBridgeMode.Puerts
                 : BattleAutomationBridgeMode.Builtin;
+            NetworkConditionConfig networkCondition = CreateNetworkConditionConfig(args);
 
             return new BattleAutomationConfig(
                 enabled,
@@ -235,7 +240,21 @@ namespace GameLogic
                 GetInt(args, "buffDurationFrames", 45),
                 GetFloat(args, "movementDistanceThreshold", 1.0f),
                 GetBool(args, "autoOpenBattleUi", true),
-                GetBool(args, "autoCloseAfterFinish", true));
+                GetBool(args, "autoCloseAfterFinish", true),
+                networkCondition);
+        }
+
+        private static NetworkConditionConfig CreateNetworkConditionConfig(Dictionary<string, string> args)
+        {
+            return new NetworkConditionConfig(
+                GetStrictBool(args, "netsimEnabled", false),
+                GetStrictInt(args, "netsimUplinkDelayMs", 0),
+                GetStrictInt(args, "netsimDownlinkDelayMs", 0),
+                GetStrictInt(args, "netsimUplinkJitterMs", 0),
+                GetStrictInt(args, "netsimDownlinkJitterMs", 0),
+                GetStrictInt(args, "netsimUplinkLossPercent", 0),
+                GetStrictInt(args, "netsimDownlinkLossPercent", 0),
+                GetStrictULong(args, "netsimSeed", 20260804UL));
         }
 
         private static string NormalizeAbsolutePath(string path)
@@ -290,6 +309,68 @@ namespace GameLogic
                    float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedValue)
                 ? parsedValue
                 : defaultValue;
+        }
+
+        private static bool GetStrictBool(Dictionary<string, string> args, string key, bool defaultValue)
+        {
+            if (!args.TryGetValue(key, out string value))
+            {
+                return defaultValue;
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return true;
+            }
+
+            string normalized = value.Trim();
+            if (normalized.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("on", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (normalized.Equals("0", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("off", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            throw new ArgumentException($"Invalid {key} value: {value}");
+        }
+
+        private static int GetStrictInt(Dictionary<string, string> args, string key, int defaultValue)
+        {
+            if (!args.TryGetValue(key, out string value))
+            {
+                return defaultValue;
+            }
+
+            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedValue))
+            {
+                return parsedValue;
+            }
+
+            throw new ArgumentException($"Invalid {key} value: {value}");
+        }
+
+        private static ulong GetStrictULong(Dictionary<string, string> args, string key, ulong defaultValue)
+        {
+            if (!args.TryGetValue(key, out string value))
+            {
+                return defaultValue;
+            }
+
+            if (ulong.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsedValue))
+            {
+                return parsedValue;
+            }
+
+            throw new ArgumentException($"Invalid {key} value: {value}");
         }
     }
 
@@ -611,6 +692,9 @@ namespace GameLogic
 
                     break;
 
+                case BattleAutomationScenarioKind.WeakNetwork:
+                    return EvaluateWeakNetwork(snapshot, elapsedFrames);
+
                 case BattleAutomationScenarioKind.DisconnectActor:
                     if (elapsedFrames >= _plan.disconnectFrame)
                     {
@@ -659,6 +743,60 @@ namespace GameLogic
 
         public void Dispose()
         {
+        }
+
+        private BattleAutomationEvaluation EvaluateWeakNetwork(
+            BattleAutomationClientSnapshot snapshot,
+            int elapsedFrames)
+        {
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            float distance = 0.0f;
+            if (_hasStartPosition && snapshot.TryGetSelfPlayer(out BattleAutomationPlayerSnapshot selfPlayer))
+            {
+                float deltaX = selfPlayer.x - _startX;
+                float deltaY = selfPlayer.y - _startY;
+                distance = Mathf.Sqrt((deltaX * deltaX) + (deltaY * deltaY));
+            }
+
+            bool injectionObserved = _plan.name switch
+            {
+                "two-client-weaknet-delay" => snapshot.leadFrames > 3 && snapshot.networkMaxQueueDepth > 0,
+                "two-client-weaknet-uplink-loss" => snapshot.networkUplinkDropped > 0,
+                "two-client-weaknet-downlink-loss" => snapshot.networkDownlinkDropped > 0,
+                _ => snapshot.networkUplinkDropped + snapshot.networkDownlinkDropped > 0 ||
+                     snapshot.networkMaxQueueDepth > 0
+            };
+
+            if (snapshot.networkSimulationEnabled &&
+                _observedTargetPlayerCount &&
+                snapshot.snapshotMessageCount > 0 &&
+                distance >= _plan.movementDistanceThreshold &&
+                injectionObserved)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    $"weaknet-complete scenario={_plan.name} distance={distance:F3} " +
+                    $"lead={snapshot.leadFrames} dropped={snapshot.networkUplinkDropped}/{snapshot.networkDownlinkDropped}");
+            }
+
+            if (elapsedFrames < _plan.completionFrame + 90)
+            {
+                return default;
+            }
+
+            return new BattleAutomationEvaluation(
+                true,
+                false,
+                $"weaknet-evidence-missing scenario={_plan.name} enabled={snapshot.networkSimulationEnabled} " +
+                $"players={snapshot.activePlayerCount}/{_plan.minimumPlayerCount} snapshots={snapshot.snapshotMessageCount} " +
+                $"distance={distance:F3}/{_plan.movementDistanceThreshold:F3} lead={snapshot.leadFrames} " +
+                $"dropped={snapshot.networkUplinkDropped}/{snapshot.networkDownlinkDropped} " +
+                $"maxQueueDepth={snapshot.networkMaxQueueDepth}");
         }
 
         private static int CountPlayersWithExpectedBuff(BattleAutomationClientSnapshot snapshot, int expectedBuffId)
@@ -1162,6 +1300,19 @@ namespace GameLogic
                 return scenarioScriptPath;
             }
 
+            if (config.Scenario.StartsWith("two-client-weaknet-", StringComparison.OrdinalIgnoreCase))
+            {
+                string weakNetworkScriptPath = Path.Combine(
+                    Application.streamingAssetsPath,
+                    "BattleAutomation",
+                    "Puerts",
+                    "weaknet-controller.js.txt");
+                if (File.Exists(weakNetworkScriptPath))
+                {
+                    return weakNetworkScriptPath;
+                }
+            }
+
             return Path.Combine(Application.streamingAssetsPath, "BattleAutomation", "Puerts", "sample-controller.js.txt");
         }
 
@@ -1234,7 +1385,8 @@ namespace GameLogic
         SkillBuffLifecycle,
         BuffStack,
         BuffRefresh,
-        BuffMutex
+        BuffMutex,
+        WeakNetwork
     }
 
     internal sealed class BattleAutomationScenarioPlan
@@ -1284,6 +1436,28 @@ namespace GameLogic
                         kind = BattleAutomationScenarioKind.Movement,
                         minimumPlayerCount = config.MinimumPlayerCount,
                         completionFrame = config.MovementFrames,
+                        disconnectFrame = config.DisconnectFrame,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = isClientB
+                            ? new[]
+                            {
+                                new BattleAutomationInputSegment(0, (uint)Math.Max(0, config.MovementFrames - 1), 0.0f, 1.0f)
+                            }
+                            : new[]
+                            {
+                                new BattleAutomationInputSegment(0, (uint)Math.Max(0, config.MovementFrames - 1), 1.0f, 0.0f)
+                            }
+                    };
+
+                case "two-client-weaknet-delay":
+                case "two-client-weaknet-uplink-loss":
+                case "two-client-weaknet-downlink-loss":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = scenario,
+                        kind = BattleAutomationScenarioKind.WeakNetwork,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.MovementFrames + config.SettleFrames,
                         disconnectFrame = config.DisconnectFrame,
                         movementDistanceThreshold = config.MovementDistanceThreshold,
                         inputSegments = isClientB
@@ -1567,6 +1741,20 @@ namespace GameLogic
         public int rollbackCount;
         public int lastRollbackReplayFrames;
         public float lastRollbackElapsedMs;
+        public bool networkSimulationEnabled;
+        public int networkUplinkDelayMs;
+        public int networkDownlinkDelayMs;
+        public int networkUplinkJitterMs;
+        public int networkDownlinkJitterMs;
+        public int networkUplinkLossPercent;
+        public int networkDownlinkLossPercent;
+        public ulong networkSeed;
+        public long networkUplinkSent;
+        public long networkUplinkDropped;
+        public long networkDownlinkDelivered;
+        public long networkDownlinkDropped;
+        public int networkMaxQueueDepth;
+        public long networkOverflowDropped;
         public int totalActiveBuffCount;
         public BattleAutomationPlayerSnapshot[] players;
 

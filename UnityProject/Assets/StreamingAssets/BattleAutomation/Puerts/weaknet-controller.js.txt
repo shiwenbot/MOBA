@@ -1,0 +1,154 @@
+let state = {
+  joined: false,
+  joinedFrame: 0,
+  hasStartPosition: false,
+  startX: 0,
+  startY: 0,
+  observedTargetPlayerCount: false
+};
+
+let config = {
+  scenario: "",
+  movementFrames: 90,
+  settleFrames: 30,
+  minimumPlayerCount: 2,
+  movementDistanceThreshold: 1.0,
+  isClientB: false
+};
+
+function incomplete() {
+  return JSON.stringify({ completed: false, passed: false, reason: "" });
+}
+
+module.exports = {
+  initialize(configJson) {
+    const parsed = JSON.parse(configJson || "{}");
+    config.scenario = parsed.scenario || "";
+    config.movementFrames = parsed.movementFrames || 90;
+    config.settleFrames = parsed.settleFrames || 30;
+    config.minimumPlayerCount = parsed.minimumPlayerCount || 2;
+    config.movementDistanceThreshold = parsed.movementDistanceThreshold || 1.0;
+
+    const clientId = parsed.clientId || "";
+    config.isClientB = clientId.indexOf("client-b") >= 0 ||
+                       clientId.indexOf("clone") >= 0 ||
+                       clientId.charAt(clientId.length - 1) === "b" ||
+                       clientId.charAt(clientId.length - 1) === "2";
+
+    state = {
+      joined: false,
+      joinedFrame: 0,
+      hasStartPosition: false,
+      startX: 0,
+      startY: 0,
+      observedTargetPlayerCount: false
+    };
+  },
+
+  tryGetInput(payloadJson) {
+    if (!state.joined) {
+      return JSON.stringify({ hasInput: false, dx: 0.0, dy: 0.0 });
+    }
+
+    const payload = JSON.parse(payloadJson || "{}");
+    const relativeFrame = (payload.frameIndex | 0) - state.joinedFrame;
+    if (relativeFrame < config.movementFrames) {
+      return config.isClientB
+        ? JSON.stringify({ hasInput: true, dx: 0.0, dy: 1.0 })
+        : JSON.stringify({ hasInput: true, dx: 1.0, dy: 0.0 });
+    }
+
+    return JSON.stringify({ hasInput: false, dx: 0.0, dy: 0.0 });
+  },
+
+  evaluate(snapshotJson) {
+    const snapshot = JSON.parse(snapshotJson || "{}");
+    if (snapshot.joined && !state.joined) {
+      state.joined = true;
+      state.joinedFrame = snapshot.localFrame | 0;
+    }
+
+    if (!state.hasStartPosition && snapshot.players) {
+      for (let i = 0; i < snapshot.players.length; i++) {
+        if (snapshot.players[i].isSelf) {
+          state.hasStartPosition = true;
+          state.startX = snapshot.players[i].x;
+          state.startY = snapshot.players[i].y;
+          break;
+        }
+      }
+    }
+
+    if ((snapshot.activePlayerCount | 0) >= config.minimumPlayerCount) {
+      state.observedTargetPlayerCount = true;
+    }
+
+    if (!state.joined) {
+      return incomplete();
+    }
+
+    const elapsedFrames = (snapshot.localFrame | 0) - state.joinedFrame;
+    const completionFrame = config.movementFrames + config.settleFrames;
+    if (elapsedFrames < completionFrame) {
+      return incomplete();
+    }
+
+    let distance = 0.0;
+    if (state.hasStartPosition && snapshot.players) {
+      for (let i = 0; i < snapshot.players.length; i++) {
+        if (snapshot.players[i].isSelf) {
+          const deltaX = snapshot.players[i].x - state.startX;
+          const deltaY = snapshot.players[i].y - state.startY;
+          distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+          break;
+        }
+      }
+    }
+
+    let injectionObserved = false;
+    if (config.scenario === "two-client-weaknet-delay") {
+      injectionObserved = (snapshot.leadFrames | 0) > 3 &&
+                          (snapshot.networkMaxQueueDepth | 0) > 0;
+    } else if (config.scenario === "two-client-weaknet-uplink-loss") {
+      injectionObserved = Number(snapshot.networkUplinkDropped || 0) > 0;
+    } else if (config.scenario === "two-client-weaknet-downlink-loss") {
+      injectionObserved = Number(snapshot.networkDownlinkDropped || 0) > 0;
+    }
+
+    if (snapshot.networkSimulationEnabled &&
+        state.observedTargetPlayerCount &&
+        (snapshot.snapshotMessageCount | 0) > 0 &&
+        distance >= config.movementDistanceThreshold &&
+        injectionObserved) {
+      return JSON.stringify({
+        completed: true,
+        passed: true,
+        reason: "weaknet-complete scenario=" + config.scenario +
+                " distance=" + distance.toFixed(3) +
+                " lead=" + snapshot.leadFrames +
+                " dropped=" + snapshot.networkUplinkDropped + "/" + snapshot.networkDownlinkDropped
+      });
+    }
+
+    if (elapsedFrames < completionFrame + 90) {
+      return incomplete();
+    }
+
+    return JSON.stringify({
+      completed: true,
+      passed: false,
+      reason: "weaknet-evidence-missing scenario=" + config.scenario +
+              " enabled=" + snapshot.networkSimulationEnabled +
+              " players=" + snapshot.activePlayerCount + "/" + config.minimumPlayerCount +
+              " distance=" + distance.toFixed(3) +
+              " lead=" + snapshot.leadFrames +
+              " dropped=" + snapshot.networkUplinkDropped + "/" + snapshot.networkDownlinkDropped
+    });
+  },
+
+  tryGetSkillRequest() {
+    return JSON.stringify({ hasSkillRequest: false, skillId: 0 });
+  },
+
+  dispose() {}
+};

@@ -8,6 +8,7 @@ using GameLogic.FrameSync;
 using GameShared.InputBuffering;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
+using GameShared.FrameSync.Network;
 using GameShared.FrameSync.Snapshot;
 using GameShared.SkillGraph;
 using TEngine;
@@ -39,6 +40,8 @@ namespace GameLogic
 
         private ClientTickDriver _tickDriver;
         private BattleSimulation _simulation;
+        private IBattleClock _battleClock;
+        private BattleNetworkGate _networkGate;
         private Action<IMessage> _snapshotHandler;
         private Action<IMessage> _pongHandler;
         private Action<IMessage> _bandwidthStatsHandler;
@@ -122,6 +125,9 @@ namespace GameLogic
             _snapshotHandler = null;
             _pongHandler = null;
             _bandwidthStatsHandler = null;
+            _networkGate?.ClearPending();
+            _networkGate = null;
+            _battleClock = null;
             _simulation = null;
             _isInitialized = false;
             _joinSucceeded = false;
@@ -188,6 +194,9 @@ namespace GameLogic
 
         public void Tick(uint frameIndex, Fixed64 fixedDt)
         {
+            long nowMs = _battleClock?.NowMs ?? 0L;
+            _networkGate?.PumpDownlink(nowMs);
+
             if (_simulation == null || !_simulation.IsJoined)
             {
                 return;
@@ -214,6 +223,7 @@ namespace GameLogic
             }
 
             TickResult tickResult = _simulation.Tick(frameIndex, fixedDt, (Fixed64)dx, (Fixed64)dy, skillId);
+            _networkGate?.PumpUplink(_battleClock?.NowMs ?? nowMs);
             _inputBuffer.TickDecay();
             SyncRendering();
             LogP1FrameStatus(frameIndex);
@@ -236,6 +246,7 @@ namespace GameLogic
 
         public BattleAutomationClientSnapshot CaptureAutomationSnapshot(string clientId)
         {
+            NetworkConditionConfig networkConfig = _networkGate?.Config ?? NetworkConditionConfig.Disabled;
             BattleWorldState worldState = _tickDriver?.WorldState;
             List<BattleAutomationPlayerSnapshot> players = new List<BattleAutomationPlayerSnapshot>();
             int totalActiveBuffCount = 0;
@@ -286,6 +297,20 @@ namespace GameLogic
                 rollbackCount = _simulation?.RollbackCount ?? 0,
                 lastRollbackReplayFrames = _simulation?.LastRollbackReplayFrames ?? 0,
                 lastRollbackElapsedMs = (float)(_simulation?.LastRollbackElapsedMs ?? 0.0d),
+                networkSimulationEnabled = networkConfig.IsEnabled,
+                networkUplinkDelayMs = networkConfig.UplinkDelayMs,
+                networkDownlinkDelayMs = networkConfig.DownlinkDelayMs,
+                networkUplinkJitterMs = networkConfig.UplinkJitterMs,
+                networkDownlinkJitterMs = networkConfig.DownlinkJitterMs,
+                networkUplinkLossPercent = networkConfig.UplinkLossPercent,
+                networkDownlinkLossPercent = networkConfig.DownlinkLossPercent,
+                networkSeed = networkConfig.Seed,
+                networkUplinkSent = _networkGate?.UplinkSent ?? 0L,
+                networkUplinkDropped = _networkGate?.UplinkDropped ?? 0L,
+                networkDownlinkDelivered = _networkGate?.DownlinkDelivered ?? 0L,
+                networkDownlinkDropped = _networkGate?.DownlinkDropped ?? 0L,
+                networkMaxQueueDepth = _networkGate?.MaxQueueDepth ?? 0,
+                networkOverflowDropped = _networkGate?.OverflowDropped ?? 0L,
                 totalActiveBuffCount = totalActiveBuffCount,
                 players = players.ToArray()
             };
@@ -315,12 +340,18 @@ namespace GameLogic
                 return;
             }
 
+            _battleClock = SystemBattleClock.Instance;
+            _networkGate = new BattleNetworkGate(BattleAutomationConfig.Current.NetworkCondition, _battleClock);
+            BattleInputSender sendInput = _networkGate.WrapSendInput(SendInputCommand);
+            Action<ulong> sendPing = _networkGate.WrapSendPing(SendPingCommand);
+            Action<uint, ulong> sendHashReport = _networkGate.WrapSendHashReport(SendHashReportCommand);
             _simulation = new BattleSimulation(
                 _tickDriver.WorldState,
-                SendInputCommand,
-                SendPingCommand,
-                SendHashReportCommand,
-                _tickDriver.Logger);
+                sendInput,
+                sendPing,
+                sendHashReport,
+                _tickDriver.Logger,
+                clock: _battleClock);
 
 #if BATTLE_PREDICTION_SELF_TEST
             if (s_predictionSelfTestExecuted)
@@ -416,9 +447,24 @@ namespace GameLogic
                 return;
             }
 
+            long nowMs = _battleClock?.NowMs ?? SystemBattleClock.Instance.NowMs;
+            if (_networkGate != null && !_networkGate.TryAcceptSnapshotMessage(nowMs))
+            {
+                return;
+            }
+
             _snapshotMessageCount++;
             BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(snapshot, out uint selfLatestAcceptedInputFrame);
-            _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
+            if (_networkGate == null)
+            {
+                _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
+                return;
+            }
+
+            _networkGate.EnqueueConvertedSnapshot(
+                nowMs,
+                authoritativeSnapshot,
+                value => _simulation?.EnqueueServerSnapshot(value, selfLatestAcceptedInputFrame));
         }
 
         private void OnPongMessage(IMessage message)
@@ -428,15 +474,28 @@ namespace GameLogic
                 return;
             }
 
-            _pongMessageCount++;
-            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            long rttMs = nowMs - (long)pong.SendTimestampMs;
-            if (rttMs < 0)
+            ulong sendTimestampMs = pong.SendTimestampMs;
+            long nowMs = _battleClock?.NowMs ?? SystemBattleClock.Instance.NowMs;
+            if (_networkGate == null)
             {
+                ProcessPong(sendTimestampMs);
                 return;
             }
 
-            _simulation?.ProcessPong(rttMs);
+            if (_networkGate.TryAcceptPong(nowMs, sendTimestampMs, ProcessPong))
+            {
+                _pongMessageCount++;
+            }
+        }
+
+        private void ProcessPong(ulong sendTimestampMs)
+        {
+            long nowMs = _battleClock?.NowMs ?? SystemBattleClock.Instance.NowMs;
+            long rttMs = nowMs - checked((long)sendTimestampMs);
+            if (rttMs >= 0)
+            {
+                _simulation?.ProcessPong(rttMs);
+            }
         }
 
         private void OnBandwidthStatsMessage(IMessage message)

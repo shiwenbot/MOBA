@@ -74,6 +74,16 @@ crashlytics-build.properties
 [Aa]ssets/StreamingAssets/
 [Aa]ssets/StreamingAssets.meta
 
+# Keep the S4 automation controller tracked while generated StreamingAssets stay ignored.
+![Aa]ssets/StreamingAssets/
+[Aa]ssets/StreamingAssets/*
+![Aa]ssets/StreamingAssets/BattleAutomation/
+[Aa]ssets/StreamingAssets/BattleAutomation/*
+![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/
+[Aa]ssets/StreamingAssets/BattleAutomation/Puerts/*
+![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/weaknet-controller.js.txt
+![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/weaknet-controller.js.txt.meta
+
 #Rider
 /.idea/
 

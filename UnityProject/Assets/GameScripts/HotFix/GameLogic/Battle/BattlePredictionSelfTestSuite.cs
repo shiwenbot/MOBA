@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using FixedMathSharp;
 using Fantasy.Serialize;
 using GameShared.FrameSync.Battle;
+using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
+using GameShared.FrameSync.Network;
 using GameShared.FrameSync.Snapshot;
 
 namespace GameLogic
@@ -11,6 +13,7 @@ namespace GameLogic
     public static class BattlePredictionSelfTestSuite
     {
         private const ulong FixedPhysicsExpectedHash = 0xD2120B5F0F5A5FE5UL;
+        private const ulong NetworkTestSeed = 0x534E455453494D34UL;
 
         private static readonly string[] AllCaseNames =
         {
@@ -42,7 +45,15 @@ namespace GameLogic
             "snapshot-raw-roundtrip-bit-exact",
             "hash-report-matches-reported-frame",
             "server-hash-history-detects-mismatch",
-            "hash-report-interval-is-30-frames"
+            "hash-report-interval-is-30-frames",
+            "netsim-disabled-is-passthrough",
+            "netsim-delay-releases-on-schedule",
+            "netsim-loss-rate-is-deterministic",
+            "netsim-queue-overflow-drops-oldest",
+            "netsim-uplink-pump-after-tick-has-no-extra-frame",
+            "netsim-uplink-loss-causes-server-reuse-input",
+            "netsim-downlink-delay-raises-lead-frames",
+            "netsim-downlink-loss-corrupts-attribute-baseline"
         };
 
         public static bool Run(out string failedCase)
@@ -95,6 +106,14 @@ namespace GameLogic
                     "hash-report-matches-reported-frame" => HashReportMatchesReportedFrame(),
                     "server-hash-history-detects-mismatch" => ServerHashHistoryDetectsMismatch(),
                     "hash-report-interval-is-30-frames" => HashReportIntervalIs30Frames(),
+                    "netsim-disabled-is-passthrough" => NetworkSimulationDisabledIsPassthrough(),
+                    "netsim-delay-releases-on-schedule" => NetworkSimulationDelayReleasesOnSchedule(),
+                    "netsim-loss-rate-is-deterministic" => NetworkSimulationLossRateIsDeterministic(),
+                    "netsim-queue-overflow-drops-oldest" => NetworkSimulationQueueOverflowDropsOldest(),
+                    "netsim-uplink-pump-after-tick-has-no-extra-frame" => NetworkSimulationUplinkPumpHasNoExtraFrame(),
+                    "netsim-uplink-loss-causes-server-reuse-input" => NetworkSimulationUplinkLossCausesServerReuseInput(),
+                    "netsim-downlink-delay-raises-lead-frames" => NetworkSimulationDownlinkDelayRaisesLeadFrames(),
+                    "netsim-downlink-loss-corrupts-attribute-baseline" => NetworkSimulationDownlinkLossCorruptsAttributeBaseline(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -1050,6 +1069,477 @@ namespace GameLogic
             }
 
             return true;
+        }
+
+        private static bool NetworkSimulationDisabledIsPassthrough()
+        {
+            FrameBattleClock clock = new FrameBattleClock();
+            BattleNetworkGate gate = new BattleNetworkGate(
+                CreateNetworkConfig(isEnabled: false, uplinkDelayMs: 100, uplinkLossPercent: 100),
+                clock);
+            bool sentSynchronously = false;
+            BattleInputSender sendInput = gate.WrapSendInput((_, _, _, _, _) => sentSynchronously = true);
+
+            sendInput(1u, 1u, Fixed64.One, Fixed64.Zero, 0);
+            if (!sentSynchronously || gate.UplinkSent != 1 || gate.UplinkDropped != 0)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-disabled-is-passthrough seed={NetworkTestSeed} " +
+                    $"sent={sentSynchronously} counters={gate.UplinkSent}/{gate.UplinkDropped}");
+            }
+
+            return true;
+        }
+
+        private static bool NetworkSimulationDelayReleasesOnSchedule()
+        {
+            NetworkConditionSimulator simulator = new NetworkConditionSimulator(
+                CreateNetworkConfig(uplinkDelayMs: 100));
+            bool delivered = false;
+            if (!simulator.TryEnqueueUplink(500L, () => delivered = true))
+            {
+                throw new InvalidOperationException(
+                    $"netsim-delay-releases-on-schedule seed={NetworkTestSeed} enqueue-dropped");
+            }
+
+            simulator.PumpUplink(599L);
+            if (delivered)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-delay-releases-on-schedule seed={NetworkTestSeed} released-before-deadline");
+            }
+
+            simulator.PumpUplink(600L);
+            if (!delivered || simulator.UplinkSent != 1)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-delay-releases-on-schedule seed={NetworkTestSeed} " +
+                    $"delivered={delivered} sent={simulator.UplinkSent}");
+            }
+
+            return true;
+        }
+
+        private static bool NetworkSimulationLossRateIsDeterministic()
+        {
+            const int sampleCount = 256;
+            bool[] first = BuildDownlinkDropSequence(NetworkTestSeed, sampleCount);
+            bool[] second = BuildDownlinkDropSequence(NetworkTestSeed, sampleCount);
+            bool[] differentSeed = BuildDownlinkDropSequence(NetworkTestSeed + 1UL, sampleCount);
+            bool differsFromOtherSeed = false;
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                if (first[i] != second[i])
+                {
+                    throw new InvalidOperationException(
+                        $"netsim-loss-rate-is-deterministic seed={NetworkTestSeed} mismatch-index={i}");
+                }
+
+                differsFromOtherSeed |= first[i] != differentSeed[i];
+            }
+
+            if (!differsFromOtherSeed)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-loss-rate-is-deterministic seed={NetworkTestSeed} different-seed-sequence-matched");
+            }
+
+            return true;
+        }
+
+        private static bool NetworkSimulationQueueOverflowDropsOldest()
+        {
+            const int queueCapacity = 4;
+            NetworkConditionSimulator simulator = new NetworkConditionSimulator(
+                CreateNetworkConfig(uplinkDelayMs: 1000),
+                queueCapacity);
+            int delivered = 0;
+            for (int i = 0; i < 10; i++)
+            {
+                simulator.TryEnqueueUplink(0L, () => delivered++);
+            }
+
+            if (simulator.OverflowDropped != 6 ||
+                simulator.UplinkDropped != 6 ||
+                simulator.UplinkQueueDepth != queueCapacity ||
+                simulator.MaxQueueDepth != queueCapacity)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-queue-overflow-drops-oldest seed={NetworkTestSeed} " +
+                    $"overflow={simulator.OverflowDropped} dropped={simulator.UplinkDropped} " +
+                    $"depth={simulator.UplinkQueueDepth} maxDepth={simulator.MaxQueueDepth}");
+            }
+
+            simulator.PumpUplink(1000L);
+            if (delivered != queueCapacity || simulator.UplinkSent != queueCapacity)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-queue-overflow-drops-oldest seed={NetworkTestSeed} " +
+                    $"delivered={delivered} sent={simulator.UplinkSent}");
+            }
+
+            return true;
+        }
+
+        private static bool NetworkSimulationUplinkPumpHasNoExtraFrame()
+        {
+#if FANTASY_UNITY
+            return true;
+#else
+            FrameBattleClock clock = new FrameBattleClock();
+            BattleNetworkGate gate = new BattleNetworkGate(CreateNetworkConfig(), clock);
+            Fantasy.BattleLogic battleLogic = new Fantasy.BattleLogic();
+            battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
+            BattleSimulation simulation = new BattleSimulation(
+                new BattleWorldState(),
+                gate.WrapSendInput((frameIndex, inputSeq, dx, dy, skillId) =>
+                    battleLogic.SubmitInput(1, frameIndex, inputSeq, dx.m_rawValue, dy.m_rawValue, skillId)),
+                gate.WrapSendPing(_ => { }),
+                clock: clock);
+            simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
+
+            clock.SetFrame(1u);
+            simulation.Tick(1u, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (battleLogic.AcceptedInputCount != 0)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-uplink-pump-after-tick-has-no-extra-frame seed={NetworkTestSeed} sent-before-pump");
+            }
+
+            gate.PumpUplink(clock.NowMs);
+            if (battleLogic.AcceptedInputCount != 1 || battleLogic.GetLatestAcceptedInputFrame(1) != 1u)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-uplink-pump-after-tick-has-no-extra-frame seed={NetworkTestSeed} " +
+                    $"accepted={battleLogic.AcceptedInputCount} latest={battleLogic.GetLatestAcceptedInputFrame(1)}");
+            }
+
+            battleLogic.Tick(1u, DeterminismRules.FixedDeltaTimeFixed64);
+            if (battleLogic.ReusedInputCount != 0 || battleLogic.ZeroInputFallbackCount != 0)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-uplink-pump-after-tick-has-no-extra-frame seed={NetworkTestSeed} " +
+                    $"reused={battleLogic.ReusedInputCount} zero={battleLogic.ZeroInputFallbackCount}");
+            }
+
+            return true;
+#endif
+        }
+
+        private static bool NetworkSimulationUplinkLossCausesServerReuseInput()
+        {
+#if FANTASY_UNITY
+            return true;
+#else
+            FrameBattleClock clock = new FrameBattleClock();
+            BattleNetworkGate gate = new BattleNetworkGate(
+                CreateNetworkConfig(uplinkLossPercent: 20),
+                clock);
+            Fantasy.BattleLogic battleLogic = new Fantasy.BattleLogic();
+            battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
+            BattleWorldState clientWorld = new BattleWorldState();
+            BattleSimulation simulation = new BattleSimulation(
+                clientWorld,
+                gate.WrapSendInput((frameIndex, inputSeq, dx, dy, skillId) =>
+                    battleLogic.SubmitInput(1, frameIndex, inputSeq, dx.m_rawValue, dy.m_rawValue, skillId)),
+                gate.WrapSendPing(_ => { }),
+                gate.WrapSendHashReport((frameIndex, stateHash) =>
+                    battleLogic.TryCompareReportedHash(1, frameIndex, stateHash)),
+                clock: clock);
+            simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
+
+            battleLogic.OnBroadcast = snapshot =>
+            {
+                long nowMs = clock.NowMs;
+                if (!gate.TryAcceptSnapshotMessage(nowMs))
+                {
+                    return;
+                }
+
+                uint latestAcceptedInputFrame = battleLogic.GetLatestAcceptedInputFrame(1);
+                gate.EnqueueConvertedSnapshot(
+                    nowMs,
+                    snapshot.ToBattleWorldSnapshot(),
+                    value => simulation.EnqueueServerSnapshot(value, latestAcceptedInputFrame));
+            };
+
+            for (uint frame = 1u; frame <= 180u; frame++)
+            {
+                clock.SetFrame(frame);
+                gate.PumpDownlink(clock.NowMs);
+                GetNetworkTestInput(frame, out Fixed64 dx, out Fixed64 dy);
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, dx, dy);
+                gate.PumpUplink(clock.NowMs);
+                battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
+            }
+
+            gate.PumpDownlink(clock.NowMs);
+            gate.Configure(CreateNetworkConfig(uplinkLossPercent: 0));
+            for (uint frame = 181u; frame <= 210u; frame++)
+            {
+                clock.SetFrame(frame);
+                gate.PumpDownlink(clock.NowMs);
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+                gate.PumpUplink(clock.NowMs);
+                battleLogic.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64);
+                gate.PumpDownlink(clock.NowMs);
+            }
+
+            clock.SetFrame(211u);
+            gate.PumpDownlink(clock.NowMs);
+            simulation.Tick(211u, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            gate.PumpUplink(clock.NowMs);
+
+            if (!clientWorld.TryGetPlayer(1, out PlayerState clientPlayer) ||
+                !battleLogic.TryGetPlayer(1, out PlayerState serverPlayer))
+            {
+                throw new InvalidOperationException(
+                    $"netsim-uplink-loss-causes-server-reuse-input seed={NetworkTestSeed} player-missing");
+            }
+
+            if (gate.UplinkDropped <= 0 ||
+                battleLogic.ReusedInputCount <= 0 ||
+                battleLogic.HashMismatchCount != 0 ||
+                battleLogic.HashReportsMatched <= 0 ||
+                clientPlayer.X.m_rawValue != serverPlayer.X.m_rawValue ||
+                clientPlayer.Y.m_rawValue != serverPlayer.Y.m_rawValue)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-uplink-loss-causes-server-reuse-input seed={NetworkTestSeed} " +
+                    $"dropped={gate.UplinkDropped} reused={battleLogic.ReusedInputCount} " +
+                    $"hash={battleLogic.HashReportsMatched}/{battleLogic.HashMismatchCount}/{battleLogic.HashNoRecordCount} " +
+                    $"x={clientPlayer.X.m_rawValue}/{serverPlayer.X.m_rawValue} " +
+                    $"y={clientPlayer.Y.m_rawValue}/{serverPlayer.Y.m_rawValue}");
+            }
+
+            return true;
+#endif
+        }
+
+        private static bool NetworkSimulationDownlinkDelayRaisesLeadFrames()
+        {
+            FrameBattleClock clock = new FrameBattleClock();
+            BattleNetworkGate gate = new BattleNetworkGate(
+                CreateNetworkConfig(downlinkDelayMs: 200),
+                clock);
+            BattleSimulation simulation = null;
+            int pingCount = 0;
+            int pongCount = 0;
+            Action<ulong> sendPing = gate.WrapSendPing(sendTimestampMs =>
+            {
+                pingCount++;
+                gate.TryAcceptPong(clock.NowMs, sendTimestampMs, releasedTimestampMs =>
+                {
+                    pongCount++;
+                    simulation.ProcessPong(clock.NowMs - checked((long)releasedTimestampMs));
+                });
+            });
+            simulation = new BattleSimulation(
+                new BattleWorldState(),
+                gate.WrapSendInput((_, _, _, _, _) => { }),
+                sendPing,
+                clock: clock);
+            simulation.SetJoined(1, 0, Fixed64.Zero, Fixed64.Zero);
+            uint initialLeadFrames = simulation.LeadFrames;
+
+            for (uint frame = 1u; frame <= 45u; frame++)
+            {
+                clock.SetFrame(frame);
+                gate.PumpDownlink(clock.NowMs);
+                simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+                gate.PumpUplink(clock.NowMs);
+            }
+
+            if (pingCount <= 0 ||
+                pongCount <= 0 ||
+                gate.DownlinkDelivered <= 0 ||
+                simulation.LeadFrames <= initialLeadFrames)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-delay-raises-lead-frames seed={NetworkTestSeed} " +
+                    $"ping={pingCount} pong={pongCount} delivered={gate.DownlinkDelivered} " +
+                    $"lead={initialLeadFrames}->{simulation.LeadFrames}");
+            }
+
+            return true;
+        }
+
+        private static bool NetworkSimulationDownlinkLossCorruptsAttributeBaseline()
+        {
+#if FANTASY_UNITY
+            return true;
+#else
+            FrameBattleClock clock = new FrameBattleClock();
+            BattleNetworkGate gate = new BattleNetworkGate(CreateNetworkConfig(), clock);
+            Fantasy.BattleLogic battleLogic = new Fantasy.BattleLogic();
+            PlayerState serverPlayer = battleLogic.JoinPlayer(1, Fixed64.Zero, Fixed64.Zero);
+            Dictionary<uint, BattleWorldSnapshot> snapshots = new Dictionary<uint, BattleWorldSnapshot>();
+            battleLogic.OnBroadcast = snapshot => snapshots[snapshot.FrameIndex] = snapshot.ToBattleWorldSnapshot();
+
+            battleLogic.Tick(1u, DeterminismRules.FixedDeltaTimeFixed64);
+            serverPlayer.Health = Math.Max(1, serverPlayer.Health - 10);
+            battleLogic.Tick(2u, DeterminismRules.FixedDeltaTimeFixed64);
+            serverPlayer.Attack += 7;
+            battleLogic.Tick(3u, DeterminismRules.FixedDeltaTimeFixed64);
+
+            PlayerAttributeSnapshot frame1Attributes = snapshots[1u].Players[0].Attributes;
+            PlayerAttributeSnapshot frame2Attributes = snapshots[2u].Players[0].Attributes;
+            PlayerAttributeSnapshot frame3Attributes = snapshots[3u].Players[0].Attributes;
+            PlayerAttributeSnapshot clientBaseline = PlayerAttributeSnapshot.Default;
+            BattleWorldSnapshot rebuiltFrame3 = null;
+
+            clock.SetFrame(1u);
+            if (!gate.TryAcceptSnapshotMessage(clock.NowMs))
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-loss-corrupts-attribute-baseline seed={NetworkTestSeed} initial-full-sync-dropped");
+            }
+
+            clientBaseline = PlayerAttributeSync.Merge(
+                clientBaseline,
+                PlayerAttributeDirtyFlags.All,
+                frame1Attributes.Health,
+                frame1Attributes.MaxHealth,
+                frame1Attributes.Mana,
+                frame1Attributes.MaxMana,
+                frame1Attributes.Attack);
+
+            gate.Configure(CreateNetworkConfig(downlinkLossPercent: 100));
+            clock.SetFrame(2u);
+            if (gate.TryAcceptSnapshotMessage(clock.NowMs))
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-loss-corrupts-attribute-baseline seed={NetworkTestSeed} dirty-snapshot-not-dropped");
+            }
+
+            gate.Configure(CreateNetworkConfig(downlinkLossPercent: 0));
+            clock.SetFrame(3u);
+            if (!gate.TryAcceptSnapshotMessage(clock.NowMs))
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-loss-corrupts-attribute-baseline seed={NetworkTestSeed} recovery-snapshot-dropped");
+            }
+
+            PlayerAttributeDirtyFlags frame3DirtyMask = PlayerAttributeSync.ComputeDirtyMask(
+                true,
+                frame2Attributes,
+                frame3Attributes);
+            clientBaseline = PlayerAttributeSync.Merge(
+                clientBaseline,
+                frame3DirtyMask,
+                frame3Attributes.Health,
+                frame3Attributes.MaxHealth,
+                frame3Attributes.Mana,
+                frame3Attributes.MaxMana,
+                frame3Attributes.Attack);
+            BattleWorldSnapshot convertedFrame3 = ReplacePlayerAttributes(snapshots[3u], 1, clientBaseline);
+            gate.EnqueueConvertedSnapshot(clock.NowMs, convertedFrame3, value => rebuiltFrame3 = value);
+            gate.PumpDownlink(clock.NowMs);
+
+            if (rebuiltFrame3 == null)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-loss-corrupts-attribute-baseline seed={NetworkTestSeed} frame3-not-delivered");
+            }
+
+            ulong clientHash = StateHasher.Hash(rebuiltFrame3);
+            Fantasy.HashReportResult result = battleLogic.TryCompareReportedHash(1, 3u, clientHash);
+            if (frame3DirtyMask != PlayerAttributeDirtyFlags.Attack ||
+                rebuiltFrame3.Players[0].Health == frame3Attributes.Health ||
+                result != Fantasy.HashReportResult.Mismatch ||
+                battleLogic.HashMismatchCount <= 0 ||
+                gate.DownlinkDropped <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"netsim-downlink-loss-corrupts-attribute-baseline seed={NetworkTestSeed} " +
+                    $"mask={frame3DirtyMask} health={rebuiltFrame3.Players[0].Health}/{frame3Attributes.Health} " +
+                    $"result={result} mismatch={battleLogic.HashMismatchCount} dropped={gate.DownlinkDropped}");
+            }
+
+            return true;
+#endif
+        }
+
+        private static NetworkConditionConfig CreateNetworkConfig(
+            bool isEnabled = true,
+            int uplinkDelayMs = 0,
+            int downlinkDelayMs = 0,
+            int uplinkJitterMs = 0,
+            int downlinkJitterMs = 0,
+            int uplinkLossPercent = 0,
+            int downlinkLossPercent = 0,
+            ulong seed = NetworkTestSeed)
+        {
+            return new NetworkConditionConfig(
+                isEnabled,
+                uplinkDelayMs,
+                downlinkDelayMs,
+                uplinkJitterMs,
+                downlinkJitterMs,
+                uplinkLossPercent,
+                downlinkLossPercent,
+                seed);
+        }
+
+        private static bool[] BuildDownlinkDropSequence(ulong seed, int sampleCount)
+        {
+            NetworkConditionSimulator simulator = new NetworkConditionSimulator(
+                CreateNetworkConfig(downlinkLossPercent: 37, seed: seed));
+            bool[] sequence = new bool[sampleCount];
+            for (int i = 0; i < sampleCount; i++)
+            {
+                sequence[i] = simulator.ShouldDropDownlink(i);
+            }
+
+            return sequence;
+        }
+
+        private static void GetNetworkTestInput(uint frame, out Fixed64 dx, out Fixed64 dy)
+        {
+            switch ((frame / 30u) % 4u)
+            {
+                case 0u:
+                    dx = Fixed64.One;
+                    dy = Fixed64.Zero;
+                    return;
+                case 1u:
+                    dx = Fixed64.Zero;
+                    dy = Fixed64.One;
+                    return;
+                case 2u:
+                    dx = -Fixed64.One;
+                    dy = Fixed64.Zero;
+                    return;
+                default:
+                    dx = Fixed64.Zero;
+                    dy = -Fixed64.One;
+                    return;
+            }
+        }
+
+        private static BattleWorldSnapshot ReplacePlayerAttributes(
+            BattleWorldSnapshot source,
+            long playerId,
+            PlayerAttributeSnapshot attributes)
+        {
+            PlayerStateSnapshot[] players = new PlayerStateSnapshot[source.Players.Count];
+            for (int i = 0; i < source.Players.Count; i++)
+            {
+                PlayerStateSnapshot player = source.Players[i];
+                players[i] = player.PlayerId == playerId
+                    ? new PlayerStateSnapshot(
+                        player.PlayerId,
+                        player.X,
+                        player.Y,
+                        attributes,
+                        player.ActiveBuffs,
+                        player.NextRuntimeBuffId,
+                        player.Numeric)
+                    : player;
+            }
+
+            return new BattleWorldSnapshot(source.FrameIndex, players, source.PhysicsSnapshot);
         }
 
         private static void EnsureProtoSerializer()

@@ -142,7 +142,27 @@ public static class TestRunner
             case TestScenario.PredictedBuffConsistencyHit:
             case TestScenario.RollbackReplaysBeforeNextConsistencyCheck:
             case TestScenario.ManualRollbackReplaysAuthoritativeHistory:
+            case TestScenario.NetSimDisabledIsPassthrough:
+            case TestScenario.NetSimDelayReleasesOnSchedule:
+            case TestScenario.NetSimLossRateIsDeterministic:
+            case TestScenario.NetSimQueueOverflowDropsOldest:
+            case TestScenario.NetSimUplinkPumpHasNoExtraFrame:
+            case TestScenario.NetSimUplinkLossCausesServerReuseInput:
+            case TestScenario.NetSimDownlinkDelayRaisesLeadFrames:
+            case TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
+                break;
+
+            case TestScenario.TwoClientWeakNetDelay:
+                checks.Add(RunPredictionSelfCase(TestScenario.NetSimDownlinkDelayRaisesLeadFrames));
+                break;
+
+            case TestScenario.TwoClientWeakNetUplinkLoss:
+                checks.Add(RunPredictionSelfCase(TestScenario.NetSimUplinkLossCausesServerReuseInput));
+                break;
+
+            case TestScenario.TwoClientWeakNetDownlinkLoss:
+                checks.Add(RunPredictionSelfCase(TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline));
                 break;
 
             case TestScenario.SkillTriggerBuff:
@@ -1411,6 +1431,17 @@ public static class TestRunner
                 "predicted-buff-consistency-hit" => TestScenario.PredictedBuffConsistencyHit,
                 "rollback-replays-before-next-consistency-check" => TestScenario.RollbackReplaysBeforeNextConsistencyCheck,
                 "manual-rollback-replays-authoritative-history" => TestScenario.ManualRollbackReplaysAuthoritativeHistory,
+                "netsim-disabled-is-passthrough" => TestScenario.NetSimDisabledIsPassthrough,
+                "netsim-delay-releases-on-schedule" => TestScenario.NetSimDelayReleasesOnSchedule,
+                "netsim-loss-rate-is-deterministic" => TestScenario.NetSimLossRateIsDeterministic,
+                "netsim-queue-overflow-drops-oldest" => TestScenario.NetSimQueueOverflowDropsOldest,
+                "netsim-uplink-pump-after-tick-has-no-extra-frame" => TestScenario.NetSimUplinkPumpHasNoExtraFrame,
+                "netsim-uplink-loss-causes-server-reuse-input" => TestScenario.NetSimUplinkLossCausesServerReuseInput,
+                "netsim-downlink-delay-raises-lead-frames" => TestScenario.NetSimDownlinkDelayRaisesLeadFrames,
+                "netsim-downlink-loss-corrupts-attribute-baseline" => TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline,
+                "two-client-weaknet-delay" => TestScenario.TwoClientWeakNetDelay,
+                "two-client-weaknet-uplink-loss" => TestScenario.TwoClientWeakNetUplinkLoss,
+                "two-client-weaknet-downlink-loss" => TestScenario.TwoClientWeakNetDownlinkLoss,
                 "skill-trigger-buff" => TestScenario.SkillTriggerBuff,
                 "determinism" => TestScenario.Determinism,
                 "consistency" => TestScenario.Consistency,
@@ -1479,6 +1510,17 @@ public static class TestRunner
         public const string PredictedBuffConsistencyHit = "predicted-buff-consistency-hit";
         public const string RollbackReplaysBeforeNextConsistencyCheck = "rollback-replays-before-next-consistency-check";
         public const string ManualRollbackReplaysAuthoritativeHistory = "manual-rollback-replays-authoritative-history";
+        public const string NetSimDisabledIsPassthrough = "netsim-disabled-is-passthrough";
+        public const string NetSimDelayReleasesOnSchedule = "netsim-delay-releases-on-schedule";
+        public const string NetSimLossRateIsDeterministic = "netsim-loss-rate-is-deterministic";
+        public const string NetSimQueueOverflowDropsOldest = "netsim-queue-overflow-drops-oldest";
+        public const string NetSimUplinkPumpHasNoExtraFrame = "netsim-uplink-pump-after-tick-has-no-extra-frame";
+        public const string NetSimUplinkLossCausesServerReuseInput = "netsim-uplink-loss-causes-server-reuse-input";
+        public const string NetSimDownlinkDelayRaisesLeadFrames = "netsim-downlink-delay-raises-lead-frames";
+        public const string NetSimDownlinkLossCorruptsAttributeBaseline = "netsim-downlink-loss-corrupts-attribute-baseline";
+        public const string TwoClientWeakNetDelay = "two-client-weaknet-delay";
+        public const string TwoClientWeakNetUplinkLoss = "two-client-weaknet-uplink-loss";
+        public const string TwoClientWeakNetDownlinkLoss = "two-client-weaknet-downlink-loss";
         public const string SkillTriggerBuff = "skill-trigger-buff";
         public const string Determinism = "determinism";
         public const string Consistency = "consistency";
