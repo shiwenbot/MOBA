@@ -139,11 +139,11 @@
     <h1>WeDoBest 网络同步系统分析报告</h1>
     <p class="sub">一个面向求职演示的极简俯视角 Gameplay 状态同步沙盒：服务端权威 30Hz 帧同步 + 客户端预测 / 回滚重播 / 一致性校验的全链路剖析。</p>
     <div class="meta">
-      <span>📅 2026-08-04</span>
+      <span>📅 2026-08-04（时间线 08-05 更新至 S4）</span>
       <span>🌿 feature/gameplay-sync-sandbox</span>
       <span>⚡ Fantasy + Unity/TEngine</span>
       <span>🎯 定点确定性物理</span>
-      <span>📦 54 个 FrameSync 源文件</span>
+      <span>📦 GameShared/FrameSync 49 个源文件</span>
     </div>
   </div>
 </header>
@@ -848,13 +848,17 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
     <h4>S2 物理层重写（手写定点） <span class="pill done">已完成</span></h4>
     <p style="font-size:13px">拿掉 Box2D，全定点物理，跨端 bit-exact。哈希基线合法变化。</p>
   </div>
-  <div class="tl-item next">
-    <h4>S3 客户端哈希上报 + 服务端告警 <span class="pill next">下一项</span></h4>
-    <p style="font-size:13px"><strong>缺前置</strong>：服务端需新增历史哈希索引（<code>BattleLogic.GetStateHash()</code> 目前只能算最新帧）。客户端侧 <code>CheckConsistency</code> 已按帧号索引就绪。</p>
+  <div class="tl-item done">
+    <h4>S3 客户端哈希上报 + 服务端告警 <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">快照通路改传 <code>m_rawValue</code>（往返无损），客户端每 30 帧上报 <code>C2B_StateHashReport</code>，服务端 <code>_authoritativeHashHistory</code>（容量 64）按帧号比对并告警。<strong>哈希对象是服务端权威快照，不是客户端预测态</strong>——验证的是往返无损，不是预测正确性。真机观测待回填。</p>
   </div>
-  <div class="tl-item todo">
-    <h4>S5 输入帧号 RTT 交叉校验 <span class="pill todo">未开始</span></h4>
-    <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。</p>
+  <div class="tl-item done">
+    <h4>S4 弱网自动化测试（延迟 / 抖动 / 丢包） <span class="pill done">已完成</span></h4>
+    <p style="font-size:13px">客户端逻辑收发层按种子确定性注入双向延迟/抖动/永久丢包。<strong>丢包判定在 <code>ConvertSnapshot</code> 之前</strong>（否则基线已吸收增量，测不到脏同步缺陷），<strong>上行泵在 <code>Tick</code> 之后</strong>（否则零延迟也多一帧）。8 条 <code>netsim-*</code> 用例 + 3 个真实场景。已用下行丢包稳定复现<strong>属性脏同步基线缺陷</strong>（<code>PlayerAttributeSync.Merge</code> 无帧号概念，错位后永久保持且无恢复通路）——本阶段只暴露不修。模拟的是消息可见时刻，非真实 KCP 行为。</p>
+  </div>
+  <div class="tl-item next">
+    <h4>S5 输入帧号 RTT 交叉校验 <span class="pill next">下一项</span></h4>
+    <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。S4 已提供可控延迟，±200ms 窗口用例现在构造得出来了。</p>
   </div>
   <div class="tl-item todo">
     <h4>S6 一致时跳过重放 <span class="pill todo">部分实现</span></h4>
@@ -862,10 +866,6 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
   </div>
   <div class="tl-item todo">
     <h4>S7 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
-  </div>
-  <div class="tl-item todo">
-    <h4>S4 弱网自动化测试 <span class="pill todo">未开始</span></h4>
-    <p style="font-size:13px">延迟 / 抖动 / 丢包场景自动化。</p>
   </div>
   <div class="tl-item todo">
     <h4>S8 断线重连最小版 <span class="pill todo">未开始</span></h4>
@@ -935,7 +935,8 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 <table>
 <tr><th>缺口</th><th>影响</th><th>对应阶段</th></tr>
 <tr><td>服务端无 RTT 测量</td><td>S5 无法做帧号交叉校验，反外挂能力缺失</td><td>S5</td></tr>
-<tr><td>服务端无历史哈希索引</td><td>S3 无法对比客户端上报的延迟哈希</td><td>S3</td></tr>
+<tr><td><strong>属性脏同步无丢包恢复</strong>（S4 实测证实）</td><td>下行丢一份带脏属性的快照后，客户端属性基线<strong>永久错位且无从察觉</strong>——<code>PlayerAttributeSync.Merge</code> 无帧号/基线版本概念。Buff 侧有基线帧校验，但检测到错位后无协议路径让服务端补发全量。修复需动协议 + 服务端按观察者维护基线 + 恢复通路</td><td>独立阶段</td></tr>
+<tr><td>输入无冗余无重发</td><td>丢一个输入包即产生真实预测态分歧，服务端复用上一帧输入（<code>ReusedInputCount</code>）</td><td>独立决策</td></tr>
 <tr><td>输入逐帧不批量</td><td>上行 30 msg/s，弱网下消息开销大</td><td>—</td></tr>
 <tr><td>断线重连未实现</td><td>掉线即出局，演示容错性不足</td><td>S8</td></tr>
 <tr><td>Dictionary 迭代顺序</td><td>靠 Sort 兜底，非编译期保证</td><td>—</td></tr>
@@ -946,7 +947,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 </div>
 
 <div class="foot">
-  <p>本报告基于代码库分支 <code>feature/gameplay-sync-sandbox</code>（commit <code>9be6e989</code>，2026-08-04）生成。</p>
+  <p>本报告主体基于代码库分支 <code>feature/gameplay-sync-sandbox</code>（commit <code>9be6e989</code>，2026-08-04）生成。<strong>08-05 增量更新</strong>：时间线、缺口表已同步至 S3（<code>4e294d55</code>）与 S4（<code>0448839d</code>）落地后的状态；其余章节仍描述 08-04 的代码，读到与 S3/S4 相关的细节时以两份实现计划为准。</p>
   <p>数据来源：源码静态分析 + 三个并行探索 Agent 的交叉验证。关键结论均有 <code>文件:行号</code> 可追溯。</p>
 </div>
 
