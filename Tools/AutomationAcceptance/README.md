@@ -16,7 +16,7 @@ S4 新增三个按需执行的弱网场景（不加入默认场景，避免普�
 
 - `two-client-weaknet-delay` - 双向 100ms 延迟 + 30ms 抖动
 - `two-client-weaknet-uplink-loss` - 20% 上行永久丢包
-- `two-client-weaknet-downlink-loss` - 20% 下行永久丢包，用于暴露属性脏同步基线缺陷
+- `two-client-weaknet-downlink-loss` - 20% 下行永久丢包，用于观察属性/Buff 基线错位及周期性全量恢复
 
 ## 当前状态
 

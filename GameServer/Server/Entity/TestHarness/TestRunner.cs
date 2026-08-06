@@ -150,6 +150,12 @@ public static class TestRunner
             case TestScenario.NetSimUplinkLossCausesServerReuseInput:
             case TestScenario.NetSimDownlinkDelayRaisesLeadFrames:
             case TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline:
+            case TestScenario.AttributeDeltaRecoversAfterPeriodicFull:
+            case TestScenario.BuffDeltaRecoversAfterPeriodicFull:
+            case TestScenario.BuffDeltaAfterFullSyncIsAccepted:
+            case TestScenario.AttributeNoChangePacketDoesNotDiverge:
+            case TestScenario.PeriodicFullSyncIsStaggered:
+            case TestScenario.PhysicsProtocolRoundTripPreservesNondefaultFields:
                 checks.Add(RunPredictionSelfCase(options.Scenario));
                 break;
 
@@ -1439,6 +1445,12 @@ public static class TestRunner
                 "netsim-uplink-loss-causes-server-reuse-input" => TestScenario.NetSimUplinkLossCausesServerReuseInput,
                 "netsim-downlink-delay-raises-lead-frames" => TestScenario.NetSimDownlinkDelayRaisesLeadFrames,
                 "netsim-downlink-loss-corrupts-attribute-baseline" => TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline,
+                "attribute-delta-recovers-after-periodic-full" => TestScenario.AttributeDeltaRecoversAfterPeriodicFull,
+                "buff-delta-recovers-after-periodic-full" => TestScenario.BuffDeltaRecoversAfterPeriodicFull,
+                "buff-delta-after-full-sync-is-accepted" => TestScenario.BuffDeltaAfterFullSyncIsAccepted,
+                "attribute-no-change-packet-does-not-diverge" => TestScenario.AttributeNoChangePacketDoesNotDiverge,
+                "periodic-full-sync-is-staggered" => TestScenario.PeriodicFullSyncIsStaggered,
+                "physics-protocol-roundtrip-preserves-nondefault-fields" => TestScenario.PhysicsProtocolRoundTripPreservesNondefaultFields,
                 "two-client-weaknet-delay" => TestScenario.TwoClientWeakNetDelay,
                 "two-client-weaknet-uplink-loss" => TestScenario.TwoClientWeakNetUplinkLoss,
                 "two-client-weaknet-downlink-loss" => TestScenario.TwoClientWeakNetDownlinkLoss,
@@ -1518,6 +1530,12 @@ public static class TestRunner
         public const string NetSimUplinkLossCausesServerReuseInput = "netsim-uplink-loss-causes-server-reuse-input";
         public const string NetSimDownlinkDelayRaisesLeadFrames = "netsim-downlink-delay-raises-lead-frames";
         public const string NetSimDownlinkLossCorruptsAttributeBaseline = "netsim-downlink-loss-corrupts-attribute-baseline";
+        public const string AttributeDeltaRecoversAfterPeriodicFull = "attribute-delta-recovers-after-periodic-full";
+        public const string BuffDeltaRecoversAfterPeriodicFull = "buff-delta-recovers-after-periodic-full";
+        public const string BuffDeltaAfterFullSyncIsAccepted = "buff-delta-after-full-sync-is-accepted";
+        public const string AttributeNoChangePacketDoesNotDiverge = "attribute-no-change-packet-does-not-diverge";
+        public const string PeriodicFullSyncIsStaggered = "periodic-full-sync-is-staggered";
+        public const string PhysicsProtocolRoundTripPreservesNondefaultFields = "physics-protocol-roundtrip-preserves-nondefault-fields";
         public const string TwoClientWeakNetDelay = "two-client-weaknet-delay";
         public const string TwoClientWeakNetUplinkLoss = "two-client-weaknet-uplink-loss";
         public const string TwoClientWeakNetDownlinkLoss = "two-client-weaknet-downlink-loss";

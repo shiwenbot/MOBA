@@ -108,10 +108,9 @@ message PlayerSnapshot
 	uint32 ReservedField5 = 5;
 	int64 LinearVelocityXRaw = 6;
 	int64 LinearVelocityYRaw = 7;
-	// Compatibility slots: keep field numbers 8-10 unused by gameplay code.
-	uint32 ReservedField8 = 8;
-	uint32 ReservedField9 = 9;
-	uint32 ReservedField10 = 10;
+	int64 AngularVelocityRaw = 8;
+	bool IsAsleep = 9;
+	bool IsDisabled = 10;
 	uint32 AttributeDirtyMask = 11;
 	int32 Health = 12;
 	int32 MaxHealth = 13;
@@ -124,6 +123,8 @@ message PlayerSnapshot
 	uint32 BuffDirtyMask = 20;
 	uint32 BuffSnapshotFrameIndex = 21;
 	bool IsBuffFullSync = 22;
+	int64 RotationRadiansRaw = 23;
+	uint32 AttributeBaselineFrameIndex = 24;
 }
 
 message FrameContactSnapshot

@@ -28,7 +28,7 @@ namespace GameLogic
 #endif
 
         private readonly Dictionary<long, GameObject> _playerSpheres = new Dictionary<long, GameObject>();
-        private readonly Dictionary<long, PlayerAttributeSnapshot> _authoritativeAttributesByPlayerId = new Dictionary<long, PlayerAttributeSnapshot>();
+        private readonly Dictionary<long, AuthoritativeAttributeBaseline> _authoritativeAttributesByPlayerId = new Dictionary<long, AuthoritativeAttributeBaseline>();
         private readonly Dictionary<long, AuthoritativeBuffBaseline> _authoritativeBuffsByPlayerId = new Dictionary<long, AuthoritativeBuffBaseline>();
         private readonly HashSet<long> _activePlayers = new HashSet<long>();
         private readonly Dictionary<long, RenderTarget> _renderTargetsByPlayerId = new Dictionary<long, RenderTarget>();
@@ -647,21 +647,32 @@ namespace GameLogic
             {
                 PlayerSnapshot player = snapshot.Players[i];
                 _authoritativePlayersInSnapshot.Add(player.PlayerId);
-                PlayerAttributeSnapshot baselineAttributes = _authoritativeAttributesByPlayerId.TryGetValue(
+                bool hasAttributeBaseline = _authoritativeAttributesByPlayerId.TryGetValue(
                     player.PlayerId,
-                    out PlayerAttributeSnapshot cachedAttributes)
-                    ? cachedAttributes
-                    : PlayerAttributeSnapshot.Default;
-                PlayerAttributeSnapshot mergedAttributes = PlayerAttributeSync.Merge(
-                    baselineAttributes,
-                    (PlayerAttributeDirtyFlags)player.AttributeDirtyMask,
-                    player.Health,
-                    player.MaxHealth,
-                    player.Mana,
-                    player.MaxMana,
-                    player.Attack);
+                    out AuthoritativeAttributeBaseline attributeBaseline);
+                AttributeMergeResult attributeMerge = BattleSnapshotProtocolMapper.MergeAttributes(
+                    snapshot.FrameIndex,
+                    player,
+                    hasAttributeBaseline,
+                    hasAttributeBaseline ? attributeBaseline.Attributes : PlayerAttributeSnapshot.Default,
+                    hasAttributeBaseline ? attributeBaseline.FrameIndex : 0u);
+                if (attributeMerge.Diverged)
+                {
+                    Log.Warning(
+                        $"[Battle] Attribute baseline diverged. player={player.PlayerId} frame={snapshot.FrameIndex} " +
+                        $"localBase={(hasAttributeBaseline ? attributeBaseline.FrameIndex : 0u)} " +
+                        $"packetBase={player.AttributeBaselineFrameIndex} hasBaseline={hasAttributeBaseline}");
+                }
+
+                if (attributeMerge.HasBaseline)
+                {
+                    _authoritativeAttributesByPlayerId[player.PlayerId] = new AuthoritativeAttributeBaseline(
+                        attributeMerge.Attributes,
+                        attributeMerge.FrameIndex);
+                }
+
+                PlayerAttributeSnapshot mergedAttributes = attributeMerge.Attributes;
                 ResolveAuthoritativeBuffSnapshot(snapshot.FrameIndex, player, out BuffState[] authoritativeBuffs, out long nextRuntimeBuffId);
-                _authoritativeAttributesByPlayerId[player.PlayerId] = mergedAttributes;
                 players[i] = new PlayerStateSnapshot(
                     player.PlayerId,
                     Fixed64.FromRaw(player.XRaw),
@@ -670,16 +681,7 @@ namespace GameLogic
                     authoritativeBuffs,
                     nextRuntimeBuffId,
                     BuildNumericSnapshot(player.Numeric, mergedAttributes));
-                bodies[i] = new PhysicsBodySnapshot(
-                    checked((int)player.PlayerId),
-                    Fixed64.FromRaw(player.XRaw),
-                    Fixed64.FromRaw(player.YRaw),
-                    Fixed64.Zero,
-                    Fixed64.FromRaw(player.LinearVelocityXRaw),
-                    Fixed64.FromRaw(player.LinearVelocityYRaw),
-                    Fixed64.Zero,
-                    true,
-                    true);
+                bodies[i] = BattleSnapshotProtocolMapper.ReadPhysicsBody(player);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
                     selfLatestAcceptedInputFrame = player.LatestAcceptedInputFrame;
@@ -850,12 +852,17 @@ namespace GameLogic
             _staleAuthoritativePlayers.Clear();
             foreach (long playerId in _authoritativeAttributesByPlayerId.Keys)
             {
-                if (_authoritativePlayersInSnapshot.Contains(playerId))
-                {
-                    continue;
-                }
+                CollectStaleAuthoritativePlayer(playerId);
+            }
 
-                _staleAuthoritativePlayers.Add(playerId);
+            foreach (long playerId in _authoritativeBuffsByPlayerId.Keys)
+            {
+                CollectStaleAuthoritativePlayer(playerId);
+            }
+
+            foreach (long playerId in _playersAwaitingBuffFullSync)
+            {
+                CollectStaleAuthoritativePlayer(playerId);
             }
 
             for (int i = 0; i < _staleAuthoritativePlayers.Count; i++)
@@ -867,6 +874,17 @@ namespace GameLogic
             }
 
             _authoritativePlayersInSnapshot.Clear();
+        }
+
+        private void CollectStaleAuthoritativePlayer(long playerId)
+        {
+            if (_authoritativePlayersInSnapshot.Contains(playerId) ||
+                _staleAuthoritativePlayers.Contains(playerId))
+            {
+                return;
+            }
+
+            _staleAuthoritativePlayers.Add(playerId);
         }
 
         private static long NormalizeNextRuntimeBuffId(long nextRuntimeBuffId, long fallbackValue)
@@ -1107,6 +1125,18 @@ namespace GameLogic
             {
                 return x.BodyId.CompareTo(y.BodyId);
             }
+        }
+
+        private readonly struct AuthoritativeAttributeBaseline
+        {
+            public AuthoritativeAttributeBaseline(PlayerAttributeSnapshot attributes, uint frameIndex)
+            {
+                Attributes = attributes;
+                FrameIndex = frameIndex;
+            }
+
+            public PlayerAttributeSnapshot Attributes { get; }
+            public uint FrameIndex { get; }
         }
 
         private readonly struct AuthoritativeBuffBaseline

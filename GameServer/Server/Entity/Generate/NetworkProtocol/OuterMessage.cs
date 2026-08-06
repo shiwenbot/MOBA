@@ -599,9 +599,9 @@ namespace Fantasy
             ReservedField5 = default;
             LinearVelocityXRaw = default;
             LinearVelocityYRaw = default;
-            ReservedField8 = default;
-            ReservedField9 = default;
-            ReservedField10 = default;
+            AngularVelocityRaw = default;
+            IsAsleep = default;
+            IsDisabled = default;
             AttributeDirtyMask = default;
             Health = default;
             MaxHealth = default;
@@ -618,6 +618,8 @@ namespace Fantasy
             BuffDirtyMask = default;
             BuffSnapshotFrameIndex = default;
             IsBuffFullSync = default;
+            RotationRadiansRaw = default;
+            AttributeBaselineFrameIndex = default;
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -635,11 +637,11 @@ namespace Fantasy
         [ProtoMember(7)]
         public long LinearVelocityYRaw { get; set; }
         [ProtoMember(8)]
-        public uint ReservedField8 { get; set; }
+        public long AngularVelocityRaw { get; set; }
         [ProtoMember(9)]
-        public uint ReservedField9 { get; set; }
+        public bool IsAsleep { get; set; }
         [ProtoMember(10)]
-        public uint ReservedField10 { get; set; }
+        public bool IsDisabled { get; set; }
         [ProtoMember(11)]
         public uint AttributeDirtyMask { get; set; }
         [ProtoMember(12)]
@@ -664,6 +666,10 @@ namespace Fantasy
         public uint BuffSnapshotFrameIndex { get; set; }
         [ProtoMember(22)]
         public bool IsBuffFullSync { get; set; }
+        [ProtoMember(23)]
+        public long RotationRadiansRaw { get; set; }
+        [ProtoMember(24)]
+        public uint AttributeBaselineFrameIndex { get; set; }
     }
     [Serializable]
     [ProtoContract]

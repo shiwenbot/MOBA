@@ -22,6 +22,7 @@
   <!-- 双端共享代码：通过链接引用 Unity 项目中的 GameShared 源码 -->
   <ItemGroup>
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameShared\**\*.cs" Exclude="**\*.asmdef;**\*.meta;**\Tests\**\*.cs" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattleSnapshotProtocolMapper.cs" Link="GameLogic\BattleSnapshotProtocolMapper.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattleSimulation.cs" Link="GameLogic\BattleSimulation.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\PredictionErrorSmoother.cs" Link="GameLogic\PredictionErrorSmoother.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattlePredictionSelfTestSuite.cs" Link="GameLogic\BattlePredictionSelfTestSuite.cs" />

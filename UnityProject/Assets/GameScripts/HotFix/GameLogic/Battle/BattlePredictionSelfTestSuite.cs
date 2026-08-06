@@ -53,7 +53,13 @@ namespace GameLogic
             "netsim-uplink-pump-after-tick-has-no-extra-frame",
             "netsim-uplink-loss-causes-server-reuse-input",
             "netsim-downlink-delay-raises-lead-frames",
-            "netsim-downlink-loss-corrupts-attribute-baseline"
+            "netsim-downlink-loss-corrupts-attribute-baseline",
+            "attribute-delta-recovers-after-periodic-full",
+            "buff-delta-recovers-after-periodic-full",
+            "buff-delta-after-full-sync-is-accepted",
+            "attribute-no-change-packet-does-not-diverge",
+            "periodic-full-sync-is-staggered",
+            "physics-protocol-roundtrip-preserves-nondefault-fields"
         };
 
         public static bool Run(out string failedCase)
@@ -114,6 +120,12 @@ namespace GameLogic
                     "netsim-uplink-loss-causes-server-reuse-input" => NetworkSimulationUplinkLossCausesServerReuseInput(),
                     "netsim-downlink-delay-raises-lead-frames" => NetworkSimulationDownlinkDelayRaisesLeadFrames(),
                     "netsim-downlink-loss-corrupts-attribute-baseline" => NetworkSimulationDownlinkLossCorruptsAttributeBaseline(),
+                    "attribute-delta-recovers-after-periodic-full" => AttributeDeltaRecoversAfterPeriodicFull(),
+                    "buff-delta-recovers-after-periodic-full" => BuffDeltaRecoversAfterPeriodicFull(),
+                    "buff-delta-after-full-sync-is-accepted" => BuffDeltaAfterFullSyncIsAccepted(),
+                    "attribute-no-change-packet-does-not-diverge" => AttributeNoChangePacketDoesNotDiverge(),
+                    "periodic-full-sync-is-staggered" => PeriodicFullSyncIsStaggered(),
+                    "physics-protocol-roundtrip-preserves-nondefault-fields" => PhysicsProtocolRoundTripPreservesNondefaultFields(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -1461,6 +1473,325 @@ namespace GameLogic
 #endif
         }
 
+        private static bool AttributeDeltaRecoversAfterPeriodicFull()
+        {
+            const long playerId = 1L;
+            PlayerAttributeSnapshot frame1Attributes = new PlayerAttributeSnapshot(100, 100, 80, 100, 10);
+            PlayerAttributeSnapshot frame2Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 10);
+            PlayerAttributeSnapshot frame3Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 17);
+
+            AttributeMergeResult initial = BattleSnapshotProtocolMapper.MergeAttributes(
+                1u,
+                CreateAttributePacket(1u, playerId, PlayerAttributeDirtyFlags.All, 1u, frame1Attributes),
+                false,
+                PlayerAttributeSnapshot.Default,
+                0u);
+            if (!initial.Applied || initial.Diverged || !AttributesEqual(initial.Attributes, frame1Attributes))
+            {
+                throw new InvalidOperationException("attribute recovery initial full sync failed");
+            }
+
+            Fantasy.PlayerSnapshot droppedFrame2 = CreateAttributePacket(
+                2u,
+                playerId,
+                PlayerAttributeDirtyFlags.Health,
+                1u,
+                frame2Attributes);
+            if (droppedFrame2.AttributeBaselineFrameIndex != initial.FrameIndex)
+            {
+                throw new InvalidOperationException(
+                    $"attribute recovery dropped delta base mismatch expected={initial.FrameIndex} actual={droppedFrame2.AttributeBaselineFrameIndex}");
+            }
+
+            AttributeMergeResult divergent = BattleSnapshotProtocolMapper.MergeAttributes(
+                3u,
+                CreateAttributePacket(3u, playerId, PlayerAttributeDirtyFlags.Attack, 2u, frame3Attributes),
+                true,
+                initial.Attributes,
+                initial.FrameIndex);
+            if (!divergent.Diverged || divergent.Applied || !AttributesEqual(divergent.Attributes, frame1Attributes))
+            {
+                throw new InvalidOperationException(
+                    $"attribute recovery divergence was not rejected localBase={initial.FrameIndex} packetBase=2");
+            }
+
+            uint recoveryFrame = FindNextPeriodicFullSyncFrame(3u, playerId);
+            AttributeMergeResult recovered = BattleSnapshotProtocolMapper.MergeAttributes(
+                recoveryFrame,
+                CreateAttributePacket(
+                    recoveryFrame,
+                    playerId,
+                    PlayerAttributeDirtyFlags.All,
+                    recoveryFrame,
+                    frame3Attributes),
+                true,
+                divergent.Attributes,
+                divergent.FrameIndex);
+            if (!recovered.Applied || recovered.Diverged || recovered.FrameIndex != recoveryFrame ||
+                !AttributesEqual(recovered.Attributes, frame3Attributes))
+            {
+                throw new InvalidOperationException(
+                    $"attribute recovery full sync failed frame={recoveryFrame} localBase={recovered.FrameIndex}");
+            }
+
+            PlayerAttributeSnapshot frameAfterRecovery = new PlayerAttributeSnapshot(50, 100, 80, 100, 17);
+            AttributeMergeResult postRecoveryDelta = BattleSnapshotProtocolMapper.MergeAttributes(
+                recoveryFrame + 1u,
+                CreateAttributePacket(
+                    recoveryFrame + 1u,
+                    playerId,
+                    PlayerAttributeDirtyFlags.Health,
+                    recoveryFrame,
+                    frameAfterRecovery),
+                true,
+                recovered.Attributes,
+                recovered.FrameIndex);
+            if (!postRecoveryDelta.Applied || postRecoveryDelta.Diverged ||
+                !AttributesEqual(postRecoveryDelta.Attributes, frameAfterRecovery))
+            {
+                throw new InvalidOperationException("attribute recovery post-full delta was rejected");
+            }
+
+            return true;
+        }
+
+        private static bool BuffDeltaRecoversAfterPeriodicFull()
+        {
+#if FANTASY_UNITY
+            return true;
+#else
+            const long playerId = 1L;
+            BuffState frame1Buff = CreateTestBuff(1L, 1, 10, 1u);
+            BuffState frame2Buff = CreateTestBuff(1L, 1, 9, 1u);
+            BuffState frame3Buff = CreateTestBuff(1L, 2, 8, 1u);
+            PlayerStateSnapshot frame1Player = CreateBuffPlayer(playerId, frame1Buff);
+            Fantasy.BuffBroadcastBaseline serverBaseline = new Fantasy.BuffBroadcastBaseline(
+                frame1Player.ActiveBuffs,
+                frame1Player.NextRuntimeBuffId,
+                1u);
+
+            Fantasy.BuffSyncPayload initial = Fantasy.BuffBroadcastPayloadBuilder.CreateInitialFullSync(frame1Player);
+            if (!initial.IsFullSync)
+            {
+                throw new InvalidOperationException("buff recovery initial payload was not full sync");
+            }
+
+            Fantasy.BuffSyncPayload droppedFrame2 = Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame2Buff),
+                2u,
+                false);
+            Fantasy.BuffSyncPayload rejectedFrame3 = Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame3Buff),
+                3u,
+                false);
+            if (droppedFrame2.IsFullSync || droppedFrame2.BaselineFrameIndex != 1u ||
+                rejectedFrame3.IsFullSync || rejectedFrame3.BaselineFrameIndex != 2u)
+            {
+                throw new InvalidOperationException(
+                    $"buff recovery delta bases unexpected frame2={droppedFrame2.BaselineFrameIndex} frame3={rejectedFrame3.BaselineFrameIndex}");
+            }
+
+            uint recoveryFrame = FindNextPeriodicFullSyncFrame(3u, playerId);
+            Fantasy.BuffSyncPayload recovery = Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame3Buff),
+                recoveryFrame,
+                true);
+            BuffState[] recoveredBuffs = BuildBuffStatesFromWire(recovery.Buffs);
+            if (!recovery.IsFullSync || recovery.BaselineFrameIndex != recoveryFrame ||
+                !BuffListsEqual(recoveredBuffs, new[] { frame3Buff }))
+            {
+                throw new InvalidOperationException(
+                    $"buff recovery full sync failed frame={recoveryFrame} base={recovery.BaselineFrameIndex}");
+            }
+
+            return true;
+#endif
+        }
+
+        private static bool BuffDeltaAfterFullSyncIsAccepted()
+        {
+#if FANTASY_UNITY
+            return true;
+#else
+            const long playerId = 1L;
+            BuffState frame1Buff = CreateTestBuff(2L, 1, 10, 1u);
+            BuffState frame2Buff = CreateTestBuff(2L, 1, 9, 1u);
+            BuffState frame62Buff = CreateTestBuff(2L, 3, 7, 1u);
+            PlayerStateSnapshot frame1Player = CreateBuffPlayer(playerId, frame1Buff);
+            Fantasy.BuffBroadcastBaseline serverBaseline = new Fantasy.BuffBroadcastBaseline(
+                frame1Player.ActiveBuffs,
+                frame1Player.NextRuntimeBuffId,
+                1u);
+
+            Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame2Buff),
+                2u,
+                false);
+
+            uint fullSyncFrame = FindNextPeriodicFullSyncFrame(2u, playerId);
+            Fantasy.BuffSyncPayload fullSync = Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame2Buff),
+                fullSyncFrame,
+                true);
+            Fantasy.BuffSyncPayload nextDelta = Fantasy.BuffBroadcastPayloadBuilder.Build(
+                serverBaseline,
+                CreateBuffPlayer(playerId, frame62Buff),
+                fullSyncFrame + 1u,
+                false);
+
+            if (!fullSync.IsFullSync || nextDelta.IsFullSync ||
+                nextDelta.BaselineFrameIndex != fullSyncFrame)
+            {
+                throw new InvalidOperationException(
+                    $"buff post-full delta base mismatch full={fullSyncFrame} actual={nextDelta.BaselineFrameIndex}");
+            }
+
+            BuffState[] clientBaseline = BuildBuffStatesFromWire(fullSync.Buffs);
+            BuffState[] merged = BuffSync.Merge(clientBaseline, BuildBuffChangesFromWire(nextDelta.Buffs));
+            if (!BuffListsEqual(merged, new[] { frame62Buff }))
+            {
+                throw new InvalidOperationException("buff post-full delta did not merge to the server state");
+            }
+
+            return true;
+#endif
+        }
+
+        private static bool AttributeNoChangePacketDoesNotDiverge()
+        {
+            PlayerAttributeSnapshot baseline = new PlayerAttributeSnapshot(90, 100, 70, 100, 12);
+            Fantasy.PlayerSnapshot noChangePacket = CreateAttributePacket(
+                11u,
+                1L,
+                PlayerAttributeDirtyFlags.None,
+                999u,
+                baseline);
+            AttributeMergeResult result = BattleSnapshotProtocolMapper.MergeAttributes(
+                11u,
+                noChangePacket,
+                true,
+                baseline,
+                10u);
+
+            if (result.Diverged || result.Applied || result.FrameIndex != 10u ||
+                !AttributesEqual(result.Attributes, baseline))
+            {
+                throw new InvalidOperationException(
+                    $"attribute no-change packet altered baseline diverged={result.Diverged} applied={result.Applied} frame={result.FrameIndex}");
+            }
+
+            return true;
+        }
+
+        private static bool PeriodicFullSyncIsStaggered()
+        {
+            int[] fullSyncsPerFrame = new int[SnapshotSyncRecoveryPolicy.FullSyncIntervalFrames];
+            for (long playerId = 1L; playerId <= 120L; playerId++)
+            {
+                int playerFullSyncCount = 0;
+                for (uint frameIndex = 1u; frameIndex <= SnapshotSyncRecoveryPolicy.FullSyncIntervalFrames; frameIndex++)
+                {
+                    if (!SnapshotSyncRecoveryPolicy.IsPeriodicFullSyncFrame(frameIndex, playerId))
+                    {
+                        continue;
+                    }
+
+                    playerFullSyncCount++;
+                    fullSyncsPerFrame[frameIndex - 1u]++;
+                }
+
+                if (playerFullSyncCount != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"periodic full sync count mismatch player={playerId} count={playerFullSyncCount}");
+                }
+            }
+
+            for (int i = 0; i < fullSyncsPerFrame.Length; i++)
+            {
+                if (fullSyncsPerFrame[i] != 2)
+                {
+                    throw new InvalidOperationException(
+                        $"periodic full sync was not staggered frame={i + 1} count={fullSyncsPerFrame[i]}");
+                }
+            }
+
+            return true;
+        }
+
+        private static bool PhysicsProtocolRoundTripPreservesNondefaultFields()
+        {
+            const long playerId = 17L;
+            Fixed64 positionX = Fixed64.FromRaw(1_234_567_890L);
+            Fixed64 positionY = Fixed64.FromRaw(-2_345_678_901L);
+            PhysicsBodySnapshot sourceBody = new PhysicsBodySnapshot(
+                checked((int)playerId),
+                positionX,
+                positionY,
+                Fixed64.FromRaw(345_678_901L),
+                Fixed64.FromRaw(-456_789_012L),
+                Fixed64.FromRaw(567_890_123L),
+                Fixed64.FromRaw(-678_901_234L),
+                false,
+                false);
+            Fantasy.PlayerSnapshot wirePlayer = new Fantasy.PlayerSnapshot
+            {
+                PlayerId = playerId,
+                XRaw = positionX.m_rawValue,
+                YRaw = positionY.m_rawValue,
+                AttributeDirtyMask = (uint)PlayerAttributeDirtyFlags.All,
+                Health = PlayerAttributeSnapshot.Default.Health,
+                MaxHealth = PlayerAttributeSnapshot.Default.MaxHealth,
+                Mana = PlayerAttributeSnapshot.Default.Mana,
+                MaxMana = PlayerAttributeSnapshot.Default.MaxMana,
+                Attack = PlayerAttributeSnapshot.Default.Attack
+            };
+            BattleSnapshotProtocolMapper.WritePhysicsBody(wirePlayer, true, sourceBody);
+            Fantasy.S2C_FrameSnapshot wireSnapshot = new Fantasy.S2C_FrameSnapshot { FrameIndex = 77u };
+            wireSnapshot.Players.Add(wirePlayer);
+
+            EnsureProtoSerializer();
+            byte[] payload = SerializerManager.ProtoBufHelper.Serialize(typeof(Fantasy.S2C_FrameSnapshot), wireSnapshot);
+            Fantasy.S2C_FrameSnapshot decodedSnapshot =
+                (Fantasy.S2C_FrameSnapshot)SerializerManager.ProtoBufHelper.Deserialize(
+                    typeof(Fantasy.S2C_FrameSnapshot),
+                    payload);
+            Fantasy.PlayerSnapshot decodedPlayer = decodedSnapshot.Players[0];
+            PhysicsBodySnapshot decodedBody = BattleSnapshotProtocolMapper.ReadPhysicsBody(decodedPlayer);
+
+            if (!PhysicsBodiesEqual(sourceBody, decodedBody) || !decodedPlayer.IsAsleep || !decodedPlayer.IsDisabled)
+            {
+                throw new InvalidOperationException(
+                    $"physics protocol roundtrip mismatch rotation={sourceBody.RotationRadians.m_rawValue}/{decodedBody.RotationRadians.m_rawValue} " +
+                    $"angular={sourceBody.AngularVelocity.m_rawValue}/{decodedBody.AngularVelocity.m_rawValue} " +
+                    $"awake={sourceBody.IsAwake}/{decodedBody.IsAwake} enabled={sourceBody.IsEnabled}/{decodedBody.IsEnabled}");
+            }
+
+            PlayerStateSnapshot playerState = new PlayerStateSnapshot(playerId, positionX, positionY);
+            BattleWorldSnapshot sourceWorld = new BattleWorldSnapshot(
+                77u,
+                new[] { playerState },
+                new PhysicsWorldSnapshot(new[] { sourceBody }, Array.Empty<PhysicsContactSnapshot>()));
+            BattleWorldSnapshot decodedWorld = new BattleWorldSnapshot(
+                77u,
+                new[] { playerState },
+                new PhysicsWorldSnapshot(new[] { decodedBody }, Array.Empty<PhysicsContactSnapshot>()));
+            ulong sourceHash = StateHasher.Hash(sourceWorld);
+            ulong decodedHash = StateHasher.Hash(decodedWorld);
+            if (sourceHash != decodedHash)
+            {
+                throw new InvalidOperationException(
+                    $"physics protocol hash mismatch source=0x{sourceHash:X16} decoded=0x{decodedHash:X16}");
+            }
+
+            return true;
+        }
+
         private static NetworkConditionConfig CreateNetworkConfig(
             bool isEnabled = true,
             int uplinkDelayMs = 0,
@@ -1493,6 +1824,140 @@ namespace GameLogic
             }
 
             return sequence;
+        }
+
+        private static Fantasy.PlayerSnapshot CreateAttributePacket(
+            uint frameIndex,
+            long playerId,
+            PlayerAttributeDirtyFlags dirtyMask,
+            uint baselineFrameIndex,
+            PlayerAttributeSnapshot attributes)
+        {
+            return new Fantasy.PlayerSnapshot
+            {
+                PlayerId = playerId,
+                AttributeDirtyMask = (uint)dirtyMask,
+                AttributeBaselineFrameIndex = BattleSnapshotProtocolMapper.IsFullAttributeSnapshot(dirtyMask)
+                    ? frameIndex
+                    : baselineFrameIndex,
+                Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, attributes.Health),
+                MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, attributes.MaxHealth),
+                Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, attributes.Mana),
+                MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, attributes.MaxMana),
+                Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, attributes.Attack)
+            };
+        }
+
+        private static uint FindNextPeriodicFullSyncFrame(uint afterFrame, long playerId)
+        {
+            uint candidate = afterFrame + 1u;
+            while (!SnapshotSyncRecoveryPolicy.IsPeriodicFullSyncFrame(candidate, playerId))
+            {
+                candidate++;
+            }
+
+            return candidate;
+        }
+
+        private static bool AttributesEqual(PlayerAttributeSnapshot left, PlayerAttributeSnapshot right)
+        {
+            return left.Health == right.Health &&
+                   left.MaxHealth == right.MaxHealth &&
+                   left.Mana == right.Mana &&
+                   left.MaxMana == right.MaxMana &&
+                   left.Attack == right.Attack;
+        }
+
+        private static BuffState CreateTestBuff(long runtimeBuffId, int stackCount, int remainingFrames, uint appliedFrame)
+        {
+            return new BuffState(
+                runtimeBuffId,
+                9001,
+                1L,
+                1L,
+                stackCount,
+                remainingFrames,
+                appliedFrame,
+                BuffFlags.Duration | BuffFlags.Dispellable);
+        }
+
+        private static PlayerStateSnapshot CreateBuffPlayer(long playerId, params BuffState[] buffs)
+        {
+            PlayerAttributeSnapshot attributes = PlayerAttributeSnapshot.Default;
+            return new PlayerStateSnapshot(
+                playerId,
+                Fixed64.Zero,
+                Fixed64.Zero,
+                attributes,
+                buffs,
+                100L,
+                NumericModifierSnapshot.FromAttributes(attributes));
+        }
+
+        private static BuffState[] BuildBuffStatesFromWire(IReadOnlyList<Fantasy.BuffSnapshot> buffs)
+        {
+            BuffState[] states = new BuffState[buffs.Count];
+            for (int i = 0; i < buffs.Count; i++)
+            {
+                Fantasy.BuffSnapshot buff = buffs[i];
+                states[i] = new BuffState(
+                    buff.RuntimeBuffId,
+                    buff.BuffId,
+                    buff.CasterId,
+                    buff.TargetId,
+                    buff.StackCount,
+                    buff.RemainingFrames,
+                    buff.AppliedFrame,
+                    (BuffFlags)buff.Flags);
+            }
+
+            return states;
+        }
+
+        private static BuffSync.BuffChange[] BuildBuffChangesFromWire(IReadOnlyList<Fantasy.BuffSnapshot> buffs)
+        {
+            BuffSync.BuffChange[] changes = new BuffSync.BuffChange[buffs.Count];
+            for (int i = 0; i < buffs.Count; i++)
+            {
+                Fantasy.BuffSnapshot buff = buffs[i];
+                BuffDirtyFlags dirtyFlags = (BuffDirtyFlags)buff.DirtyFlags;
+                if (dirtyFlags == BuffDirtyFlags.None)
+                {
+                    dirtyFlags = BuffDirtyFlags.Updated;
+                }
+
+                changes[i] = new BuffSync.BuffChange(
+                    new BuffState(
+                        buff.RuntimeBuffId,
+                        buff.BuffId,
+                        buff.CasterId,
+                        buff.TargetId,
+                        buff.StackCount,
+                        buff.RemainingFrames,
+                        buff.AppliedFrame,
+                        (BuffFlags)buff.Flags),
+                    dirtyFlags);
+            }
+
+            return changes;
+        }
+
+        private static bool BuffListsEqual(IReadOnlyList<BuffState> left, IReadOnlyList<BuffState> right)
+        {
+            return left.Count == right.Count && BuffSync.ComputeChanges(left, right).Length == 0;
+        }
+
+        private static bool PhysicsBodiesEqual(PhysicsBodySnapshot left, PhysicsBodySnapshot right)
+        {
+            return left.BodyId == right.BodyId &&
+                   left.PositionX.m_rawValue == right.PositionX.m_rawValue &&
+                   left.PositionY.m_rawValue == right.PositionY.m_rawValue &&
+                   left.RotationRadians.m_rawValue == right.RotationRadians.m_rawValue &&
+                   left.LinearVelocityX.m_rawValue == right.LinearVelocityX.m_rawValue &&
+                   left.LinearVelocityY.m_rawValue == right.LinearVelocityY.m_rawValue &&
+                   left.AngularVelocity.m_rawValue == right.AngularVelocity.m_rawValue &&
+                   left.IsAwake == right.IsAwake &&
+                   left.IsEnabled == right.IsEnabled;
         }
 
         private static void GetNetworkTestInput(uint frame, out Fixed64 dx, out Fixed64 dy)
