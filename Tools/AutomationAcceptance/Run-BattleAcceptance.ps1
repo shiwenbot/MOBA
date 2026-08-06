@@ -218,6 +218,13 @@ function Get-ScenarioCustomArgs {
             $netsimEnabled = $true
             $downlinkLossPercent = 20
         }
+        'two-client-rtt-probe' {
+            # Server-authoritative RTT measurement under mild bidirectional delay.
+            $netsimEnabled = $true
+            $uplinkDelayMs = 100
+            $downlinkDelayMs = 100
+        }
+
     }
 
     $overrides = @(
@@ -366,12 +373,14 @@ function Start-ServerProcess {
     }
 
     $escapedDotnetExe = $script:dotnetExe.Replace("'", "''")
+    $rttProbeEnv = if ($ScenarioName -eq 'two-client-rtt-probe') { '1' } else { '' }
     $serverCommand = @(
         '$env:BATTLE_AUTOMATION_SCENARIO = ''' + $serverScenarioName + ''';',
         '$env:BATTLE_AUTOMATION_MINIMUM_PLAYER_COUNT = ''' + $scenarioArgs.minimumPlayerCount + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_ID = ''' + $scenarioArgs.expectedBuffId + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_APPLY_DELAY_FRAMES = ''' + $scenarioArgs.buffApplyDelayFrames + ''';',
         '$env:BATTLE_AUTOMATION_BUFF_DURATION_FRAMES = ''' + $scenarioArgs.buffDurationFrames + ''';',
+        $(if ($rttProbeEnv -ne '') { '$env:BATTLE_RTT_PROBE = ''1''; $env:BATTLE_RTT_AUTHORITATIVE_LEAD = ''1'';' } else { '' }),
         '& ''' + $escapedDotnetExe + ''' run',
         '--project "' + $serverProjectPath + '"',
         $(if ($NoBuild) { '--no-build' } else { '' }),
@@ -379,6 +388,7 @@ function Start-ServerProcess {
         '1>> "' + $serverLogPath + '"',
         '2>> "' + $serverErrPath + '"'
     ) -join ' '
+
 
     $process = Start-Process `
         -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `

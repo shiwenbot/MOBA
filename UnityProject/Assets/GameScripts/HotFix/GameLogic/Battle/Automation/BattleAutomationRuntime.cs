@@ -767,6 +767,8 @@ namespace GameLogic
                 "two-client-weaknet-delay" => snapshot.leadFrames > 3 && snapshot.networkMaxQueueDepth > 0,
                 "two-client-weaknet-uplink-loss" => snapshot.networkUplinkDropped > 0,
                 "two-client-weaknet-downlink-loss" => snapshot.networkDownlinkDropped > 0,
+                "two-client-rtt-probe" => snapshot.rttProbeAcksSent > 0 &&
+                                         (snapshot.serverControlRttMs > 0f || snapshot.appliedTargetLeadFrames > 0),
                 _ => snapshot.networkUplinkDropped + snapshot.networkDownlinkDropped > 0 ||
                      snapshot.networkMaxQueueDepth > 0
             };
@@ -1300,7 +1302,8 @@ namespace GameLogic
                 return scenarioScriptPath;
             }
 
-            if (config.Scenario.StartsWith("two-client-weaknet-", StringComparison.OrdinalIgnoreCase))
+            if (config.Scenario.StartsWith("two-client-weaknet-", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(config.Scenario, "two-client-rtt-probe", StringComparison.OrdinalIgnoreCase))
             {
                 string weakNetworkScriptPath = Path.Combine(
                     Application.streamingAssetsPath,
@@ -1312,6 +1315,7 @@ namespace GameLogic
                     return weakNetworkScriptPath;
                 }
             }
+
 
             return Path.Combine(Application.streamingAssetsPath, "BattleAutomation", "Puerts", "sample-controller.js.txt");
         }
@@ -1452,6 +1456,8 @@ namespace GameLogic
                 case "two-client-weaknet-delay":
                 case "two-client-weaknet-uplink-loss":
                 case "two-client-weaknet-downlink-loss":
+                case "two-client-rtt-probe":
+
                     return new BattleAutomationScenarioPlan
                     {
                         name = scenario,
@@ -1755,6 +1761,10 @@ namespace GameLogic
         public long networkDownlinkDropped;
         public int networkMaxQueueDepth;
         public long networkOverflowDropped;
+        public int rttProbeAcksSent;
+        public float serverControlRttMs;
+        public int appliedTargetLeadFrames;
+
         public int totalActiveBuffCount;
         public BattleAutomationPlayerSnapshot[] players;
 
