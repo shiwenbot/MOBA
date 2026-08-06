@@ -204,29 +204,20 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                     }
                 }
 
-                PlayerSnapshot wirePlayer = new PlayerSnapshot
-                {
-                    PlayerId = player.PlayerId,
-                    XRaw = player.X.m_rawValue,
-                    YRaw = player.Y.m_rawValue,
-                    LatestAcceptedInputFrame = _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
-                    AttributeDirtyMask = (uint)dirtyMask,
-                    AttributeBaselineFrameIndex = attributePlan.IsFullSync
+                PlayerSnapshot wirePlayer = BattleSnapshotProtocolMapper.WritePlayer(
+                    player,
+                    hasPhysics,
+                    bodySnapshot,
+                    _battleLogic.GetLatestAcceptedInputFrame(player.PlayerId),
+                    dirtyMask,
+                    attributePlan.IsFullSync
                         ? snapshot.FrameIndex
                         : attributePlan.BaselineFrameIndex,
-                    Health = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Health, currentAttributes.Health),
-                    MaxHealth = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth, currentAttributes.MaxHealth),
-                    Mana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Mana, currentAttributes.Mana),
-                    MaxMana = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.MaxMana, currentAttributes.MaxMana),
-                    Attack = PlayerAttributeSync.SelectSerializedValue(dirtyMask, PlayerAttributeDirtyFlags.Attack, currentAttributes.Attack),
-                    ActiveBuffs = buffPayload.Buffs,
-                    NextRuntimeBuffId = buffPayload.NextRuntimeBuffId,
-                    Numeric = BuildNumericSnapshot(player.Numeric),
-                    BuffDirtyMask = buffPayload.DirtyMask,
-                    BuffSnapshotFrameIndex = buffPayload.BaselineFrameIndex,
-                    IsBuffFullSync = buffPayload.IsFullSync
-                };
-                BattleSnapshotProtocolMapper.WritePhysicsBody(wirePlayer, hasPhysics, bodySnapshot);
+                    buffPayload.Buffs,
+                    buffPayload.NextRuntimeBuffId,
+                    buffPayload.DirtyMask,
+                    buffPayload.BaselineFrameIndex,
+                    buffPayload.IsFullSync);
                 frameSnapshot.Players.Add(wirePlayer);
             }
 
@@ -411,19 +402,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private static Dictionary<int, PhysicsBodySnapshot> BuildPhysicsBodyLookup(PhysicsWorldSnapshot physicsSnapshot)
     {
-        Dictionary<int, PhysicsBodySnapshot> lookup = new Dictionary<int, PhysicsBodySnapshot>();
-        if (physicsSnapshot == null)
-        {
-            return lookup;
-        }
-
-        for (int i = 0; i < physicsSnapshot.Bodies.Count; i++)
-        {
-            PhysicsBodySnapshot body = physicsSnapshot.Bodies[i];
-            lookup[body.BodyId] = body;
-        }
-
-        return lookup;
+        return BattleSnapshotProtocolMapper.BuildPhysicsBodyLookup(physicsSnapshot);
     }
 
     private AttributeSyncPlan[] BuildAttributeSyncPlans(TestSnapshot snapshot)
@@ -471,28 +450,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private static NumericSnapshot BuildNumericSnapshot(GameShared.FrameSync.Battle.NumericModifierSnapshot numericState)
     {
-        NumericSnapshot snapshot = new NumericSnapshot
-        {
-            BaseHealth = numericState.BaseAttributes.Health,
-            BaseMaxHealth = numericState.BaseAttributes.MaxHealth,
-            BaseMana = numericState.BaseAttributes.Mana,
-            BaseMaxMana = numericState.BaseAttributes.MaxMana,
-            BaseAttack = numericState.BaseAttributes.Attack
-        };
-
-        for (int i = 0; i < numericState.Modifiers.Count; i++)
-        {
-            NumericModifier modifier = numericState.Modifiers[i];
-            snapshot.Modifiers.Add(new NumericModifierSnapshot
-            {
-                SourceBuffId = modifier.SourceBuffId,
-                ValueType = (uint)modifier.ValueType,
-                AttributeKind = (uint)modifier.AttributeKind,
-                Value = modifier.Value
-            });
-        }
-
-        return snapshot;
+        return BattleSnapshotProtocolMapper.WriteNumericSnapshot(numericState);
     }
 
     private BuffSyncPayload BuildBuffSyncPayload(long observerSessionId, PlayerStateSnapshot player, uint frameIndex)
