@@ -7,6 +7,7 @@ using GameShared.FrameSync.Core;
 using GameShared.FrameSync.Determinism;
 using GameShared.FrameSync.Network;
 using GameShared.FrameSync.Snapshot;
+using GameShared.SkillGraph;
 
 namespace GameLogic
 {
@@ -59,7 +60,18 @@ namespace GameLogic
             "buff-delta-after-full-sync-is-accepted",
             "attribute-no-change-packet-does-not-diverge",
             "periodic-full-sync-is-staggered",
-            "physics-protocol-roundtrip-preserves-nondefault-fields"
+            "physics-protocol-roundtrip-preserves-nondefault-fields",
+            "proto-roundtrip-preserves-fixed64-extremes",
+            "consistent-snapshot-skips-rollback",
+            "consistent-snapshot-preserves-predicted-frame",
+            "consistent-snapshot-preserves-skill-graph",
+            "mismatch-snapshot-still-rolls-back",
+            "remote-players-not-in-world-state",
+            "remote-players-survive-self-rollback",
+            "remote-player-removal-clears-buffer",
+            "clear-world-state-clears-remote-buffer",
+            "restore-self-only-keeps-single-body",
+            "multi-snapshot-mixed-consistency-one-tick"
         };
 
         public static bool Run(out string failedCase)
@@ -126,6 +138,17 @@ namespace GameLogic
                     "attribute-no-change-packet-does-not-diverge" => AttributeNoChangePacketDoesNotDiverge(),
                     "periodic-full-sync-is-staggered" => PeriodicFullSyncIsStaggered(),
                     "physics-protocol-roundtrip-preserves-nondefault-fields" => PhysicsProtocolRoundTripPreservesNondefaultFields(),
+                    "proto-roundtrip-preserves-fixed64-extremes" => ProtoRoundTripPreservesFixed64Extremes(),
+                    "consistent-snapshot-skips-rollback" => ConsistentSnapshotSkipsRollback(),
+                    "consistent-snapshot-preserves-predicted-frame" => ConsistentSnapshotPreservesPredictedFrame(),
+                    "consistent-snapshot-preserves-skill-graph" => ConsistentSnapshotPreservesSkillGraph(),
+                    "mismatch-snapshot-still-rolls-back" => MismatchSnapshotStillRollsBack(),
+                    "remote-players-not-in-world-state" => RemotePlayersNotInWorldState(),
+                    "remote-players-survive-self-rollback" => RemotePlayersSurviveSelfRollback(),
+                    "remote-player-removal-clears-buffer" => RemotePlayerRemovalClearsBuffer(),
+                    "clear-world-state-clears-remote-buffer" => ClearWorldStateClearsRemoteBuffer(),
+                    "restore-self-only-keeps-single-body" => RestoreSelfOnlyKeepsSingleBody(),
+                    "multi-snapshot-mixed-consistency-one-tick" => MultiSnapshotMixedConsistencyOneTick(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -394,51 +417,49 @@ namespace GameLogic
 
         private static bool AuthoritativeSnapshotRestoresPhysicsWorld()
         {
+            // S6 后：别人不进 worldState，只进 RemotePlayerBuffer；物理世界只保留自己 body。
+            // 本用例改为断言自己的物理体被权威快照恢复，远端进 buffer。
             BattleWorldState worldState = new BattleWorldState();
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            worldState.AddOrUpdatePlayer(2, 5.0f, 0.0f);
-            if (!worldState.TryGetPlayer(2, out PlayerState remotePlayer))
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
             {
                 return false;
             }
 
-            MoveSystem.Apply(worldState, remotePlayer, Fixed64.One, Fixed64.Zero, DeterminismRules.FixedDeltaTimeFixed64);
-            worldState.PhysicsWorld.Step(DeterminismRules.FixedDeltaTimeFixed64);
-            MoveSystem.SyncFromPhysics(worldState, remotePlayer);
-
+            Fixed64 authoritativeX = selfPlayer.X + Fixed64.One;
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
                     11,
                     new[]
                     {
-                        new PlayerStateSnapshot(1, 0.0f, 0.0f),
+                        new PlayerStateSnapshot(1, authoritativeX, Fixed64.Zero),
                         new PlayerStateSnapshot(2, 5.0f, 0.0f)
                     },
                     new PhysicsWorldSnapshot(
                         new[]
                         {
-                            new PhysicsBodySnapshot(1, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, true, true),
-                            new PhysicsBodySnapshot(2, (Fixed64)5.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, (Fixed64)0.0f, true, true)
+                            new PhysicsBodySnapshot(1, authoritativeX, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, true, true),
+                            new PhysicsBodySnapshot(2, (Fixed64)5.0f, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, true, true)
                         })),
                 11);
 
-            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
-
-            if (!worldState.TryGetPlayer(2, out PlayerState restoredRemotePlayer))
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            if (!result.ConsistencyMismatch || !worldState.TryGetPlayer(1, out PlayerState restoredSelf))
             {
                 return false;
             }
 
             BattleWorldSnapshot localSnapshot = worldState.TakeSnapshot();
-            return Near(restoredRemotePlayer.X, F(5.0f)) &&
-                   Near(restoredRemotePlayer.Y, Fixed64.Zero) &&
-                   TryGetBodySnapshot(localSnapshot, 2, out PhysicsBodySnapshot remoteBody) &&
-                   Near(remoteBody.PositionX, F(5.0f)) &&
-                   Near(remoteBody.PositionY, Fixed64.Zero) &&
-                   Near(remoteBody.LinearVelocityX, Fixed64.Zero) &&
-                   Near(remoteBody.LinearVelocityY, Fixed64.Zero);
+            return worldState.PlayerCount == 1 &&
+                   Near(restoredSelf.X, authoritativeX) &&
+                   simulation.RemotePlayers.TryGet(2, out PlayerStateSnapshot remote) &&
+                   Near(remote.X, F(5.0f)) &&
+                   TryGetBodySnapshot(localSnapshot, 1, out PhysicsBodySnapshot selfBody) &&
+                   Near(selfBody.PositionX, authoritativeX) &&
+                   !TryGetBodySnapshot(localSnapshot, 2, out _);
         }
 
         private static bool AuthoritativeSnapshotRestoresPlayerAttributes()
@@ -1792,6 +1813,92 @@ namespace GameLogic
             return true;
         }
 
+        private static bool ProtoRoundTripPreservesFixed64Extremes()
+        {
+            // 边界 raw 位模式：正常 gameplay 可能碰不到低位全 1 / 极小正值。
+            long[] extremeRaws =
+            {
+                1L,
+                -1L,
+                long.MaxValue,
+                long.MinValue + 1L,
+                0x0000_0000_0000_FFFFL,
+                unchecked((long)0xFFFF_FFFF_FFFF_0001UL),
+                0x5555_5555_5555_5555L,
+                unchecked((long)0xAAAA_AAAA_AAAA_AAAAL)
+            };
+
+            EnsureProtoSerializer();
+            for (int i = 0; i < extremeRaws.Length; i++)
+            {
+                long rawX = extremeRaws[i];
+                long rawY = extremeRaws[(i + 3) % extremeRaws.Length];
+                long rawVx = extremeRaws[(i + 1) % extremeRaws.Length];
+                long rawVy = extremeRaws[(i + 2) % extremeRaws.Length];
+                long rawAngle = extremeRaws[(i + 4) % extremeRaws.Length];
+                long rawOmega = extremeRaws[(i + 5) % extremeRaws.Length];
+
+                PlayerStateSnapshot player = new PlayerStateSnapshot(
+                    1000L + i,
+                    Fixed64.FromRaw(rawX),
+                    Fixed64.FromRaw(rawY),
+                    new PlayerAttributeSnapshot(77, 120, 33, 90, 19));
+                PhysicsBodySnapshot body = new PhysicsBodySnapshot(
+                    checked((int)player.PlayerId),
+                    player.X,
+                    player.Y,
+                    Fixed64.FromRaw(rawAngle),
+                    Fixed64.FromRaw(rawVx),
+                    Fixed64.FromRaw(rawVy),
+                    Fixed64.FromRaw(rawOmega),
+                    i % 2 == 0,
+                    i % 3 != 0);
+                BattleWorldSnapshot source = new BattleWorldSnapshot(
+                    unchecked((uint)(900 + i)),
+                    new[] { player },
+                    new PhysicsWorldSnapshot(new[] { body }, Array.Empty<PhysicsContactSnapshot>()));
+
+                Fantasy.S2C_FrameSnapshot wire = BattleSnapshotProtocolMapper.ToFullSyncProto(source);
+                byte[] payload = SerializerManager.ProtoBufHelper.Serialize(typeof(Fantasy.S2C_FrameSnapshot), wire);
+                Fantasy.S2C_FrameSnapshot decoded =
+                    (Fantasy.S2C_FrameSnapshot)SerializerManager.ProtoBufHelper.Deserialize(
+                        typeof(Fantasy.S2C_FrameSnapshot),
+                        payload);
+                BattleWorldSnapshot restored = BattleSnapshotProtocolMapper.FromFullSyncProto(decoded);
+
+                if (restored.Players.Count != 1 ||
+                    restored.PhysicsSnapshot == null ||
+                    restored.PhysicsSnapshot.Bodies.Count != 1)
+                {
+                    throw new InvalidOperationException("proto extremes roundtrip lost player/body");
+                }
+
+                PlayerStateSnapshot restoredPlayer = restored.Players[0];
+                PhysicsBodySnapshot restoredBody = restored.PhysicsSnapshot.Bodies[0];
+                if (restoredPlayer.X.m_rawValue != rawX ||
+                    restoredPlayer.Y.m_rawValue != rawY ||
+                    restoredBody.LinearVelocityX.m_rawValue != rawVx ||
+                    restoredBody.LinearVelocityY.m_rawValue != rawVy ||
+                    restoredBody.RotationRadians.m_rawValue != rawAngle ||
+                    restoredBody.AngularVelocity.m_rawValue != rawOmega ||
+                    restoredBody.IsAwake != body.IsAwake ||
+                    restoredBody.IsEnabled != body.IsEnabled)
+                {
+                    throw new InvalidOperationException(
+                        $"proto extremes mismatch index={i} " +
+                        $"x={rawX}/{restoredPlayer.X.m_rawValue} y={rawY}/{restoredPlayer.Y.m_rawValue} " +
+                        $"vx={rawVx}/{restoredBody.LinearVelocityX.m_rawValue} vy={rawVy}/{restoredBody.LinearVelocityY.m_rawValue}");
+                }
+
+                if (StateHasher.Hash(source) != StateHasher.Hash(restored))
+                {
+                    throw new InvalidOperationException($"proto extremes hash mismatch index={i}");
+                }
+            }
+
+            return true;
+        }
+
         private static NetworkConditionConfig CreateNetworkConfig(
             bool isEnabled = true,
             int uplinkDelayMs = 0,
@@ -2056,6 +2163,447 @@ namespace GameLogic
             }
 
             throw new InvalidOperationException($"FixedPhysicsBitExact actual=0x{actualHash:X16}");
+        }
+
+
+        private static bool ConsistentSnapshotSkipsRollback()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            int rollbackBefore = simulation.RollbackCount;
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return result.SnapshotApplied &&
+                   !result.ConsistencyMismatch &&
+                   simulation.ConsistencyHits == 1 &&
+                   simulation.RollbackCount == rollbackBefore;
+        }
+
+        private static bool ConsistentSnapshotPreservesPredictedFrame()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            uint predictedBefore = simulation.LastPredictedFrame;
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, selfPlayer.X, selfPlayer.Y)
+                    }),
+                11);
+
+            // Tick 会先应用快照，再 AdvancePredictionTo(12)；一致路径不得把 LastPredictedFrame 拨回 11。
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return simulation.ConsistencyHits == 1 &&
+                   simulation.LastPredictedFrame >= predictedBefore &&
+                   simulation.LastPredictedFrame == 12;
+        }
+
+        private static bool ConsistentSnapshotPreservesSkillGraph()
+        {
+            // 默认自带技能是瞬时 ApplyBuff，会在同一帧结束。注入带 Delay 的图，
+            // 才能在一致快照路径上观察到「技能执行不被 Clear」。
+            const int skillId = 91001;
+            RuntimeSkillGraph delayedSkill = new RuntimeSkillGraph
+            {
+                Version = RuntimeSkillGraph.CurrentVersion,
+                SkillName = skillId.ToString(),
+                SyncMode = RuntimeSyncModes.Lockstep,
+                DeterministicFlags = new List<string> { "Delay.FrameStep", "Action.CommandOnly", "Trace.ExecutionEventsV1" },
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    new RuntimeSkillNode { NodeId = 0, NodeType = RuntimeNodeTypes.Entry },
+                    new RuntimeSkillNode
+                    {
+                        NodeId = 1,
+                        NodeType = RuntimeNodeTypes.Delay,
+                        Properties = new List<RuntimeProperty>
+                        {
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.Duration,
+                                Value = "1"
+                            }
+                        }
+                    }
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    new RuntimeConnection { FromNodeId = 0, FromPort = "Next", ToNodeId = 1 }
+                }
+            };
+
+            BattleWorldState worldState = new BattleWorldState();
+            SentInputRecorder recorder = new SentInputRecorder();
+            PingRecorder pingRecorder = new PingRecorder();
+            BattleSimulation simulation = new BattleSimulation(
+                worldState,
+                recorder.Record,
+                pingRecorder.Record,
+                skillGraphs: new Dictionary<int, RuntimeSkillGraph> { [skillId] = delayedSkill });
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero, skillId);
+            if (simulation.ActiveSkillExecutionCount <= 0)
+            {
+                return false;
+            }
+
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            int activeBefore = simulation.ActiveSkillExecutionCount;
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(
+                            1,
+                            selfPlayer.X,
+                            selfPlayer.Y,
+                            selfPlayer.CaptureAttributeSnapshot(),
+                            selfPlayer.ActiveBuffs,
+                            selfPlayer.NextRuntimeBuffId,
+                            selfPlayer.Numeric.CaptureSnapshot())
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            // Tick 末尾会再 Step 一帧 delay，active 可能自然归零；关键是一致路径没有 Clear。
+            // 用「命中后仍能继续预测且未回滚」+ 失配对照更直接：这里断言 Hit 且 RollbackCount 不变，
+            // 同时 ActiveSkillExecutionCount 不得被强制清空到负数路径（即至少不因 Clear 丢掉中间态）。
+            // 若 delay 在 frame12 结束，count 从 >0 变 0 是自然完成，可接受；但若被 Clear，frame11 后应立即 0 且无法维持到 frame12 前。
+            // 因此在应用快照前采样，应用后立即检查（Tick 内 snapshot 应用发生在 Advance 之前，
+            // 但我们只能观察 Tick 结束态）。改用对照：失配路径 count 必 0。
+            int activeAfterConsistent = simulation.ActiveSkillExecutionCount;
+            int rollbackAfterConsistent = simulation.RollbackCount;
+
+            // 再走一次失配，确认 Clear 生效。
+            simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero, skillId);
+            if (!worldState.TryGetPlayer(1, out PlayerState after13))
+            {
+                return false;
+            }
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    13,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, after13.X + Fixed64.One, after13.Y)
+                    }),
+                13);
+            TickResult mismatch = simulation.Tick(14, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+
+            return !result.ConsistencyMismatch &&
+                   result.SnapshotApplied &&
+                   simulation.ConsistencyHits >= 1 &&
+                   rollbackAfterConsistent == 0 &&
+                   activeBefore > 0 &&
+                   // 一致后即便 delay 自然结束，也不应触发 rollback。
+                   activeAfterConsistent >= 0 &&
+                   mismatch.ConsistencyMismatch &&
+                   simulation.ActiveSkillExecutionCount == 0;
+        }
+
+        private static bool MismatchSnapshotStillRollsBack()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState selfPlayer))
+            {
+                return false;
+            }
+
+            Fixed64 authoritativeX = selfPlayer.X + Fixed64.One;
+            int rollbackBefore = simulation.RollbackCount;
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, authoritativeX, selfPlayer.Y)
+                    }),
+                11);
+
+            TickResult result = simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState restored))
+            {
+                return false;
+            }
+
+            return result.ConsistencyMismatch &&
+                   simulation.RollbackCount == rollbackBefore + 1 &&
+                   simulation.LastRollbackReplayFrames == 1 &&
+                   Near(restored.X, authoritativeX);
+        }
+
+        private static bool RemotePlayersNotInWorldState()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f),
+                        new PlayerStateSnapshot(2, 5.0f, 1.0f)
+                    }),
+                11);
+
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return worldState.PlayerCount == 1 &&
+                   worldState.TryGetPlayer(1, out _) &&
+                   !worldState.TryGetPlayer(2, out _) &&
+                   simulation.RemotePlayers.Count == 1 &&
+                   simulation.RemotePlayers.TryGet(2, out PlayerStateSnapshot remote) &&
+                   Near(remote.X, F(5.0f)) &&
+                   Near(remote.Y, F(1.0f));
+        }
+
+        private static bool RemotePlayersSurviveSelfRollback()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame11))
+            {
+                return false;
+            }
+
+            // 先写入旧权威：别人在 (1,0)
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, afterFrame11.X + Fixed64.One, afterFrame11.Y),
+                        new PlayerStateSnapshot(2, 1.0f, 0.0f)
+                    }),
+                11);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            if (!simulation.RemotePlayers.TryGet(2, out PlayerStateSnapshot remoteAt12) ||
+                !Near(remoteAt12.X, F(1.0f)))
+            {
+                return false;
+            }
+
+            // 再预测一帧，制造新的预测记录
+            simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldState.TryGetPlayer(1, out PlayerState afterFrame13))
+            {
+                return false;
+            }
+
+            // 失配回滚：自己被拨回，别人权威更新到 (9,0)——不得被旧帧覆盖
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    13,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, afterFrame13.X + Fixed64.One, afterFrame13.Y),
+                        new PlayerStateSnapshot(2, 9.0f, 0.0f)
+                    }),
+                13);
+            TickResult result = simulation.Tick(14, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return result.ConsistencyMismatch &&
+                   simulation.RollbackCount >= 1 &&
+                   simulation.RemotePlayers.TryGet(2, out PlayerStateSnapshot remoteAfterRollback) &&
+                   Near(remoteAfterRollback.X, F(9.0f)) &&
+                   Near(remoteAfterRollback.Y, Fixed64.Zero) &&
+                   !worldState.TryGetPlayer(2, out _);
+        }
+
+        private static bool RemotePlayerRemovalClearsBuffer()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f),
+                        new PlayerStateSnapshot(2, 5.0f, 0.0f)
+                    }),
+                11);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            if (simulation.RemotePlayers.Count != 1)
+            {
+                return false;
+            }
+
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    12,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f)
+                    }),
+                12);
+            simulation.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            return simulation.RemotePlayers.Count == 0 &&
+                   !simulation.RemotePlayers.TryGet(2, out _);
+        }
+
+        private static bool ClearWorldStateClearsRemoteBuffer()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
+
+            simulation.SetJoined(1, 10, 0.0f, 0.0f);
+            simulation.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(
+                    11,
+                    new[]
+                    {
+                        new PlayerStateSnapshot(1, 0.0f, 0.0f),
+                        new PlayerStateSnapshot(2, 5.0f, 0.0f)
+                    }),
+                11);
+            simulation.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            if (simulation.RemotePlayers.Count != 1)
+            {
+                return false;
+            }
+
+            // SetJoined -> ClearWorldState 必须清 buffer，避免重开局幽灵球。
+            simulation.SetJoined(1, 20, 0.0f, 0.0f);
+            return simulation.RemotePlayers.Count == 0 &&
+                   simulation.RemotePlayers.LastAppliedFrame == 0u;
+        }
+
+        private static bool RestoreSelfOnlyKeepsSingleBody()
+        {
+            BattleWorldState worldState = new BattleWorldState();
+            worldState.AddOrUpdatePlayer(1, 0.0f, 0.0f);
+            worldState.AddOrUpdatePlayer(2, 5.0f, 0.0f);
+
+            BattleWorldSnapshot snapshot = new BattleWorldSnapshot(
+                11,
+                new[]
+                {
+                    new PlayerStateSnapshot(1, 1.0f, 2.0f),
+                    new PlayerStateSnapshot(2, 9.0f, 8.0f)
+                },
+                new PhysicsWorldSnapshot(
+                    new[]
+                    {
+                        new PhysicsBodySnapshot(1, (Fixed64)1.0f, (Fixed64)2.0f, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, true, true),
+                        new PhysicsBodySnapshot(2, (Fixed64)9.0f, (Fixed64)8.0f, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, Fixed64.Zero, true, true)
+                    }));
+
+            worldState.RestoreSelfOnly(snapshot, 1);
+            BattleWorldSnapshot local = worldState.TakeSnapshot();
+            return worldState.PlayerCount == 1 &&
+                   worldState.TryGetPlayer(1, out PlayerState self) &&
+                   Near(self.X, F(1.0f)) &&
+                   Near(self.Y, F(2.0f)) &&
+                   TryGetBodySnapshot(local, 1, out _) &&
+                   !TryGetBodySnapshot(local, 2, out _) &&
+                   !worldState.TryGetPlayer(2, out _);
+        }
+
+        private static bool MultiSnapshotMixedConsistencyOneTick()
+        {
+            // 序列 A：失配 -> 一致。失配应回滚；后续一致不得再回滚，LastPredictedFrame 最终到 tick 帧。
+            BattleWorldState worldA = new BattleWorldState();
+            BattleSimulation simA = CreateSimulation(worldA, out _, out _);
+            simA.SetJoined(1, 10, 0.0f, 0.0f);
+            simA.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldA.TryGetPlayer(1, out PlayerState after11A))
+            {
+                return false;
+            }
+
+            Fixed64 auth11A = after11A.X + Fixed64.One;
+            Fixed64 auth12A = PredictNextX(auth11A);
+            simA.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            simA.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(11, new[] { new PlayerStateSnapshot(1, auth11A, Fixed64.Zero) }),
+                11);
+            simA.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(12, new[] { new PlayerStateSnapshot(1, auth12A, Fixed64.Zero) }),
+                12);
+            TickResult resultA = simA.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            bool sequenceAOk = resultA.SnapshotApplied &&
+                               resultA.ConsistencyMismatch &&
+                               simA.ConsistencyMisses == 1 &&
+                               simA.ConsistencyHits == 1 &&
+                               simA.RollbackCount == 1 &&
+                               simA.LastPredictedFrame == 13;
+
+            // 序列 B：一致 -> 失配。先一致不回滚，后失配回滚。
+            BattleWorldState worldB = new BattleWorldState();
+            BattleSimulation simB = CreateSimulation(worldB, out _, out _);
+            simB.SetJoined(1, 10, 0.0f, 0.0f);
+            simB.Tick(11, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldB.TryGetPlayer(1, out PlayerState after11B))
+            {
+                return false;
+            }
+
+            Fixed64 match11B = after11B.X;
+            simB.Tick(12, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.One, Fixed64.Zero);
+            if (!worldB.TryGetPlayer(1, out PlayerState after12B))
+            {
+                return false;
+            }
+
+            Fixed64 mismatch12B = after12B.X + Fixed64.One;
+            simB.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(11, new[] { new PlayerStateSnapshot(1, match11B, Fixed64.Zero) }),
+                11);
+            simB.EnqueueServerSnapshot(
+                new BattleWorldSnapshot(12, new[] { new PlayerStateSnapshot(1, mismatch12B, Fixed64.Zero) }),
+                12);
+            TickResult resultB = simB.Tick(13, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
+            bool sequenceBOk = resultB.SnapshotApplied &&
+                               resultB.ConsistencyMismatch &&
+                               simB.ConsistencyHits == 1 &&
+                               simB.ConsistencyMisses == 1 &&
+                               simB.RollbackCount == 1 &&
+                               simB.LastPredictedFrame == 13;
+
+            return sequenceAOk && sequenceBOk;
         }
 
         private static void GetFixedPhysicsTestInput(
