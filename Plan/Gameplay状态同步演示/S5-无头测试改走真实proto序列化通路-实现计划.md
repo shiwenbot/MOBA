@@ -1,7 +1,8 @@
 # S5：无头测试改走真实 proto 序列化通路
 
-> **状态**：未开始。执行编号 **S5**，见 [00-总索引.md](00-总索引.md)。它不是新功能，是补一条既有测试通路的盲区。
+> **状态**：**已完成**（2026-08-06）。执行编号 **S5**，见 [00-总索引.md](00-总索引.md)。它不是新功能，是补一条既有测试通路的盲区。
 > **基线**：`a2b8006a`，行号按此核对。
+> **落地记录**（2026-08-06）：抽出 `BattleSnapshotProtocolMapper`（服务端 + 客户端双份共用），`OnBroadcast → ApplySnapshot` 默认过 proto 序列化往返；既有 37 条用例现全部验证 proto 往返，新增 `proto-roundtrip-preserves-fixed64-extremes` 极值用例。`fixed-physics-bit-exact` 等既有基线未变（Step 4 核心断言成立）。
 
 ## 问题：37 条用例全绿，但 proto 往返路径从未被执行
 
