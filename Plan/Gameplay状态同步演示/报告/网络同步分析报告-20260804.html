@@ -715,7 +715,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 </ul>
 
 <div class="callout danger">
-  <strong>待补缺口（S5）</strong>：目前 <code>C2B_PingHandler</code> 只回显时间戳，<strong>服务端不记录不计算 RTT</strong>。"服务端用 RTT 反推应然帧号"的能力尚不存在。注意不能让客户端上报自算的 RTT——那会变成"用客户端声称的 RTT 验证客户端"，反外挂价值归零。必须服务端独立测量。
+  <strong>待补缺口（S7）</strong>：目前 <code>C2B_PingHandler</code> 只回显时间戳，<strong>服务端不记录不计算 RTT</strong>。"服务端用 RTT 反推应然帧号"的能力尚不存在。注意不能让客户端上报自算的 RTT——那会变成"用客户端声称的 RTT 验证客户端"，反外挂价值归零。必须服务端独立测量。
 </div>
 </section>
 
@@ -821,7 +821,7 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 <section id="s11">
 <h2><span class="num">11</span>演进路线</h2>
 
-<p>项目用 <strong>S1~S10 单轴编号</strong>（序号即执行顺序）管理演进。截至 2026-08-04 的状态：</p>
+<p>项目用 <strong>S1~S11 单轴编号</strong>（序号即执行顺序）管理演进。截至 2026-08-04 的状态：</p>
 
 <div class="timeline">
   <div class="tl-item done">
@@ -857,30 +857,34 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
     <p style="font-size:13px">客户端逻辑收发层按种子确定性注入双向延迟/抖动/永久丢包。<strong>丢包判定在 <code>ConvertSnapshot</code> 之前</strong>（否则基线已吸收增量，测不到脏同步缺陷），<strong>上行泵在 <code>Tick</code> 之后</strong>（否则零延迟也多一帧）。8 条 <code>netsim-*</code> 用例 + 3 个真实场景。已用下行丢包稳定复现<strong>属性脏同步基线缺陷</strong>（<code>PlayerAttributeSync.Merge</code> 无帧号概念，错位后永久保持且无恢复通路）——本阶段只暴露不修。模拟的是消息可见时刻，非真实 KCP 行为。</p>
   </div>
   <div class="tl-item next">
-    <h4>S5 输入帧号 RTT 交叉校验 <span class="pill next">下一项</span></h4>
-    <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。S4 已提供可控延迟，±200ms 窗口用例现在构造得出来了。</p>
+    <h4>S5 无头测试改走真实 proto 序列化通路 <span class="pill next">下一项</span></h4>
+    <p style="font-size:13px">无头用例在 <code>TestRunner.cs</code> 直推内存结构体，proto 往返路径<strong>从未被测试执行过</strong>。「全绿」只证明进程内自洽，不证明端到端位精确。改测试通路而非加一条用例——加用例只守今天的字段。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S6 一致时跳过重放 <span class="pill todo">部分实现</span></h4>
-    <p style="font-size:13px">一致路径下计时和日志已跳过，但 <code>ApplyAuthoritativeSnapshot()</code> + 重放仍在跑，有真实 CPU 可省。注意不能整体 return——<code>_authoritativeSnapshots.Save()</code> 和 <code>DiscardPredictionsAtOrAfter()</code> 必须保留（S3 依赖）。</p>
+    <h4>S6 回滚粒度改造：把「别人」拆出回滚 <span class="pill todo">部分实现</span></h4>
+    <p style="font-size:13px">一致路径下计时和日志已跳过，但 <code>ApplyAuthoritativeSnapshot()</code> + 重放仍在跑。<strong>根因是粒度错配</strong>：重放只推自己（<code>ApplyLocalPrediction</code>），回滚却拨全世界（<code>RestoreSnapshot</code> 的 <code>_players.Clear()</code>），所以一致时也必须重放才能回到现在。改法是把别人拆进 <code>RemotePlayerBuffer</code> 不参与回滚。注意不能整体 return——<code>_authoritativeSnapshots.Save()</code> 和 <code>DiscardPredictionsAtOrAfter()</code> 必须保留（S3 依赖）。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S7 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
+    <h4>S7 服务端权威 RTT 测量 + 超前量控制 <span class="pill todo">未开始</span></h4>
+    <p style="font-size:13px"><strong>缺前置</strong>：整条 RTT 数据通路。服务端 grep <code>rtt</code> 零命中。必须服务端独立测量，不能用客户端声称的 RTT。S4 已提供可控延迟，窗口用例现在构造得出来了。不做判定与拒收。</p>
   </div>
   <div class="tl-item todo">
-    <h4>S8 断线重连最小版 <span class="pill todo">未开始</span></h4>
+    <h4>S8 Dash / 体力 / Recover / 撞击击退 <span class="pill todo">未开始</span></h4>
   </div>
   <div class="tl-item todo">
-    <h4>S9 远端插值 + 轨迹线 + 完整调试面板 <span class="pill todo">未开始</span></h4>
+    <h4>S9 断线重连最小版 <span class="pill todo">未开始</span></h4>
   </div>
   <div class="tl-item todo">
-    <h4>S10 求职展示打磨 <span class="pill todo">未开始</span></h4>
+    <h4>S10 远端插值 + 轨迹线 + 完整调试面板 <span class="pill todo">未开始</span></h4>
+  </div>
+  <div class="tl-item todo">
+    <h4>S11 求职展示打磨 <span class="pill todo">未开始</span></h4>
     <p style="font-size:13px">README / 录屏 / 讲解。</p>
   </div>
 </div>
 
 <div class="callout">
-  <strong>已取消</strong>：<code>P3</code> 占点交互（进度条看不出同步难点，改由 S7 撞击击退承担职责）；<code>#6</code> epsilon 豁免（S2 全定点后浮点噪声消失，整项作废）。
+  <strong>已取消</strong>：<code>P3</code> 占点交互（进度条看不出同步难点，改由 S8 撞击击退承担职责）；<code>#6</code> epsilon 豁免（S2 全定点后浮点噪声消失，整项作废）。
 </div>
 </section>
 
@@ -934,11 +938,11 @@ else if (serverBufferedFrames > MaxAcceptedInputBufferFrames=6):
 <h3>需要关注的缺口</h3>
 <table>
 <tr><th>缺口</th><th>影响</th><th>对应阶段</th></tr>
-<tr><td>服务端无 RTT 测量</td><td>S5 无法做帧号交叉校验，反外挂能力缺失</td><td>S5</td></tr>
+<tr><td>服务端无 RTT 测量</td><td>S7 无法做帧号交叉校验，反外挂能力缺失</td><td>S7</td></tr>
 <tr><td><strong>属性脏同步无丢包恢复</strong>（S4 实测证实）</td><td>下行丢一份带脏属性的快照后，客户端属性基线<strong>永久错位且无从察觉</strong>——<code>PlayerAttributeSync.Merge</code> 无帧号/基线版本概念。Buff 侧有基线帧校验，但检测到错位后无协议路径让服务端补发全量。修复需动协议 + 服务端按观察者维护基线 + 恢复通路</td><td>独立阶段</td></tr>
 <tr><td>输入无冗余无重发</td><td>丢一个输入包即产生真实预测态分歧，服务端复用上一帧输入（<code>ReusedInputCount</code>）</td><td>独立决策</td></tr>
 <tr><td>输入逐帧不批量</td><td>上行 30 msg/s，弱网下消息开销大</td><td>—</td></tr>
-<tr><td>断线重连未实现</td><td>掉线即出局，演示容错性不足</td><td>S8</td></tr>
+<tr><td>断线重连未实现</td><td>掉线即出局，演示容错性不足</td><td>S9</td></tr>
 <tr><td>Dictionary 迭代顺序</td><td>靠 Sort 兜底，非编译期保证</td><td>—</td></tr>
 </table>
 

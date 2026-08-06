@@ -378,12 +378,12 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
 <span class="tag t-bad">❌ 还完全没有的（架构空白）</span>
 <table style="margin:8px 0;">
 <tr><th>缺口</th><th>现状</th><th>影响</th></tr>
-<tr><td><strong>断线重连</strong></td><td>战斗层零重连代码，协议无 <code>Reconnect</code> 消息</td><td>面试必问（概率 80%+），目前完全空白。<strong>= S8</strong></td></tr>
+<tr><td><strong>断线重连</strong></td><td>战斗层零重连代码，协议无 <code>Reconnect</code> 消息</td><td>面试必问（概率 80%+），目前完全空白。<strong>= S9</strong></td></tr>
 <tr><td><strong>失同步上报</strong></td><td>proto 无 Hash 字段，客户端算得出失同步但<strong>没通道告诉服务端</strong></td><td>线上失同步 = 静默发散。<strong>= S3</strong></td></tr>
 <tr><td><strong>弱网量化</strong></td><td>无头测试是同进程零延迟函数调用，无丢包/抖动模拟</td><td>"弱网表现如何"答不出数据。<strong>= S4</strong></td></tr>
 <tr><td><strong>预测误差平滑</strong></td><td>回滚时位置硬跳变，无任何表现层平滑</td><td>画面会"跳"，观感差。<strong>= S1，下一项，计划已就绪</strong></td></tr>
-<tr><td><strong>远端玩家插值</strong></td><td>无插值层</td><td>多客户端下远端小球会以 30Hz 阶跃移动。<strong>= S9</strong></td></tr>
-<tr><td><strong>Dash / 体力 / 击退</strong></td><td>grep 零命中，P1 一个字没写</td><td><strong>= S7</strong>（原 P2 范围），未开始。<strong>占点已于 2026-08-03 决策取消，不占 S 号</strong>（见《物理层与玩法形态-讨论记录-20260803.md》）</td></tr>
+<tr><td><strong>远端玩家插值</strong></td><td>无插值层</td><td>多客户端下远端小球会以 30Hz 阶跃移动。<strong>= S10</strong></td></tr>
+<tr><td><strong>Dash / 体力 / 击退</strong></td><td>grep 零命中，P1 一个字没写</td><td><strong>= S8</strong>（本文 P2 范围），未开始。<strong>占点已于 2026-08-03 决策取消，不占 S 号</strong>（见《物理层与玩法形态-讨论记录-20260803.md》）</td></tr>
 </table>
 </div>
 
@@ -415,7 +415,7 @@ hr{border:none;border-top:1px solid var(--border);margin:34px 0;}
 
 <hr>
 <p class="src">本概览基于源码逐行核实，所有事实带 file:line 证据。生成 2026-08-02，<strong>修订 2026-08-03</strong>。与同目录《分支进度与SourceSDK借鉴分析》互补：那份讲"还差什么 + 怎么借鉴 Source"，本份讲"P1 到底是什么样"。</p>
-<p class="src"><strong>2026-08-03 修订三处</strong>：① Box2D 由"用了一半"更正为"只用了一行"——<code>GroupIndex = -1</code> 使 Contact 恒为空、求解器空转；② WarmStarting / 带宽统计由"工作树未提交"更新为已提交（<code>0bb9a468</code> / <code>4c1104cb</code> / <code>70e9aad7</code>）；③ 占点已决策取消。<strong>编号已于 2026-08-03 统一为单轴 S1~S10，权威表见同目录 00-总索引.md</strong>。后续方向见 <code>Plan/Gameplay状态同步演示/物理层与玩法形态-讨论记录-20260803.md</code>：拿掉 Box2D 改手写定点物理，玩法定为移动 + Dash + 击退。</p>
+<p class="src"><strong>2026-08-03 修订三处</strong>：① Box2D 由"用了一半"更正为"只用了一行"——<code>GroupIndex = -1</code> 使 Contact 恒为空、求解器空转；② WarmStarting / 带宽统计由"工作树未提交"更新为已提交（<code>0bb9a468</code> / <code>4c1104cb</code> / <code>70e9aad7</code>）；③ 占点已决策取消。<strong>编号已于 2026-08-03 统一为单轴 S1~S11，权威表见同目录 00-总索引.md</strong>。后续方向见 <code>Plan/Gameplay状态同步演示/物理层与玩法形态-讨论记录-20260803.md</code>：拿掉 Box2D 改手写定点物理，玩法定为移动 + Dash + 击退。</p>
 
 </div>
 </body>
