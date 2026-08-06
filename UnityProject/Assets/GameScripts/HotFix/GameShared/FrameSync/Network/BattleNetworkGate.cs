@@ -70,6 +70,18 @@ namespace GameShared.FrameSync.Network
                 _simulator.TryEnqueueUplink(_clock.NowMs, () => send(frameIndex, stateHash));
         }
 
+        public Action<ulong> WrapSendRttProbeAck(Action<ulong> send)
+        {
+            if (send == null)
+            {
+                throw new ArgumentNullException(nameof(send));
+            }
+
+            return probeNonce =>
+                _simulator.TryEnqueueUplink(_clock.NowMs, () => send(probeNonce));
+        }
+
+
         public bool TryAcceptSnapshotMessage(long nowMs)
         {
             return !_simulator.ShouldDropDownlink(nowMs);
@@ -102,6 +114,17 @@ namespace GameShared.FrameSync.Network
 
             return _simulator.TryEnqueueDownlink(nowMs, () => deliver(sendTimestampMs));
         }
+
+        public bool TryAcceptRttProbe(long nowMs, ulong probeNonce, Action<ulong> deliver)
+        {
+            if (deliver == null)
+            {
+                throw new ArgumentNullException(nameof(deliver));
+            }
+
+            return _simulator.TryEnqueueDownlink(nowMs, () => deliver(probeNonce));
+        }
+
 
         public void PumpDownlink(long nowMs)
         {
