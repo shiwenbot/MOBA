@@ -14,5 +14,9 @@ namespace GameLogic
 
         /// <summary>预测误差渲染状态更新。</summary>
         void OnPredictionErrorUpdated();
+
+        /// <summary>服务端 RTT 统计上报到达（每逻辑帧，per-session）。</summary>
+        void OnRttStatsUpdated();
+
     }
 }

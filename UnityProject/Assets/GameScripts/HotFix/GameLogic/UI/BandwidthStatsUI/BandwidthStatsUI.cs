@@ -5,13 +5,9 @@ using UnityEngine.UI;
 namespace GameLogic
 {
     /// <summary>
-    /// 带宽节省量调试面板。展示脏同步相比全量同步省了多少带宽。
-    /// 数据由服务端 <c>S2C_BandwidthStats</c> 每 10 秒推送一次。
-    ///
-    /// 三种显示状态：
-    /// - 正常：节省 XX% / 全量→实际 字节
-    /// - 对照测量未开：提示需开 BATTLE_BANDWIDTH_FULLSYNC_BASELINE
-    /// - 无样本/未连接：占位
+    /// 带宽节省量 + RTT/超前量调试面板。
+    /// 带宽数据由服务端 S2C_BandwidthStats 每 10 秒推送；
+    /// RTT 数据由 S2C_RttStats 每逻辑帧 per-session 推送（S7）。
     /// </summary>
     [Window(UILayer.System, fromResources: true)]
     internal class BandwidthStatsUI : UIWindow
@@ -19,7 +15,7 @@ namespace GameLogic
         #region 脚本工具生成的代码（手写绑定，参考 LogUI）
 
         private Text m_textResult; // 核心结论：节省量
-        private Text m_textMeta;   // 状态行：帧号 / 开关提示
+        private Text m_textMeta;   // 状态行：帧号 / 开关提示 / RTT
         private Button m_btnClose;
 
         protected override void ScriptGenerator()
@@ -40,6 +36,7 @@ namespace GameLogic
         {
             AddUIEvent(IBattleUI_Event.OnBandwidthStatsUpdated, Refresh);
             AddUIEvent(IBattleUI_Event.OnPredictionErrorUpdated, Refresh);
+            AddUIEvent(IBattleUI_Event.OnRttStatsUpdated, Refresh);
         }
 
         protected override void OnRefresh()
@@ -68,9 +65,30 @@ namespace GameLogic
                 rollbackSummary = $"回滚 {prediction.RollbackCount} 次 · 最近帧 {prediction.LastRollbackFrame}";
             }
 
+            string rttSummary = "RTT 等待探测";
+            if (_controller.HasRttStats)
+            {
+                BattleClientController.RttStatsSnapshot rtt = _controller.LatestRttStats;
+                if (!rtt.Enabled)
+                {
+                    rttSummary = "RTT 探测关闭";
+                }
+                else if (!rtt.HasSample)
+                {
+                    rttSummary = "RTT 尚无样本";
+                }
+                else
+                {
+                    // controlRtt 与 rttMin 分离、targetLead 与实际 lead 并列（S7 决策六）
+                    rttSummary =
+                        $"ctrl {rtt.ControlRttMs:F0}ms min {rtt.RttMinMs:F0}ms ema {rtt.RttEmaMs:F0}ms | " +
+                        $"targetLead {rtt.AppliedTargetLeadFrames} lead {rtt.LeadFrames} n={rtt.RttSampleCount}";
+                }
+            }
+
             if (!_controller.HasBandwidthStats)
             {
-                m_textMeta.text = predictionSummary;
+                m_textMeta.text = predictionSummary + "\n" + rttSummary;
                 m_textResult.text = rollbackSummary + "\n尚未收到服务端带宽上报（每 10 秒一次）";
                 return;
             }
@@ -79,7 +97,7 @@ namespace GameLogic
 
             if (!s.MeasureFullSyncBaseline)
             {
-                m_textMeta.text = predictionSummary;
+                m_textMeta.text = predictionSummary + "\n" + rttSummary;
                 m_textResult.text =
                     rollbackSummary + "\n" +
                     $"frame {s.FrameIndex} · 未开启带宽对照测量\n" +
@@ -89,12 +107,12 @@ namespace GameLogic
 
             if (!s.HasSamples || s.FullSyncPayloadBytes <= 0)
             {
-                m_textMeta.text = predictionSummary;
+                m_textMeta.text = predictionSummary + "\n" + rttSummary;
                 m_textResult.text = rollbackSummary + $"\nframe {s.FrameIndex} · 带宽窗口无样本";
                 return;
             }
 
-            m_textMeta.text = predictionSummary;
+            m_textMeta.text = predictionSummary + "\n" + rttSummary;
             m_textResult.text =
                 rollbackSummary + "\n" +
                 $"frame {s.FrameIndex} · 带宽节省 {s.DirtySyncSavedRatio:F1}%\n" +

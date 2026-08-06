@@ -45,14 +45,22 @@ namespace GameLogic
         private Action<IMessage> _snapshotHandler;
         private Action<IMessage> _pongHandler;
         private Action<IMessage> _bandwidthStatsHandler;
+        private Action<IMessage> _rttProbeHandler;
+        private Action<IMessage> _rttStatsHandler;
+
         private bool _snapshotRegistered;
         private bool _pongRegistered;
         private bool _bandwidthStatsRegistered;
+        private bool _rttProbeRegistered;
+        private bool _rttStatsRegistered;
+
         private bool _isInitialized;
         private bool _joinSucceeded;
         private string _joinFailureReason = string.Empty;
         private int _snapshotMessageCount;
         private int _pongMessageCount;
+        private int _rttProbeAcksSent;
+
         private float _cachedDx;
         private float _cachedDy;
         private IBattleAutomationInputSource _automationInputSource;
@@ -76,6 +84,10 @@ namespace GameLogic
         public PredictionErrorSnapshot LatestPredictionError { get; private set; }
 
         public bool HasPredictionError { get; private set; }
+        public RttStatsSnapshot LatestRttStats { get; private set; }
+        public bool HasRttStats { get; private set; }
+        public int RttProbeAcksSent => _rttProbeAcksSent;
+
 
         private enum BufferedInputKind
         {
@@ -119,12 +131,27 @@ namespace GameLogic
                 GameClient.Instance.UnRegisterMsgHandler(OuterOpcode.S2C_BandwidthStats, _bandwidthStatsHandler);
             }
 
+            if (_rttProbeRegistered && _rttProbeHandler != null)
+            {
+                GameClient.Instance.UnRegisterMsgHandler(OuterOpcode.S2C_RttProbe, _rttProbeHandler);
+            }
+
+            if (_rttStatsRegistered && _rttStatsHandler != null)
+            {
+                GameClient.Instance.UnRegisterMsgHandler(OuterOpcode.S2C_RttStats, _rttStatsHandler);
+            }
+
             _snapshotRegistered = false;
             _pongRegistered = false;
             _bandwidthStatsRegistered = false;
+            _rttProbeRegistered = false;
+            _rttStatsRegistered = false;
             _snapshotHandler = null;
             _pongHandler = null;
             _bandwidthStatsHandler = null;
+            _rttProbeHandler = null;
+            _rttStatsHandler = null;
+
             _networkGate?.ClearPending();
             _networkGate = null;
             _battleClock = null;
@@ -134,6 +161,8 @@ namespace GameLogic
             _joinFailureReason = string.Empty;
             _snapshotMessageCount = 0;
             _pongMessageCount = 0;
+            _rttProbeAcksSent = 0;
+
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
             _nextStatusLogFrame = 0u;
@@ -143,6 +172,9 @@ namespace GameLogic
             HasBandwidthStats = false;
             LatestPredictionError = default;
             HasPredictionError = false;
+            LatestRttStats = default;
+            HasRttStats = false;
+
             _hasAuthoritativeGhostTarget = false;
             _authoritativeGhostTargetX = Fixed64.Zero;
             _authoritativeGhostTargetY = Fixed64.Zero;
@@ -311,6 +343,10 @@ namespace GameLogic
                 networkDownlinkDropped = _networkGate?.DownlinkDropped ?? 0L,
                 networkMaxQueueDepth = _networkGate?.MaxQueueDepth ?? 0,
                 networkOverflowDropped = _networkGate?.OverflowDropped ?? 0L,
+                rttProbeAcksSent = _rttProbeAcksSent,
+                serverControlRttMs = HasRttStats ? (float)LatestRttStats.ControlRttMs : 0f,
+                appliedTargetLeadFrames = (int)(_simulation?.AppliedTargetLeadFrames ?? 0u),
+
                 totalActiveBuffCount = totalActiveBuffCount,
                 players = players.ToArray()
             };
@@ -432,12 +468,18 @@ namespace GameLogic
             _snapshotHandler = OnSnapshotMessage;
             _pongHandler = OnPongMessage;
             _bandwidthStatsHandler = OnBandwidthStatsMessage;
+            _rttProbeHandler = OnRttProbeMessage;
+            _rttStatsHandler = OnRttStatsMessage;
             GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_FrameSnapshot, _snapshotHandler);
             GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_Pong, _pongHandler);
             GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_BandwidthStats, _bandwidthStatsHandler);
+            GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_RttProbe, _rttProbeHandler);
+            GameClient.Instance.RegisterMsgHandler(OuterOpcode.S2C_RttStats, _rttStatsHandler);
             _snapshotRegistered = true;
             _pongRegistered = true;
             _bandwidthStatsRegistered = true;
+            _rttProbeRegistered = true;
+            _rttStatsRegistered = true;
         }
 
         private void OnSnapshotMessage(IMessage message)
@@ -454,9 +496,11 @@ namespace GameLogic
             }
 
             _snapshotMessageCount++;
+            uint targetLeadFrames = snapshot.TargetLeadFrames;
             BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(snapshot, out uint selfLatestAcceptedInputFrame);
             if (_networkGate == null)
             {
+                _simulation?.ApplyAuthoritativeTargetLead(targetLeadFrames);
                 _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
                 return;
             }
@@ -464,8 +508,13 @@ namespace GameLogic
             _networkGate.EnqueueConvertedSnapshot(
                 nowMs,
                 authoritativeSnapshot,
-                value => _simulation?.EnqueueServerSnapshot(value, selfLatestAcceptedInputFrame));
+                value =>
+                {
+                    _simulation?.ApplyAuthoritativeTargetLead(targetLeadFrames);
+                    _simulation?.EnqueueServerSnapshot(value, selfLatestAcceptedInputFrame);
+                });
         }
+
 
         private void OnPongMessage(IMessage message)
         {
@@ -487,6 +536,58 @@ namespace GameLogic
                 _pongMessageCount++;
             }
         }
+
+        private void OnRttProbeMessage(IMessage message)
+        {
+            if (message is not S2C_RttProbe probe)
+            {
+                return;
+            }
+
+            // Copy scalar immediately — pooled message is disposed after callback.
+            ulong probeNonce = probe.ProbeNonce;
+            long nowMs = _battleClock?.NowMs ?? SystemBattleClock.Instance.NowMs;
+            if (_networkGate == null)
+            {
+                SendRttProbeAck(probeNonce);
+                return;
+            }
+
+            _networkGate.TryAcceptRttProbe(nowMs, probeNonce, DeliverRttProbeAck);
+        }
+
+        private void DeliverRttProbeAck(ulong probeNonce)
+        {
+            Action<ulong> send = _networkGate != null
+                ? _networkGate.WrapSendRttProbeAck(SendRttProbeAck)
+                : SendRttProbeAck;
+            send(probeNonce);
+        }
+
+        private void OnRttStatsMessage(IMessage message)
+        {
+            if (message is not S2C_RttStats stats)
+            {
+                return;
+            }
+
+            LatestRttStats = new RttStatsSnapshot
+            {
+                FrameIndex = stats.FrameIndex,
+                Enabled = stats.Enabled,
+                HasSample = stats.HasSample,
+                RttMinMs = stats.RttMinMs,
+                RttEmaMs = stats.RttEmaMs,
+                ControlRttMs = stats.ControlRttMs,
+                RttSampleCount = stats.RttSampleCount,
+                LeadOutOfBoundsCount = stats.LeadOutOfBoundsCount,
+                AppliedTargetLeadFrames = _simulation?.AppliedTargetLeadFrames ?? 0u,
+                LeadFrames = _simulation?.LeadFrames ?? 0u
+            };
+            HasRttStats = true;
+            GameEvent.Get<IBattleUI>().OnRttStatsUpdated();
+        }
+
 
         private void ProcessPong(ulong sendTimestampMs)
         {
@@ -878,6 +979,16 @@ namespace GameLogic
             });
         }
 
+        private void SendRttProbeAck(ulong probeNonce)
+        {
+            GameClient.Instance.Send(new C2B_RttProbeAck
+            {
+                ProbeNonce = probeNonce
+            });
+            _rttProbeAcksSent++;
+        }
+
+
         private static void SendHashReportCommand(uint frameIndex, ulong stateHash)
         {
             GameClient.Instance.Send(new C2B_StateHashReport
@@ -1110,5 +1221,23 @@ namespace GameLogic
             public int RollbackCount { get; set; }
             public uint LastRollbackFrame { get; set; }
         }
+
+        /// <summary>
+        /// 服务端 RTT 观测值客户端快照（值拷贝自 S2C_RttStats）。
+        /// </summary>
+        public struct RttStatsSnapshot
+        {
+            public uint FrameIndex { get; set; }
+            public bool Enabled { get; set; }
+            public bool HasSample { get; set; }
+            public double RttMinMs { get; set; }
+            public double RttEmaMs { get; set; }
+            public double ControlRttMs { get; set; }
+            public int RttSampleCount { get; set; }
+            public int LeadOutOfBoundsCount { get; set; }
+            public uint AppliedTargetLeadFrames { get; set; }
+            public uint LeadFrames { get; set; }
+        }
+
     }
 }

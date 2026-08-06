@@ -22,7 +22,6 @@ namespace GameLogic
         private const int AuthoritativeSnapshotHistoryCapacity = 32;
         private const float InitialRttEmaMs = 100f;
         private const float RttEmaAlpha = 0.2f;
-        private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
         private readonly RemotePlayerBuffer _remotePlayers = new RemotePlayerBuffer();
@@ -57,6 +56,10 @@ namespace GameLogic
         private uint _localFrame;
         private uint _leadFrames = InputBufferTuning.MinLeadFrames;
         private uint _baselineLeadFrames = InputBufferTuning.MinLeadFrames;
+        private uint _authoritativeTargetLeadFrames;
+        private bool _hasAuthoritativeTargetLead;
+        private int _effectiveMaxLeadFrames = InputBufferTuning.MaxLeadFrames;
+
         private float _rttEmaMs = InitialRttEmaMs;
         private int _pingCount;
         private int _hashReportCount;
@@ -116,6 +119,13 @@ namespace GameLogic
         public bool IsJoined => _isJoined;
         public long SelfPlayerId => _selfPlayerId;
         public uint LeadFrames => _leadFrames;
+        public uint BaselineLeadFrames => _baselineLeadFrames;
+        public uint AppliedTargetLeadFrames => _hasAuthoritativeTargetLead ? _authoritativeTargetLeadFrames : 0u;
+        public bool HasAuthoritativeTargetLead => _hasAuthoritativeTargetLead;
+        public int EffectiveMaxLeadFrames => _effectiveMaxLeadFrames;
+        public float ClientRttEmaMs => _rttEmaMs;
+        public bool HasClientRttSample => _hasRttSample;
+
         public uint LastAppliedFrame => _lastAppliedFrame;
         public uint LastPredictedFrame => _lastPredictedFrame;
         public uint LocalFrame => _localFrame;
@@ -204,6 +214,37 @@ namespace GameLogic
             RefreshBaselineLeadFrames();
         }
 
+        /// <summary>
+        /// Apply server-issued target lead. 0 means disabled → fall back to client RTT.
+        /// Must be called from downlink gate release callback together with the snapshot.
+        /// </summary>
+        public void ApplyAuthoritativeTargetLead(uint targetLeadFrames)
+        {
+            if (targetLeadFrames == 0u)
+            {
+                ClearAuthoritativeTargetLead();
+                return;
+            }
+
+            _authoritativeTargetLeadFrames = targetLeadFrames;
+            _hasAuthoritativeTargetLead = true;
+            RefreshBaselineLeadFrames();
+        }
+
+        public void ClearAuthoritativeTargetLead()
+        {
+            if (!_hasAuthoritativeTargetLead && _authoritativeTargetLeadFrames == 0u)
+            {
+                _effectiveMaxLeadFrames = InputBufferTuning.MaxLeadFrames;
+                return;
+            }
+
+            _hasAuthoritativeTargetLead = false;
+            _authoritativeTargetLeadFrames = 0u;
+            RefreshBaselineLeadFrames();
+        }
+
+
         public TickResult Tick(uint frameIndex, Fixed64 fixedDt, Fixed64 dx, Fixed64 dy, int skillId = 0)
         {
             if (!_isJoined)
@@ -261,11 +302,13 @@ namespace GameLogic
             _lastAppliedFrame = serverFrame;
             _lastPredictedFrame = serverFrame;
             _localFrame = serverFrame;
-            _inputSeq = 0;
             _leadFrames = InputBufferTuning.MinLeadFrames;
             _baselineLeadFrames = InputBufferTuning.MinLeadFrames;
             _rttEmaMs = InitialRttEmaMs;
             _hasRttSample = false;
+            _hasAuthoritativeTargetLead = false;
+            _authoritativeTargetLeadFrames = 0u;
+            _effectiveMaxLeadFrames = InputBufferTuning.MaxLeadFrames;
             RefreshBaselineLeadFrames();
             _pingCount = 0;
             _hashReportCount = 0;
@@ -303,6 +346,7 @@ namespace GameLogic
 
             _worldState.AddOrUpdatePlayer(playerId, x, y);
         }
+
 
         public void AlignLocalFrame(uint frameIndex)
         {
@@ -632,14 +676,25 @@ namespace GameLogic
 
         private void RefreshBaselineLeadFrames()
         {
-            int leadFrames = InputBufferTuning.JitterBufferFrames +
-                             InputBufferTuning.InputSendSafetyFrames +
-                             (int)Math.Ceiling(_rttEmaMs / 2.0f / FixedDeltaMilliseconds);
+            int leadFrames;
+            if (_hasAuthoritativeTargetLead && _authoritativeTargetLeadFrames > 0u)
+            {
+                leadFrames = (int)_authoritativeTargetLeadFrames;
+                _effectiveMaxLeadFrames = TargetLeadCalculator.ComputeEffectiveMaxLead(leadFrames);
+            }
+            else
+            {
+                leadFrames = TargetLeadCalculator.Compute(_rttEmaMs);
+                _effectiveMaxLeadFrames = InputBufferTuning.MaxLeadFrames;
+            }
+
             _baselineLeadFrames = (uint)Math.Clamp(
                 leadFrames,
                 InputBufferTuning.MinLeadFrames,
-                InputBufferTuning.MaxLeadFrames);
+                _effectiveMaxLeadFrames);
 
+            // Soft max only bounds future raises. Never snap lead down on target decrease —
+            // cooldown feedback owns the slow fall (decision five).
             if (_leadFrames < _baselineLeadFrames)
             {
                 _leadFrames = _baselineLeadFrames;
@@ -659,12 +714,17 @@ namespace GameLogic
             {
                 int deficit = InputBufferTuning.MinAcceptedInputBufferFrames - serverBufferedFrames;
                 int raisedLead = Math.Max((int)_baselineLeadFrames, (int)_leadFrames + deficit);
-                _leadFrames = (uint)Math.Clamp(
-                    raisedLead,
-                    InputBufferTuning.MinLeadFrames,
-                    InputBufferTuning.MaxLeadFrames);
+                // Soft max caps how high we may raise; never clamp existing lead downward here.
+                int cappedRaise = Math.Min(raisedLead, _effectiveMaxLeadFrames);
+                if (cappedRaise > (int)_leadFrames)
+                {
+                    _leadFrames = (uint)Math.Max(InputBufferTuning.MinLeadFrames, cappedRaise);
+                }
+
                 _leadDecreaseCooldownSnapshots = InputBufferTuning.LeadDecreaseCooldownSnapshots;
             }
+
+
             else if (serverBufferedFrames > InputBufferTuning.MaxAcceptedInputBufferFrames)
             {
                 if (_leadDecreaseCooldownSnapshots > 0)
