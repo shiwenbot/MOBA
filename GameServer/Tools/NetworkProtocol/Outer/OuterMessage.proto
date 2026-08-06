@@ -140,6 +140,8 @@ message S2C_FrameSnapshot // IMessage
 	uint32 FrameIndex = 1;
 	repeated PlayerSnapshot Players = 2;
 	repeated FrameContactSnapshot Contacts = 3;
+	// 服务端权威的目标超前帧数。0 表示未启用，客户端退回自算
+	uint32 TargetLeadFrames = 4;
 }
 
 // 客户端 Ping（单向消息，用于 RTT 测量）
@@ -172,6 +174,32 @@ message C2B_StateHashReport // IMessage
 	uint32 FrameIndex = 1;
 	uint64 StateHash = 2;
 }
+
+// 服务端发起的 RTT 探测（单向）。nonce 为密码学随机 64 位，发出时刻仅存于服务端内存
+message S2C_RttProbe // IMessage
+{
+	uint64 ProbeNonce = 1;
+}
+
+// 客户端回执（单向）。原样回传 nonce，不带任何时间戳
+message C2B_RttProbeAck // IMessage
+{
+	uint64 ProbeNonce = 1;
+}
+
+// 服务端 RTT 观测值（单向，per-session 构造）
+message S2C_RttStats // IMessage
+{
+	uint32 FrameIndex = 1;
+	bool   Enabled = 2;
+	bool   HasSample = 3;
+	double RttMinMs = 4;          // 链路下界估计，诊断用
+	double RttEmaMs = 5;
+	double ControlRttMs = 6;      // 非对称滤波后的控制值，HUD 与 report 看这个
+	int32  RttSampleCount = 7;
+	int32  LeadOutOfBoundsCount = 8;
+}
+
 
 
 

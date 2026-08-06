@@ -80,12 +80,13 @@ namespace Fantasy
 			session.Send(S2C_FrameSnapshot_message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void S2C_FrameSnapshot(this Session session, uint frameIndex, List<PlayerSnapshot> players, List<FrameContactSnapshot> contacts)
+		public static void S2C_FrameSnapshot(this Session session, uint frameIndex, List<PlayerSnapshot> players, List<FrameContactSnapshot> contacts, uint targetLeadFrames)
 		{
 			using var S2C_FrameSnapshot_message = Fantasy.S2C_FrameSnapshot.Create();
 			S2C_FrameSnapshot_message.FrameIndex = frameIndex;
 			S2C_FrameSnapshot_message.Players = players;
 			S2C_FrameSnapshot_message.Contacts = contacts;
+			S2C_FrameSnapshot_message.TargetLeadFrames = targetLeadFrames;
 			session.Send(S2C_FrameSnapshot_message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -142,6 +143,49 @@ namespace Fantasy
 			C2B_StateHashReport_message.FrameIndex = frameIndex;
 			C2B_StateHashReport_message.StateHash = stateHash;
 			session.Send(C2B_StateHashReport_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_RttProbe(this Session session, S2C_RttProbe S2C_RttProbe_message)
+		{
+			session.Send(S2C_RttProbe_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_RttProbe(this Session session, ulong probeNonce)
+		{
+			using var S2C_RttProbe_message = Fantasy.S2C_RttProbe.Create();
+			S2C_RttProbe_message.ProbeNonce = probeNonce;
+			session.Send(S2C_RttProbe_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_RttProbeAck(this Session session, C2B_RttProbeAck C2B_RttProbeAck_message)
+		{
+			session.Send(C2B_RttProbeAck_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void C2B_RttProbeAck(this Session session, ulong probeNonce)
+		{
+			using var C2B_RttProbeAck_message = Fantasy.C2B_RttProbeAck.Create();
+			C2B_RttProbeAck_message.ProbeNonce = probeNonce;
+			session.Send(C2B_RttProbeAck_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_RttStats(this Session session, S2C_RttStats S2C_RttStats_message)
+		{
+			session.Send(S2C_RttStats_message);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void S2C_RttStats(this Session session, uint frameIndex, bool enabled, bool hasSample, double rttMinMs, double rttEmaMs, double controlRttMs, int rttSampleCount, int leadOutOfBoundsCount)
+		{
+			using var S2C_RttStats_message = Fantasy.S2C_RttStats.Create();
+			S2C_RttStats_message.FrameIndex = frameIndex;
+			S2C_RttStats_message.Enabled = enabled;
+			S2C_RttStats_message.HasSample = hasSample;
+			S2C_RttStats_message.RttMinMs = rttMinMs;
+			S2C_RttStats_message.RttEmaMs = rttEmaMs;
+			S2C_RttStats_message.ControlRttMs = controlRttMs;
+			S2C_RttStats_message.RttSampleCount = rttSampleCount;
+			S2C_RttStats_message.LeadOutOfBoundsCount = leadOutOfBoundsCount;
+			session.Send(S2C_RttStats_message);
 		}
 
    }

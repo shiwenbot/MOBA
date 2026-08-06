@@ -19,5 +19,8 @@ namespace Fantasy
         public const uint S2C_Pong = 134227733;
         public const uint S2C_BandwidthStats = 134227734;
         public const uint C2B_StateHashReport = 134227735;
+        public const uint S2C_RttProbe = 134227736;
+        public const uint C2B_RttProbeAck = 134227737;
+        public const uint S2C_RttStats = 134227738;
     }
 }

@@ -754,6 +754,7 @@ namespace Fantasy
             FrameIndex = default;
             Players.Clear();
             Contacts.Clear();
+            TargetLeadFrames = default;
             MessageObjectPool<S2C_FrameSnapshot>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.S2C_FrameSnapshot; } 
@@ -763,6 +764,8 @@ namespace Fantasy
         public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
         [ProtoMember(3)]
         public List<FrameContactSnapshot> Contacts { get; set; } = new List<FrameContactSnapshot>();
+        [ProtoMember(4)]
+        public uint TargetLeadFrames { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -948,5 +951,149 @@ namespace Fantasy
         public uint FrameIndex { get; set; }
         [ProtoMember(2)]
         public ulong StateHash { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class S2C_RttProbe : AMessage, IMessage
+    {
+        public static S2C_RttProbe Create(bool autoReturn = true)
+        {
+            var s2C_RttProbe = MessageObjectPool<S2C_RttProbe>.Rent();
+            s2C_RttProbe.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                s2C_RttProbe.SetIsPool(false);
+            }
+            
+            return s2C_RttProbe;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            ProbeNonce = default;
+            MessageObjectPool<S2C_RttProbe>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.S2C_RttProbe; } 
+        [ProtoMember(1)]
+        public ulong ProbeNonce { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class C2B_RttProbeAck : AMessage, IMessage
+    {
+        public static C2B_RttProbeAck Create(bool autoReturn = true)
+        {
+            var c2B_RttProbeAck = MessageObjectPool<C2B_RttProbeAck>.Rent();
+            c2B_RttProbeAck.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                c2B_RttProbeAck.SetIsPool(false);
+            }
+            
+            return c2B_RttProbeAck;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            ProbeNonce = default;
+            MessageObjectPool<C2B_RttProbeAck>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2B_RttProbeAck; } 
+        [ProtoMember(1)]
+        public ulong ProbeNonce { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class S2C_RttStats : AMessage, IMessage
+    {
+        public static S2C_RttStats Create(bool autoReturn = true)
+        {
+            var s2C_RttStats = MessageObjectPool<S2C_RttStats>.Rent();
+            s2C_RttStats.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                s2C_RttStats.SetIsPool(false);
+            }
+            
+            return s2C_RttStats;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            FrameIndex = default;
+            Enabled = default;
+            HasSample = default;
+            RttMinMs = default;
+            RttEmaMs = default;
+            ControlRttMs = default;
+            RttSampleCount = default;
+            LeadOutOfBoundsCount = default;
+            MessageObjectPool<S2C_RttStats>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.S2C_RttStats; } 
+        [ProtoMember(1)]
+        public uint FrameIndex { get; set; }
+        [ProtoMember(2)]
+        public bool Enabled { get; set; }
+        [ProtoMember(3)]
+        public bool HasSample { get; set; }
+        [ProtoMember(4)]
+        public double RttMinMs { get; set; }
+        [ProtoMember(5)]
+        public double RttEmaMs { get; set; }
+        [ProtoMember(6)]
+        public double ControlRttMs { get; set; }
+        [ProtoMember(7)]
+        public int RttSampleCount { get; set; }
+        [ProtoMember(8)]
+        public int LeadOutOfBoundsCount { get; set; }
     }
 }
