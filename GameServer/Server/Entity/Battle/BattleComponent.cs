@@ -4,8 +4,12 @@ using FixedMathSharp;
 using GameLogic;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Core;
+using GameShared.FrameSync.Network;
+using GameShared.FrameSync.Determinism;
+
 using Fantasy.Network;
 using Fantasy.Serialize;
+using TEngine;
 
 namespace Fantasy;
 
@@ -17,12 +21,18 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     private readonly Dictionary<long, long> _playerIdBySessionId = new();
     private readonly Dictionary<long, AttributeBroadcastBaseline> _lastBroadcastAttributesByPlayerId = new();
     private readonly Dictionary<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> _buffBaselinesByObserverTarget = new();
+    private readonly Dictionary<long, ServerRttTracker> _rttTrackersBySessionId = new();
     private readonly List<long> _playerIdBuffer = new();
     private readonly List<(long ObserverSessionId, long TargetPlayerId)> _staleBuffBaselineKeys = new();
 
     private readonly BattleBandwidthConfig _bandwidthConfig = BattleBandwidthConfig.Current;
     private readonly BattleBandwidthStats _bandwidthStats = new(BattleBandwidthConfig.Current.ReportIntervalFrames);
     private readonly MemoryStreamBuffer _bandwidthMeasureBuffer = new();
+    private readonly BattleRttConfig _rttConfig = BattleRttConfig.FromEnvironment();
+    private readonly IProbeNonceSource _probeNonceSource = CryptoProbeNonceSource.Instance;
+    private readonly IBattleClock _rttClock = SystemBattleClock.Instance;
+    private readonly LeadBoundsParams _leadBoundsParams;
+    private uint _rttProbeFrameCounter;
 
     /// <summary>带宽统计累积器。报告窗口数据从这里读取（含对照基线）。</summary>
     public BattleBandwidthStats BandwidthStats => _bandwidthStats;
@@ -36,6 +46,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     public int HashReportsMatched => _battleLogic.HashReportsMatched;
     public int HashMismatchCount => _battleLogic.HashMismatchCount;
     public int HashNoRecordCount => _battleLogic.HashNoRecordCount;
+    public int LeadOutOfBoundsCount { get; private set; }
 
     private long _nextPlayerId = 1;
     private bool _automationPlayerThresholdObserved;
@@ -48,6 +59,11 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     public BattleComponent()
     {
         _battleLogic.OnBroadcast = BroadcastSnapshot;
+        _leadBoundsParams = new LeadBoundsParams(
+            windowMs: _rttConfig.WindowMs,
+            fixedDeltaMilliseconds: DeterminismRules.FixedDeltaTime * 1000f,
+            maxAcceptedInputBufferFrames: InputBufferTuning.MaxAcceptedInputBufferFrames,
+            maxFutureInputFrames: InputBufferTuning.MaxFutureInputFrames);
     }
 
     public PlayerState Join(Session session)
@@ -67,6 +83,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 existingPlayerSession!.Session = session;
             }
 
+            EnsureRttTracker(session.Id);
             return existingState;
         }
 
@@ -76,6 +93,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
         _sessionsByPlayerId[playerId] = new PlayerSession(playerId, session);
         _playerIdBySessionId[session.Id] = playerId;
+        EnsureRttTracker(session.Id);
 
         return newState;
     }
@@ -92,7 +110,25 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
+        ObserveInputLead(session.Id, playerId, input.FrameIndex);
         _battleLogic.SubmitInput(playerId, input.FrameIndex, input.InputSeq, input.DxRaw, input.DyRaw, input.SkillId);
+    }
+
+    public void SubmitRttProbeAck(Session session, C2B_RttProbeAck ack)
+    {
+        if (!_rttConfig.ProbeEnabled || session == null || ack == null)
+        {
+            return;
+        }
+
+        if (!_playerIdBySessionId.ContainsKey(session.Id))
+        {
+            return;
+        }
+
+        ServerRttTracker tracker = EnsureRttTracker(session.Id);
+        long nowMs = _rttClock.NowMs;
+        tracker.TryRecordAck(ack.ProbeNonce, nowMs, out _);
     }
 
     public void SubmitStateHashReport(Session session, C2B_StateHashReport report)
@@ -114,6 +150,14 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     {
         CleanupDisconnectedPlayers();
         RunAutomationScenario(frameIndex);
+        if (_rttConfig.ProbeEnabled)
+        {
+            long nowMs = _rttClock.NowMs;
+            SendRttProbesIfNeeded(nowMs);
+            CleanupStaleProbes(nowMs);
+            TickRttEnvelopes(nowMs);
+        }
+
         _battleLogic.Tick(frameIndex, fixedDt);
     }
 
@@ -140,6 +184,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 if (sessionId != 0)
                 {
                     _playerIdBySessionId.Remove(sessionId);
+                    _rttTrackersBySessionId.Remove(sessionId);
                     RemoveBuffBroadcastBaselines(sessionId, 0);
                 }
             }
@@ -150,6 +195,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             _battleLogic.RemovePlayer(playerId);
         }
     }
+
 
     private void BroadcastSnapshot(TestSnapshot snapshot)
     {
@@ -176,8 +222,10 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
             S2C_FrameSnapshot frameSnapshot = new S2C_FrameSnapshot
             {
-                FrameIndex = snapshot.FrameIndex
+                FrameIndex = snapshot.FrameIndex,
+                TargetLeadFrames = ResolveTargetLeadFrames(session.Id)
             };
+
             int dirtyAttributeEntries = 0;
             int buffFullSyncEntries = 0;
 
@@ -251,7 +299,11 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             }
 
             session.Send(frameSnapshot);
+
+            // Always push per-session RTT stats (switch-off still reports Enabled=false).
+            session.Send(BuildRttStatsMessage(session.Id, snapshot.FrameIndex));
         }
+
 
         if (_bandwidthStats.TryConsumeReportDue(snapshot.FrameIndex))
         {
@@ -627,5 +679,140 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         public uint BaselineFrameIndex { get; }
         public bool IsFullSync => BattleSnapshotProtocolMapper.IsFullAttributeSnapshot(DirtyMask);
     }
+
+    private ServerRttTracker EnsureRttTracker(long sessionId)
+    {
+        if (_rttTrackersBySessionId.TryGetValue(sessionId, out ServerRttTracker? existing) && existing != null)
+        {
+            return existing;
+        }
+
+        ServerRttTracker tracker = new ServerRttTracker(
+            tightenRateMsPerSec: _rttConfig.TightenRateMsPerSec,
+            envelopeSampleCapEnabled: _rttConfig.EnvelopeSampleCapEnabled);
+        _rttTrackersBySessionId[sessionId] = tracker;
+        return tracker;
+    }
+
+    private void SendRttProbesIfNeeded(long nowMs)
+    {
+        _rttProbeFrameCounter++;
+        if (_rttProbeFrameCounter < _rttConfig.ProbeIntervalFrames)
+        {
+            return;
+        }
+
+        _rttProbeFrameCounter = 0;
+        foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
+        {
+            Session session = pair.Value.Session;
+            if (session == null || session.IsDisposed)
+            {
+                continue;
+            }
+
+            ulong nonce = _probeNonceSource.NextNonce();
+            ServerRttTracker tracker = EnsureRttTracker(session.Id);
+            tracker.RecordProbeSent(nonce, nowMs);
+            session.Send(new S2C_RttProbe { ProbeNonce = nonce });
+        }
+    }
+
+    private void CleanupStaleProbes(long nowMs)
+    {
+        long timeoutMs = _rttConfig.ProbeTimeoutMs;
+        foreach (KeyValuePair<long, ServerRttTracker> pair in _rttTrackersBySessionId)
+        {
+            pair.Value.CleanupStale(nowMs, timeoutMs);
+        }
+    }
+
+    private void TickRttEnvelopes(long nowMs)
+    {
+        foreach (KeyValuePair<long, ServerRttTracker> pair in _rttTrackersBySessionId)
+        {
+            pair.Value.TickEnvelope(nowMs);
+        }
+    }
+
+    private void ObserveInputLead(long sessionId, long playerId, uint claimedFrameIndex)
+    {
+        if (!_rttTrackersBySessionId.TryGetValue(sessionId, out ServerRttTracker? tracker) || tracker == null)
+        {
+            return;
+        }
+
+        LeadBoundsResult result = LeadBoundsCalculator.Evaluate(
+            claimedFrameIndex,
+            _battleLogic.LastFrameIndex,
+            tracker.HasSample,
+            tracker.ControlRttMs,
+            _leadBoundsParams);
+
+        if (!result.IsOutOfBounds)
+        {
+            return;
+        }
+
+        tracker.IncrementLeadOutOfBounds();
+        LeadOutOfBoundsCount++;
+        Log.Warning(
+            $"[Battle][InputLeadOutOfBounds] player={playerId} claimed={claimedFrameIndex} " +
+            $"serverFrame={_battleLogic.LastFrameIndex} observedLead={result.ObservedLead} " +
+            $"upperBound={result.UpperBound} controlRtt={tracker.ControlRttMs:F1}ms " +
+            $"rttEma={tracker.EmaMs:F1}ms rttMin={tracker.MinMs}ms");
+    }
+
+    private uint ResolveTargetLeadFrames(long sessionId)
+    {
+        if (!_rttConfig.ProbeEnabled || !_rttConfig.AuthoritativeLeadEnabled)
+        {
+            return 0u;
+        }
+
+        if (!_rttTrackersBySessionId.TryGetValue(sessionId, out ServerRttTracker? tracker) ||
+            tracker == null ||
+            !tracker.HasSample)
+        {
+            return 0u;
+        }
+
+        return (uint)TargetLeadCalculator.Compute(tracker.ControlRttMs);
+    }
+
+    private S2C_RttStats BuildRttStatsMessage(long sessionId, uint frameIndex)
+    {
+        S2C_RttStats message = new S2C_RttStats
+        {
+            FrameIndex = frameIndex,
+            Enabled = _rttConfig.ProbeEnabled
+        };
+
+        if (!_rttConfig.ProbeEnabled)
+        {
+            message.HasSample = false;
+            message.RttMinMs = 0;
+            message.RttEmaMs = 0;
+            message.ControlRttMs = 0;
+            message.RttSampleCount = 0;
+            message.LeadOutOfBoundsCount = 0;
+            return message;
+        }
+
+        if (!_rttTrackersBySessionId.TryGetValue(sessionId, out ServerRttTracker? tracker) || tracker == null)
+        {
+            return message;
+        }
+
+        message.HasSample = tracker.HasSample;
+        message.RttMinMs = tracker.MinMs;
+        message.RttEmaMs = tracker.EmaMs;
+        message.ControlRttMs = tracker.ControlRttMs;
+        message.RttSampleCount = tracker.SampleCount;
+        message.LeadOutOfBoundsCount = tracker.LeadOutOfBoundsCount;
+        return message;
+    }
+
+
 
 }
