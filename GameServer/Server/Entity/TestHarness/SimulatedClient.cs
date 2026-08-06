@@ -26,7 +26,12 @@ public sealed class SimulatedClient
 
     public void ApplySnapshot(TestSnapshot snapshot)
     {
-        WorldState.RestoreSnapshot(snapshot.ToBattleWorldSnapshot());
+        ApplySnapshot(snapshot.ToBattleWorldSnapshot());
+    }
+
+    public void ApplySnapshot(BattleWorldSnapshot snapshot)
+    {
+        WorldState.RestoreSnapshot(snapshot);
     }
 
     public ulong GetStateHash()

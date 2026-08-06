@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Fantasy.Serialize;
 using FixedMathSharp;
 using GameLogic;
 using GameShared.FrameSync.Battle;
@@ -1055,13 +1056,38 @@ public static class TestRunner
                worldState.TryGetPlayer(rightPlayerId, out rightPlayer);
     }
 
-    private static Harness CreateHarness(int clientCount, Func<int, (Fixed64 x, Fixed64 y)> spawnProvider = null)
+    private static Harness CreateHarness(
+        int clientCount,
+        Func<int, (Fixed64 x, Fixed64 y)> spawnProvider = null,
+        bool roundTripThroughProto = true)
     {
         BattleLogic battleLogic = new BattleLogic();
         List<SimulatedClient> clients = new(clientCount);
 
         battleLogic.OnBroadcast = snapshot =>
         {
+            // 默认过真实 proto 序列化，守住位精确叙事。
+            // 测试通路走全量同步（dirtyMask=All），目标是守精度而不是增量协议。
+            if (roundTripThroughProto)
+            {
+                BattleWorldSnapshot worldSnapshot = snapshot.ToBattleWorldSnapshot();
+                S2C_FrameSnapshot message = BattleSnapshotProtocolMapper.ToFullSyncProto(
+                    worldSnapshot,
+                    playerId => battleLogic.GetLatestAcceptedInputFrame(playerId));
+                EnsureProtoSerializer();
+                byte[] bytes = SerializerManager.ProtoBufHelper.Serialize(typeof(S2C_FrameSnapshot), message);
+                S2C_FrameSnapshot parsed =
+                    (S2C_FrameSnapshot)SerializerManager.ProtoBufHelper.Deserialize(typeof(S2C_FrameSnapshot), bytes);
+                BattleWorldSnapshot restored = BattleSnapshotProtocolMapper.FromFullSyncProto(parsed);
+                for (int i = 0; i < clients.Count; i++)
+                {
+                    clients[i].ApplySnapshot(restored);
+                }
+
+                return;
+            }
+
+            // 仅性能敏感场景可显式关掉；关掉时必须在调用处注释原因。
             for (int i = 0; i < clients.Count; i++)
             {
                 clients[i].ApplySnapshot(snapshot);
@@ -1081,6 +1107,19 @@ public static class TestRunner
         }
 
         return new Harness(battleLogic, clients);
+    }
+
+    private static void EnsureProtoSerializer()
+    {
+        if (SerializerManager.ProtoBufHelper == null)
+        {
+            SerializerManager.Initialize().GetAwaiter().GetResult();
+        }
+
+        if (SerializerManager.ProtoBufHelper == null)
+        {
+            throw new InvalidOperationException("ProtoBuf serializer is not initialized");
+        }
     }
 
     private static bool NearZero(Fixed64 value)
