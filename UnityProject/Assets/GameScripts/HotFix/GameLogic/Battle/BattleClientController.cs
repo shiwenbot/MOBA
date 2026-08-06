@@ -529,12 +529,22 @@ namespace GameLogic
             }
 
             _activePlayers.Clear();
-            foreach (PlayerState player in worldState.Players)
+
+            // 自己：仍从 worldState 取，走 PredictionErrorSmoother。
+            if (worldState.TryGetPlayer(_simulation.SelfPlayerId, out PlayerState selfPlayer))
             {
-                _activePlayers.Add(player.PlayerId);
-                _renderTargetsByPlayerId[player.PlayerId] = new RenderTarget(player.X, player.Y);
-                bool isSelf = player.PlayerId == _simulation.SelfPlayerId;
-                GameObject sphere = GetOrCreateSphere(player.PlayerId, isSelf);
+                _activePlayers.Add(selfPlayer.PlayerId);
+                _renderTargetsByPlayerId[selfPlayer.PlayerId] = new RenderTarget(selfPlayer.X, selfPlayer.Y);
+                GameObject selfSphere = GetOrCreateSphere(selfPlayer.PlayerId, true);
+                selfSphere.SetActive(true);
+            }
+
+            // 别人：从 RemotePlayerBuffer 直取最新权威位置（S10 再做插值）。
+            foreach (PlayerStateSnapshot remote in _simulation.RemotePlayers.Players)
+            {
+                _activePlayers.Add(remote.PlayerId);
+                _renderTargetsByPlayerId[remote.PlayerId] = new RenderTarget(remote.X, remote.Y);
+                GameObject sphere = GetOrCreateSphere(remote.PlayerId, false);
                 sphere.SetActive(true);
             }
 
@@ -680,7 +690,7 @@ namespace GameLogic
                     mergedAttributes,
                     authoritativeBuffs,
                     nextRuntimeBuffId,
-                    BuildNumericSnapshot(player.Numeric, mergedAttributes));
+                    BattleSnapshotProtocolMapper.ReadNumericSnapshot(player.Numeric, mergedAttributes));
                 bodies[i] = BattleSnapshotProtocolMapper.ReadPhysicsBody(player);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
@@ -706,89 +716,14 @@ namespace GameLogic
 
         private static BuffState[] BuildBuffStates(IReadOnlyList<BuffSnapshot> buffs)
         {
-            if (buffs == null || buffs.Count == 0)
-            {
-                return Array.Empty<BuffState>();
-            }
-
-            BuffState[] states = new BuffState[buffs.Count];
-            for (int i = 0; i < buffs.Count; i++)
-            {
-                BuffSnapshot buff = buffs[i];
-                states[i] = new BuffState(
-                    buff.RuntimeBuffId,
-                    buff.BuffId,
-                    buff.CasterId,
-                    buff.TargetId,
-                    buff.StackCount,
-                    buff.RemainingFrames,
-                    buff.AppliedFrame,
-                    (BuffFlags)buff.Flags);
-            }
-
-            return states;
+            return BattleSnapshotProtocolMapper.ReadBuffStates(buffs);
         }
 
         private static BuffSync.BuffChange[] BuildBuffChanges(IReadOnlyList<BuffSnapshot> buffs)
         {
-            if (buffs == null || buffs.Count == 0)
-            {
-                return Array.Empty<BuffSync.BuffChange>();
-            }
-
-            BuffSync.BuffChange[] changes = new BuffSync.BuffChange[buffs.Count];
-            for (int i = 0; i < buffs.Count; i++)
-            {
-                BuffSnapshot buff = buffs[i];
-                BuffDirtyFlags dirtyFlags = (BuffDirtyFlags)buff.DirtyFlags;
-                if (dirtyFlags == BuffDirtyFlags.None)
-                {
-                    dirtyFlags = BuffDirtyFlags.Updated;
-                }
-
-                changes[i] = new BuffSync.BuffChange(
-                    new BuffState(
-                        buff.RuntimeBuffId,
-                        buff.BuffId,
-                        buff.CasterId,
-                        buff.TargetId,
-                        buff.StackCount,
-                        buff.RemainingFrames,
-                        buff.AppliedFrame,
-                        (BuffFlags)buff.Flags),
-                    dirtyFlags);
-            }
-
-            return changes;
+            return BattleSnapshotProtocolMapper.ReadBuffChanges(buffs);
         }
 
-        private static GameShared.FrameSync.Battle.NumericModifierSnapshot BuildNumericSnapshot(Fantasy.NumericSnapshot numeric, PlayerAttributeSnapshot fallbackAttributes)
-        {
-            if (numeric == null)
-            {
-                return GameShared.FrameSync.Battle.NumericModifierSnapshot.FromAttributes(fallbackAttributes);
-            }
-
-            NumericModifier[] modifiers = new NumericModifier[numeric.Modifiers.Count];
-            for (int i = 0; i < numeric.Modifiers.Count; i++)
-            {
-                Fantasy.NumericModifierSnapshot modifier = numeric.Modifiers[i];
-                modifiers[i] = new NumericModifier(
-                    modifier.SourceBuffId,
-                    (ModifierValueType)modifier.ValueType,
-                    (AttributeKind)modifier.AttributeKind,
-                    modifier.Value);
-            }
-
-            return new GameShared.FrameSync.Battle.NumericModifierSnapshot(
-                new PlayerAttributeSnapshot(
-                    numeric.BaseHealth,
-                    numeric.BaseMaxHealth,
-                    numeric.BaseMana,
-                    numeric.BaseMaxMana,
-                    numeric.BaseAttack),
-                modifiers);
-        }
 
         private void ResolveAuthoritativeBuffSnapshot(
             uint frameIndex,
