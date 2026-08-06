@@ -11,8 +11,9 @@ using GameShared.SkillGraph;
 
 namespace GameLogic
 {
-    public static class BattlePredictionSelfTestSuite
+    public static partial class BattlePredictionSelfTestSuite
     {
+
         private const ulong FixedPhysicsExpectedHash = 0xD2120B5F0F5A5FE5UL;
         private const ulong NetworkTestSeed = 0x534E455453494D34UL;
 
@@ -71,7 +72,27 @@ namespace GameLogic
             "remote-player-removal-clears-buffer",
             "clear-world-state-clears-remote-buffer",
             "restore-self-only-keeps-single-body",
-            "multi-snapshot-mixed-consistency-one-tick"
+            "multi-snapshot-mixed-consistency-one-tick",
+            // S7 server-authoritative RTT + lead control
+            "rtt-tracker-ack-roundtrip-measures-latency",
+            "rtt-tracker-window-min-ignores-outlier-spike",
+            "rtt-tracker-stale-probe-cleanup-bounds-table",
+            "rtt-nonce-source-is-unpredictable-and-seeded-is-reproducible",
+            "rtt-control-value-rises-fast-and-falls-slow",
+            "rtt-lead-bounds-region-is-non-empty",
+            "rtt-honest-lead-never-warns",
+            "rtt-no-sample-does-not-warn",
+            "late-input-does-not-count-as-lead-out-of-bounds",
+            "rtt-injected-delay-raises-measured-rtt",
+            "rtt-envelope-cap-prevents-delayed-ack-pollution",
+            "rtt-probe-passes-downlink-gate",
+            "authoritative-target-lead-is-applied-and-clamped",
+            "zero-target-lead-falls-back-to-client-rtt",
+            "target-lead-soft-cap-allows-feedback-transient",
+            "target-lead-decrease-does-not-drop-actual-lead-immediately",
+            "snapshot-target-lead-is-applied-after-downlink-gate",
+            "authoritative-lead-switch-off-clears-stale-target",
+            "target-lead-formula-maps-rtt-to-frames"
         };
 
         public static bool Run(out string failedCase)
@@ -149,6 +170,25 @@ namespace GameLogic
                     "clear-world-state-clears-remote-buffer" => ClearWorldStateClearsRemoteBuffer(),
                     "restore-self-only-keeps-single-body" => RestoreSelfOnlyKeepsSingleBody(),
                     "multi-snapshot-mixed-consistency-one-tick" => MultiSnapshotMixedConsistencyOneTick(),
+                    "rtt-tracker-ack-roundtrip-measures-latency" => RttTrackerAckRoundtripMeasuresLatency(),
+                    "rtt-tracker-window-min-ignores-outlier-spike" => RttTrackerWindowMinIgnoresOutlierSpike(),
+                    "rtt-tracker-stale-probe-cleanup-bounds-table" => RttTrackerStaleProbeCleanupBoundsTable(),
+                    "rtt-nonce-source-is-unpredictable-and-seeded-is-reproducible" => RttNonceSourceIsUnpredictableAndSeededIsReproducible(),
+                    "rtt-control-value-rises-fast-and-falls-slow" => RttControlValueRisesFastAndFallsSlow(),
+                    "rtt-lead-bounds-region-is-non-empty" => RttLeadBoundsRegionIsNonEmpty(),
+                    "rtt-honest-lead-never-warns" => RttHonestLeadNeverWarns(),
+                    "rtt-no-sample-does-not-warn" => RttNoSampleDoesNotWarn(),
+                    "late-input-does-not-count-as-lead-out-of-bounds" => LateInputDoesNotCountAsLeadOutOfBounds(),
+                    "rtt-injected-delay-raises-measured-rtt" => RttInjectedDelayRaisesMeasuredRtt(),
+                    "rtt-envelope-cap-prevents-delayed-ack-pollution" => RttEnvelopeCapPreventsDelayedAckPollution(),
+                    "rtt-probe-passes-downlink-gate" => RttProbePassesDownlinkGate(),
+                    "authoritative-target-lead-is-applied-and-clamped" => AuthoritativeTargetLeadIsAppliedAndClamped(),
+                    "zero-target-lead-falls-back-to-client-rtt" => ZeroTargetLeadFallsBackToClientRtt(),
+                    "target-lead-soft-cap-allows-feedback-transient" => TargetLeadSoftCapAllowsFeedbackTransient(),
+                    "target-lead-decrease-does-not-drop-actual-lead-immediately" => TargetLeadDecreaseDoesNotDropActualLeadImmediately(),
+                    "snapshot-target-lead-is-applied-after-downlink-gate" => SnapshotTargetLeadIsAppliedAfterDownlinkGate(),
+                    "authoritative-lead-switch-off-clears-stale-target" => AuthoritativeLeadSwitchOffClearsStaleTarget(),
+                    "target-lead-formula-maps-rtt-to-frames" => TargetLeadFormulaMapsRttToFrames(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 

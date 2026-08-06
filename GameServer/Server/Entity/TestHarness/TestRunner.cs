@@ -172,6 +172,13 @@ public static class TestRunner
                 checks.Add(RunPredictionSelfCase(TestScenario.NetSimDownlinkLossCorruptsAttributeBaseline));
                 break;
 
+            case TestScenario.TwoClientRttProbe:
+                // Headless stand-in: probe path through gate + measured RTT under injected delay.
+                checks.Add(RunPredictionSelfCase("rtt-injected-delay-raises-measured-rtt"));
+                checks.Add(RunPredictionSelfCase("rtt-probe-passes-downlink-gate"));
+                break;
+
+
             case TestScenario.SkillTriggerBuff:
                 checks.Add(RunSingleCheck("BattleSkillTest", TestScenario.SkillTriggerBuff, SkillTriggerBuff));
                 break;
@@ -1493,6 +1500,8 @@ public static class TestRunner
                 "two-client-weaknet-delay" => TestScenario.TwoClientWeakNetDelay,
                 "two-client-weaknet-uplink-loss" => TestScenario.TwoClientWeakNetUplinkLoss,
                 "two-client-weaknet-downlink-loss" => TestScenario.TwoClientWeakNetDownlinkLoss,
+                "two-client-rtt-probe" => TestScenario.TwoClientRttProbe,
+
                 "skill-trigger-buff" => TestScenario.SkillTriggerBuff,
                 "determinism" => TestScenario.Determinism,
                 "consistency" => TestScenario.Consistency,
@@ -1578,6 +1587,8 @@ public static class TestRunner
         public const string TwoClientWeakNetDelay = "two-client-weaknet-delay";
         public const string TwoClientWeakNetUplinkLoss = "two-client-weaknet-uplink-loss";
         public const string TwoClientWeakNetDownlinkLoss = "two-client-weaknet-downlink-loss";
+        public const string TwoClientRttProbe = "two-client-rtt-probe";
+
         public const string SkillTriggerBuff = "skill-trigger-buff";
         public const string Determinism = "determinism";
         public const string Consistency = "consistency";
