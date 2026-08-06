@@ -3,6 +3,7 @@
 > **状态**：未开始。执行编号 **S7**，见 [00-总索引.md](00-总索引.md)。
 > **前置**：S1~S6 已完成（S5 proto 往返通路、S6 回滚粒度改造均于 2026-08-06 落地）。基线 HEAD `a2b8006a`，行号按此核对。
 > **相关**：[设计教训-两类静默失效.md](设计教训-两类静默失效.md) —— 本阶段的判据设计直接受其约束，**动手前读第一节**。
+> **修订（2026-08-06）**：经独立深度复审修正六处——新增 envelope 单样本上限（决策三边界 4，防延迟 Ack 分钟级污染）、targetLead 公式纯函数化（Step 3b，堵测试绕过真实路径）、时钟回退负值 guard（Step 2）；澄清 peak-hold 语义（决策三）；告警动态失效文档化（决策四）。用例 17 → 19。
 
 ## 本阶段做什么
 
@@ -178,15 +179,17 @@ Ack   上行：过 gate → 100ms
 
 | 方向 | 用哪个估计 | 为什么 |
 |---|---|---|
-| **RTT 升 → 放宽超前量** | **EMA（`alpha=0.2`）立即响应** | 放宽是**安全方向**：宽一点只是多缓冲几帧，代价是输入延迟略增。窄了则输入迟到，服务端复用旧输入、角色卡顿且客户端无从知道原因 |
+| **RTT 升 → 放宽超前量** | **包络对原始样本 peak-hold**（EMA 仅稳态平滑） | 放宽是**安全方向**：宽一点只是多缓冲几帧，代价是输入延迟略增。窄了则输入迟到，服务端复用旧输入、角色卡顿且客户端无从知道原因 |
 | **RTT 降 → 收紧超前量** | **窗口最小值，限速回落** | 收紧是**危险方向**，必须确认延迟真的持续降低了才收。抖动时不跟着抽 |
 
 实现即一个上升快、下降慢的包络：
 
 ```
 controlRttMs = max(emaMs, decayingEnvelope)
-  decayingEnvelope 按不超过 TightenRateMsPerSec 的速率向 minMs 回落
+  decayingEnvelope 对【原始样本】峰值保持（peak-hold），按不超过 TightenRateMsPerSec 的速率向 minMs 回落
 ```
+
+> **上升沿由 envelope 的 peak-hold 驱动，不是 EMA。** EMA（α=0.2）有结构性滞后，5→200ms 要约 5 个样本（1.7s）才逼近；但 envelope peak-hold 让 200ms 的原始样本一到就把 controlRtt 顶到 200，**一个样本就跟上**。若误把「上升沿用 EMA」按字面实现（让 envelope 跟踪 EMA 而非原始样本），验收 `rtt-control-value-rises-fast-and-falls-slow` 会真挂。EMA 只负责稳态平滑与窗口最小值估计。
 
 **下游只消费 `controlRttMs`。** `MinMs` 仍然算、仍然出口，但用途是链路下界估计与诊断（「EMA 与 Min 长期贴近且都很高」是可疑信号）。
 
@@ -208,11 +211,12 @@ controlRttMs = max(emaMs, decayingEnvelope)
 
 代价是探测流量 ×3 —— 每条 `S2C_RttProbe` 只有一个 `uint64`，3Hz 下双向合计约 100 B/s，相对快照流量可忽略。探测表上限 32 条对应约 10 秒未回执，仍然够用。
 
-### 三个必须做的边界
+### 四个必须做的边界
 
 1. **探测表要有上限**（32 条）。客户端不回 Ack 则表单向增长。超限丢弃最旧条目并计数。
 2. **窗口最小值用固定长度环形缓冲**，不要用「历史全局最小值」。全局最小会把一次偶发低延迟样本永久固化成基准。
 3. **`MinMs` 必须随窗口滑动回升**。这是上一条的另一面，用例专守。
+4. **envelope 输入前对单样本设上限（`EnvelopeSampleCapMs`）**。peak-hold 对单样本敏感：一次 5000ms 的延迟 Ack（在 `PROBE_TIMEOUT` 内合法到达）会把 envelope 顶到 5000，按 20ms/s 回落要 **4.1 分钟**才恢复——这期间 targetLead 被 clamp 到 `MaxLeadFrames(20)`（≈667ms 输入延迟），告警上界冲到 88 完全致盲（决策四）。**cap 取 `max(PROBE_TIMEOUT, 2×controlRttMs)`**：保留慢回落防抖目的，把单样本污染的恢复窗口从分钟级压到约 48 秒。EMA 仍吃原始值，保留链路信息。
 
 时间源用 `SystemBattleClock`（`GameShared/FrameSync/Core/IBattleClock.cs`，S4 已建），无头用例注入 `FrameBattleClock`。**不引入新的时钟抽象。**
 
@@ -250,6 +254,16 @@ upperBound = MaxAcceptedInputBufferFrames(6)
 **`LeadBoundsCalculator` 构造时必须断言 `MaxAcceptedInputBufferFrames + toleranceFrames < MaxFutureInputFrames(24)`**，即告警区非空。将来有人调宽 `WindowMs` 到让告警区归零，构造会抛异常而不是静默失效。
 
 > 这条约束的完整推导与教训见 [设计教训-两类静默失效.md](设计教训-两类静默失效.md) 第一节。
+
+### 告警的有效区间（动态 RTT 项）
+
+`upperBound` 的第三项 `ceil(controlRttMs / 2 / FixedDeltaMilliseconds)` 随 controlRtt 线性增长。代入 `FixedDelta=33.33`：**当 `controlRttMs > 667ms` 时 `upperBound ≥ 24`，告警区 `(upperBound, 24]` 归空，告警暂时沉默。**
+
+这是设计上的已知上限，**不修成 clamp**：对 controlRtt 设上限参与告警计算，会把真实跨区高延迟玩家（如 RTT 800ms）的人为压低上界当作正常，反而误报诚实客户端——比原问题更糟。正确处理是：
+
+- 告警**纯观测**（决策四：永不拒收），所以在极端 RTT 下暂时沉默不破坏 gameplay——输入接受区间仍由既有硬闸 `[1, 24]` 完全独占。
+- 真正的根因是 envelope 被单样本污染（决策三边界 4）。**修了 `EnvelopeSampleCapMs`，controlRtt 冲到 667ms 以上的窗口从分钟级压到约 48 秒**，告警沉默期同步收窄。
+- 测试显式覆盖 `controlRtt = 700 / 5000ms`，断言此时告警区为空（记录已知行为，不是隐藏它）。
 
 ### 超前量必须按有符号算
 
@@ -433,16 +447,18 @@ uint32 TargetLeadFrames = <下一个可用字段号>;
 | 成员 | 说明 |
 |---|---|
 | `RecordProbeSent(ulong nonce, long nowMs)` | 记入表，超上限丢最旧并计数 |
-| `bool TryRecordAck(ulong nonce, long nowMs, out long rttMs)` | 命中则算 RTT、更新 EMA 与窗口、移除条目；未命中返回 `false` 并计 `UnknownAckCount` |
+| `bool TryRecordAck(ulong nonce, long nowMs, out long rttMs)` | 命中则算 RTT、更新 EMA 与窗口、移除条目；未命中返回 `false` 并计 `UnknownAckCount`。**时钟回退导致 `nowMs < sentAt`（rtt 为负）时丢弃该样本并计 `ClockBackwardCount`**，照既有 `ProcessPong`（`BattleSimulation.cs:189`）的 `rttMs < 0` return 范式，**不引入新时钟抽象** |
 | `void CleanupStale(long nowMs, long timeoutMs)` | 清理超时未回条目，计 `TimedOutProbeCount` |
 | `bool HasSample` / `float EmaMs` / `long MinMs` / `int SampleCount` | 观测出口 |
-| **`float ControlRttMs`** | **控制出口**：`max(EmaMs, decayingEnvelope)`，包络按 `TightenRateMsPerSec` 向 `MinMs` 限速回落。**下游只用这个值** |
+| **`float ControlRttMs`** | **控制出口**：`max(EmaMs, decayingEnvelope)`。envelope 对**原始样本** peak-hold，按 `TightenRateMsPerSec` 向 `MinMs` 限速回落；**样本进 envelope 前先经 `EnvelopeSampleCapMs` 上限**（决策三边界 4，防单样本污染）。**下游只用这个值** |
 
 `IProbeNonceSource`：`CryptoProbeNonceSource` 用 `RandomNumberGenerator.GetBytes`，`SeededProbeNonceSource` 用 `DeterministicRandom.NextU64()`。
 
 EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便于两侧数值对比。
 
 **包络的时间基准必须来自 `IBattleClock`**，用 `nowMs` 差值 × 速率。不要实现成「每收到一个样本回落固定量」—— 那样探测丢包时回落速率会被动变慢，且无头用例里不可控。
+
+**`EnvelopeSampleCapMs` 的实现**：每个样本 `capped = min(rttMs, max(PROBE_TIMEOUT_MS, 2 × currentControlRttMs))`。EMA 吃原始 `rttMs`（保留链路信息），envelope 吃 `capped`。这样一次 5000ms 的延迟 Ack 不会把 envelope 顶到 5000；而真实持续高延迟（如跨区 800ms）仍能逐步抬高 envelope——因为 `2 × controlRtt` 会随 EMA 跟着涨。
 
 ### Step 3：`LeadBoundsCalculator`
 
@@ -457,8 +473,30 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 返回 `upperBound` 与 `jitterAllowanceFrames`。**必须把算出的上界一起返回**，否则告警无法解释「为什么越界」，排查时只能重算一遍。
 
 **超前量入参必须是有符号的**：签名收 `long observedLead`，或直接收两个帧号并在内部按 `claimed > lastFrame` 门控 + 转 `long` 相减。**不要收 `uint observedLead`** —— 那等于把下溢的机会留给调用方。
-
 参数校验失败**抛异常，不静默 clamp** —— 与 S4 一致，配错参数会让整轮观测无意义。**构造时断言告警区非空**（决策四）。
+
+### Step 3b：`TargetLeadCalculator`（前馈公式纯函数化）
+
+服务端从 `controlRttMs` 算 `targetLeadFrames` 的公式，与客户端 `RefreshBaselineLeadFrames`（`BattleSimulation.cs:635-641`）的 RTT 项完全同构：
+
+```
+targetLeadFrames = clamp(
+    JitterBufferFrames(2) + InputSendSafetyFrames(1)
+    + ceil(controlRttMs / 2 / FixedDeltaMilliseconds),
+    MinLeadFrames(3), MaxLeadFrames(20))
+```
+
+**必须提取成 `GameShared/FrameSync/Network/TargetLeadCalculator.cs` 的纯静态函数**，与 `LeadBoundsCalculator` 并列。理由（与 S4 决策五同构）：`BattleComponent` 不在无头覆盖里（`Entity.csproj` 只链接 `GameShared/**`），若公式内联在 `BattleComponent` 的 per-session 循环里，服务端填错除数、填常量、忘填字段，全部用例照样全绿——这是 [设计教训-两类静默失效.md](设计教训-两类静默失效.md) 的第二类「测试绕过了真实路径」。
+
+纯函数化的代价是零（公式本就无状态），换来的是三档映射可直接断言：
+
+| controlRttMs | ceil(rtt/2/33.33) | targetLeadFrames |
+|---|---|---|
+| 0 | 0 | clamp(3, 3, 20) = **3** |
+| 200 | 3 | clamp(6, 3, 20) = **6** |
+| 400 | 6 | clamp(9, 3, 20) = **9** |
+
+`BattleComponent` 只负责调用它、把返回值填进 `S2C_FrameSnapshot.TargetLeadFrames`。客户端 `RefreshBaselineLeadFrames` 也改为调用同一纯函数（消费下发值时），保证两端口径一致。
 
 ### Step 4：服务端接线
 
@@ -467,11 +505,12 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `BATTLE_RTT_PROBE` | `1` | 总开关。关闭时零开销，连探测都不发 |
-| `BATTLE_RTT_WINDOW_MS` | `200` | 容差窗口 |
+| `BATTLE_RTT_WINDOW_MS` | `200` | 告警**容差**窗口（决策四 upperBound 的 WindowMs），**不是** MinMs 环形缓冲长度（后者是固定 16 样本常量，不可配，见决策三边界 2） |
 | `BATTLE_RTT_PROBE_FRAMES` | `10` | 探测间隔，30Hz 下 3Hz（决策三） |
 | `BATTLE_RTT_PROBE_TIMEOUT_MS` | `5000` | 探测条目超时 |
 | `BATTLE_RTT_TIGHTEN_RATE_MS_PER_SEC` | `20` | RTT 下降时收紧速率。宁大勿小，收太快会在抖动网络里反复抽紧 |
 | `BATTLE_RTT_AUTHORITATIVE_LEAD` | `1` | 关闭时客户端退回自算 RTT |
+| `BATTLE_RTT_ENVELOPE_SAMPLE_CAP` | `1` | 单样本进 envelope 前的上限开关（决策三边界 4）。关时 envelope 吃原始样本；开时按 `max(PROBE_TIMEOUT_MS, 2×controlRtt)` 上限，防延迟 Ack 分钟级污染 |
 
 **不照抄它的饿汉式静态 `Current`**（`BattleBandwidthConfig.cs:15`）—— 做成可变实例便于用例切换与 S10 运行时开关。
 
@@ -480,7 +519,7 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 1. 新增 `Dictionary<long, ServerRttTracker> _rttTrackersBySessionId`，`Join`（`:52`）建、**`CleanupDisconnectedPlayers`（`:119`）清** —— 漏了就是 session 级内存泄漏。该函数已在清 `_playerIdBySessionId` 与 buff 基线，照同一处加。
 2. `Tick`（`:112`）内、`_battleLogic.Tick` 之前发探测与清理过期条目。
 3. `SubmitInput`（`:82-95`）在 `_battleLogic.SubmitInput`（`:94`）之前算上界并告警，**永不拦截**。
-4. `S2C_RttStats` **在 per-session 循环内按各自 tracker 构造**。不能照抄带宽统计的写法 —— 那是 `BattleComponent.cs:266` 构造一次后广播，带宽是全局量所以没问题，**但 RTT 是 per-session 量**，共用一条消息会让两个客户端收到同一份数据，弱网下只给一端注入延迟就完全看不出来。
+4. `S2C_RttStats` **在 per-session 循环内按各自 tracker 构造**，**随快照频率每帧发送**（30Hz，2 客户端约 3KB/s，相对快照流量可忽略；池化 60 次/秒在 Fantasy 池容量内）。不能照抄带宽统计的写法 —— 那是 `BattleComponent.cs:266` 构造一次后广播，带宽是全局量所以没问题，**但 RTT 是 per-session 量**，共用一条消息会让两个客户端收到同一份数据，弱网下只给一端注入延迟就完全看不出来。
 
 ### Step 5：客户端回执与消费
 
@@ -498,7 +537,7 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 
 **注册两处，漏一处静默漏测**：`AllCaseNames`（`:18-57`）+ `RunCase` 的 switch（`:109-116`）。**只追加，不改既有 37 条。**
 
-测量层（10 条）：
+测量层（11 条）：
 
 | 用例 | 断言什么 |
 |---|---|
@@ -506,16 +545,17 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 | `rtt-tracker-window-min-ignores-outlier-spike` | 窗口内注入一次高值，`MinMs` 不受影响；**且旧样本滑出窗口后 `MinMs` 会回升**（守 Step 2 边界 2、3） |
 | `rtt-tracker-stale-probe-cleanup-bounds-table` | 只发不回 64 次，表不超上限，`TimedOutProbeCount > 0`，不抛异常 |
 | `rtt-nonce-source-is-unpredictable-and-seeded-is-reproducible` | `CryptoProbeNonceSource` 连续 1024 个 nonce 无重复且非单调递增；`SeededProbeNonceSource` 同种子两次跑序列逐值相等 |
-| `rtt-control-value-rises-fast-and-falls-slow` | **守决策三**。5ms → 200ms 阶跃：`ControlRttMs` 在两个探测周期内跟上。再回到 5ms：按 `TightenRateMsPerSec` 缓慢回落，**不得一步到位** |
-| `rtt-lead-bounds-region-is-non-empty` | 0 / 200 / 400ms 三档下 `upperBound < MaxFutureInputFrames(24)`；**且告警区归零时构造抛异常** |
+| `rtt-control-value-rises-fast-and-falls-slow` | **守决策三**。5ms → 200ms 阶跃：首个 200ms 样本到达后 `ControlRttMs` 立即 ≥ 200（envelope peak-hold 驱动，**不是 EMA**）。再回到 5ms：按 `TightenRateMsPerSec` 缓慢回落，**不得一步到位** |
+| `rtt-lead-bounds-region-is-non-empty` | 0 / 200 / 400ms 三档下 `upperBound < MaxFutureInputFrames(24)`；**且告警区归零时构造抛异常**。另测 `controlRtt = 700 / 5000ms`：此时 `upperBound ≥ 24`、告警区为空（决策四已记录的已知上限，**不判 FAIL**），断言行为是「不告警」而非崩溃 |
 | `rtt-honest-lead-never-warns` | 闭环稳态 lead `[4,6]` 在三档 RTT 下全部不告警 —— **零误报是硬判据** |
 | `rtt-no-sample-does-not-warn` | 无样本时不告警、不参与上界计算（守决策四那条全线回归风险） |
 | `late-input-does-not-count-as-lead-out-of-bounds` | **守决策四下溢**。`claimed < LastFrameIndex` 与 `claimed == LastFrameIndex == 0` 两种输入，`LeadOutOfBoundsCount` 都不增加 |
 | `rtt-injected-delay-raises-measured-rtt` | **端到端**。经 S4 gate 注入双向各 100ms，测得值落进 `[200, 200 + 2 × FixedDeltaMilliseconds]`（含决策二两帧偏差） |
+| `rtt-envelope-cap-prevents-delayed-ack-pollution` | **守决策三边界 4（Point 5 根因）**。注入一次 5000ms 延迟 Ack（在 `PROBE_TIMEOUT` 内）：cap 生效时 envelope 不超 `max(PROBE_TIMEOUT, 2×controlRtt)`、`ControlRttMs` 约 48 秒回落；关掉 cap 对照确认 envelope 会顶到 5000（4 分钟才恢复） |
 
 `rtt-probe-passes-downlink-gate` 单列，**守决策二**：只注入**下行** 100ms（上行 0），断言测得值 `>= 100`。若探测包没过下行 gate，这条会测出约 0ms 而失败。
 
-超前量语义层（6 条）：
+超前量语义层（7 条）：
 
 | 用例 | 断言什么 |
 |---|---|
@@ -525,8 +565,9 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 | `target-lead-decrease-does-not-drop-actual-lead-immediately` | target 降低时实际 `_leadFrames` 按既有 `LeadDecreaseCooldownSnapshots(6)` 节奏回落，**不瞬跳**（守下限语义，非硬目标） |
 | `snapshot-target-lead-is-applied-after-downlink-gate` | **守决策五消费路径**。注入下行延迟后 target 的生效时刻与快照释放时刻一致；在消息到达时立即应用则失败 |
 | `authoritative-lead-switch-off-clears-stale-target` | 开关由开转关后客户端不残留上一个 target |
+| `target-lead-formula-maps-rtt-to-frames` | **守 Step 3b 桥接（Point 4）**。`TargetLeadCalculator.Compute(controlRtt)` 在 0/200/400ms 下分别返回 3/6/9（见 Step 3b 三档表）。**这条是本阶段核心价值链的纯函数断言**——服务端填错除数/忘填字段会让它失败 |
 
-合计 **17 条**，用例总数 **37 → 54**。
+合计 **19 条**，用例总数 **37 → 56**。
 
 端到端用例照 `netsim-uplink-loss-causes-server-reuse-input`（`:1230-1310`）的 server+client 合成回路写法。**探测发送与 Ack 回执需在用例里手工接线**（`BattleComponent` 不在 `Entity.csproj` 链接列表里），这是分层的直接代价，接受。
 
@@ -548,11 +589,11 @@ report 侧：
 
 ## 验证方式
 
-- **无头**：`--mode=test --scenario=all`，54 条用例（37 + 17）全通过，退出码 `0`
+- **无头**：`--mode=test --scenario=all`，56 条用例（37 + 19）全通过，退出码 `0`
 - **既有基线**：两个哈希未变，37 条既有用例行为不变
 - **确定性扫描**：`--mode=validate --duration-seconds 30 --update-hz 60`，Issues 零
 - **弱网交叉**：`two-client-weaknet-delay` 下测得 RTT 与注入值一致（留两帧余量），诚实客户端零告警
-- **阶跃响应**：运行中把注入延迟 0 → 200ms → 0，上升沿两个探测周期内跟上，下降沿按限速回落
+- **阶跃响应**：运行中把注入延迟 0 → 200ms → 0，上升沿首个样本后 `ControlRttMs` 立即 ≥ 200（peak-hold），下降沿按限速回落
 - **per-session 归因**：只给一端注入延迟时，两个客户端 report 里的 `serverControlRttMs` 必须不同
 - **HUD**：弱网注入时 RTT 与超前量可见变化（录屏素材）
 
@@ -560,17 +601,19 @@ report 侧：
 
 1. 服务端能独立测出每个 session 的 RTT，**协议里不传时间戳**，**挑战值是密码学随机 64 位 nonce**。
 2. **探测包与 Ack 双向都过 gate** —— `rtt-probe-passes-downlink-gate` 通过，只注入下行也能测到延迟。
-3. **控制值升快降慢** —— `rtt-control-value-rises-fast-and-falls-slow` 通过：200ms 阶跃在两个探测周期内跟上，回落按 `TightenRateMsPerSec` 限速。
-4. `ServerRttTracker` / `LeadBoundsCalculator` 零 `UnityEngine` / `Fantasy` 引用，编进服务端参与无头测试。
+3. **控制值升快降慢** —— `rtt-control-value-rises-fast-and-falls-slow` 通过：首个 200ms 样本后 `ControlRttMs` 立即 ≥ 200（envelope peak-hold），回落按 `TightenRateMsPerSec` 限速。
+4. `ServerRttTracker` / `LeadBoundsCalculator` / `TargetLeadCalculator` 零 `UnityEngine` / `Fantasy` 引用，编进服务端参与无头测试。
 5. **37 条既有用例行为与两个哈希基线全部未变。**
 6. `rtt-no-sample-does-not-warn` 通过 —— 无样本不告警，5 个 scenario 不受影响。
 7. `rtt-honest-lead-never-warns` 在 0 / 200 / 400ms 三档全部通过 —— **零误报是硬判据**。
 8. **迟到输入不刷假告警** —— `late-input-does-not-count-as-lead-out-of-bounds` 通过，超前量按有符号算。
-9. **feedforward 项数据源已换成服务端实测 RTT**，语义为**下限 + 软上限**（非硬目标、非硬上限）。六条语义用例全部通过：应用与 clamp、零值退回、软上限容纳闭环瞬态、target 降低不瞬跳、**target 与快照同时生效**、开关关闭不残留旧值。
+9. **feedforward 项数据源已换成服务端实测 RTT**，语义为**下限 + 软上限**（非硬目标、非硬上限）。七条语义用例全部通过：应用与 clamp、零值退回、软上限容纳闭环瞬态、target 降低不瞬跳、**target 与快照同时生效**、开关关闭不残留旧值、**target 公式三档映射（Step 3b）**。
 10. 探测表与 RTT 窗口都有上限；session 断开时 tracker 一并清理。
 11. `S2C_RttStats` **per-session 构造**，两个客户端的观测值可独立归因。
 12. HUD 显示 `controlRtt` / `rttMin` 分离与 `targetLead` / 实际 `leadFrames` 并列。
 13. 能说清测量拦得住什么（伪造时间戳、提前 Ack、伪造 nonce）、拦不住什么（**延迟回 Ack 换更宽超前量**、**沉默即无样本**），以及**为什么不做判定（不可验收，非不重要）**。
+14. **envelope 单样本上限生效** —— `rtt-envelope-cap-prevents-delayed-ack-pollution` 通过：一次 5000ms 延迟 Ack 不把 envelope 顶到 5000，约 48 秒回落；关掉 cap 则顶到 5000、4 分钟才恢复。
+15. **时钟回退不污染** —— `TryRecordAck` 遇 `rtt < 0` 丢弃并计 `ClockBackwardCount`（照 `ProcessPong:189` 范式），**不引入新时钟抽象**。
 
 ## 风险与对策
 
@@ -580,8 +623,10 @@ report 侧：
 | **无 RTT 样本被当成 `rtt=0`** | 5 个 scenario 的 `SimulatedClient` 永不回 Ack，会全线刷告警。必须显式无样本分支（决策四）；`rtt-no-sample-does-not-warn` 专守 |
 | **窗口最小值作控制基准** | 上升沿有结构性滞后（窗口长度 × 探测周期），永久延迟上升后输入持续迟到。用非对称滤波（决策三）；`rtt-control-value-rises-fast-and-falls-slow` 专守 |
 | **包络按「每样本回落固定量」实现** | 探测丢包时回落速率被动变慢，且无头用例不可控。用 `IBattleClock` 的 `nowMs` 差值 × 速率（Step 2） |
+| **envelope peak-hold 被单样本污染** | 一次延迟 Ack（≤PROBE_TIMEOUT）顶高 envelope，按 20ms/s 回落要 4+ 分钟，期间 targetLead 顶满、告警致盲。样本进 envelope 前经 `EnvelopeSampleCapMs = max(PROBE_TIMEOUT, 2×controlRtt)` 上限（决策三边界 4）；`rtt-envelope-cap-prevents-delayed-ack-pollution` 专守 |
 | **`observedLead` 用裸 `uint` 减法** | 迟到输入下溢成巨值，**每个正常迟到输入都刷一条假告警**。只在 `claimed > LastFrameIndex` 时算，转 `long` 做有符号差。照 `IsFutureFrameRejected`（`BattleLogic.cs:556-559`）的符号位范例（决策四） |
 | **上界锚在 `MaxLeadFrames`** | 量纲错（发出时超前量 vs 到达时超前量），告警区会落在既有硬闸 `[1,24]` 之外，机制永不触发。锚在 `MaxAcceptedInputBufferFrames(6)`，构造加非空自检（决策四）。**完整教训见 [设计教训-两类静默失效.md](设计教训-两类静默失效.md)** |
+| **controlRtt > 667ms 致告警区归空** | upperBound 第三项线性增长，超 667ms 后 ≥24，告警沉默。**不 clamp**（会误报诚实高延迟玩家）；告警纯观测不拒收，沉默期 gameplay 仍由硬闸 `[1,24]` 独占；根因靠决策三边界 4 的 cap 收窄（决策四「告警有效区间」） |
 | **target 作硬上限** | 估计器上升沿滞后期间上限被压低 → 输入持续迟到 → 服务端复用旧输入、角色卡顿且客户端无从知道原因。选下限 + 软上限，slack 容纳闭环瞬态（决策五） |
 | **target 作硬目标** | 会废掉 feedback 环，而它消费的服务端缓冲深度比 RTT 前馈更贴近真实需求（决策五） |
 | **声称「控制权已切换到服务端」** | 与代码结构不符：baseline 只是下限，feedback 环随时可突破，且它本来就在消费服务端数据。口径是「feedforward 项换数据源」（决策五） |
@@ -608,14 +653,15 @@ report 侧：
 | `GameShared/FrameSync/Network/ServerRttTracker.cs` | 新建，探测表 + EMA + 窗口最小值 + 非对称包络 |
 | `GameShared/FrameSync/Network/IProbeNonceSource.cs` | 新建，`CryptoProbeNonceSource` / `SeededProbeNonceSource` |
 | `GameShared/FrameSync/Network/LeadBoundsCalculator.cs` | 新建，纯函数算上界 + 告警区非空自检 |
+| `GameShared/FrameSync/Network/TargetLeadCalculator.cs` | 新建，前馈公式纯函数（controlRtt→targetLead），三档映射可测（Step 3b） |
 | `GameShared/FrameSync/Network/BattleNetworkGate.cs` | 加 `TryAcceptRttProbe`（下行）与 `WrapSendRttProbeAck`（上行）。**不改既有 `TryAcceptPong`** |
 | `GameServer/Tools/NetworkProtocol/Outer/OuterMessage.proto` | 末尾追加三条消息 + `S2C_FrameSnapshot.TargetLeadFrames`，跑 `Run.bat` |
-| `GameServer/Server/Entity/Battle/BattleRttConfig.cs` | 新建，六个环境变量 |
+| `GameServer/Server/Entity/Battle/BattleRttConfig.cs` | 新建，七个环境变量（含 `BATTLE_RTT_ENVELOPE_SAMPLE_CAP`） |
 | `GameServer/Server/Entity/Battle/BattleComponent.cs` | `:52` 建 tracker、`:119` 清 tracker、`:112` 发探测与清理、`:82-95` 越界告警、`:167-260` 循环内 per-session 构造统计消息与填 `TargetLeadFrames` |
 | `GameServer/Server/Hotfix/Battle/Handler/C2B_RttProbeAckHandler.cs` | 新建，照 `C2B_StateHashReportHandler.cs` 的三行式 |
 | `GameLogic/Battle/BattleClientController.cs` | `:107-127` 注销两条、`:425-441` 注册两条、`OnRttProbeMessage`（双向过 gate）、`OnRttStatsMessage`、`:457`/`:464` 消费 `TargetLeadFrames`、HUD |
 | `GameLogic/Battle/BattleSimulation.cs` | `RefreshBaselineLeadFrames`（`:589-603`）消费权威值作 baseline，clamp 上界改 `effectiveMaxLead` |
-| `GameLogic/Battle/BattlePredictionSelfTestSuite.cs` | **17** 条用例，只追加；注册两处（`:18` 数组 + `:109` switch） |
+| `GameLogic/Battle/BattlePredictionSelfTestSuite.cs` | **19** 条用例，只追加；注册两处（`:18` 数组 + `:109` switch） |
 | `GameLogic/Battle/Automation/BattleAutomationRuntime.cs` | `:1723` 加三个字段；新场景判据 |
 | `GameServer/Server/Entity/TestHarness/TestRunner.cs` | 新场景名登记三处 |
 | `Tools/AutomationAcceptance/Run-BattleAcceptance.ps1` | 开关参数入 `-CustomArgs` |
@@ -636,11 +682,11 @@ report 侧：
 | 部分 | 估时 |
 |---|---|
 | Step 1 proto + 生成 | 1 小时 |
-| Step 2-3 tracker + 非对称包络 + 上界计算 | 3 小时 |
+| Step 2-3 tracker + 非对称包络 + 上界计算 + Step 3b targetLead 纯函数 | 3.5 小时 |
 | Step 4-5 服务端接线 + 客户端回执 + HUD | 2 小时 |
 | 决策五 `targetLead` 下发与消费（含 gate 释放时序） | 2 小时 |
-| Step 6 十一条测量用例 | 2 小时 |
-| Step 6 六条语义用例 | 2 小时 |
+| Step 6 十二条测量用例 | 2.5 小时 |
+| Step 6 七条语义用例 | 2 小时 |
 | Step 7 回归 + report | 1 小时 |
 
 ## 验收指南
@@ -650,12 +696,12 @@ report 侧：
 必须包含：
 
 1. **测量准确性** —— 三档注入延迟下测得值的期望区间，含两帧偏差的来源说明
-2. **阶跃响应** —— 运行中把注入延迟 0 → 200ms → 0：上升沿两个探测周期内跟上，下降沿按 `TightenRateMsPerSec` 限速。**这条必须实机跑**，无头用例只覆盖纯逻辑层
+2. **阶跃响应** —— 运行中把注入延迟 0 → 200ms → 0：上升沿首个样本后 `ControlRttMs` 立即 ≥ 200（peak-hold），下降沿按 `TightenRateMsPerSec` 限速。**这条必须实机跑**，无头用例只覆盖纯逻辑层
 3. **零误报判据** —— 诚实客户端在 0/200/400ms 下告警必须为零
 4. **「测量确实在跑」的断言清单** —— 总开关未生效时所有判据都会假通过
 5. **per-session 归因验证** —— 只给一端注入延迟时两个客户端观测值必须不同；相同则说明统计消息被广播复用
 6. **无样本语义** —— 5 个 scenario 零告警、`rttSampleCount` 为 0
-7. **抗篡改边界声明** —— 两条已知上限：「延迟回 Ack 换更宽超前量」、「沉默即无样本」。**都是有意取舍，缺 KCP 层测量不判 FAIL**
+7. **抗篡改边界声明** —— 两条已知上限：「延迟回 Ack 换更宽超前量」、「沉默即无样本」。**都是有意取舍，缺 KCP 层测量不判 FAIL**。另声明「**envelope 单样本 cap**」：5000ms 延迟 Ack 经 cap 后约 48 秒恢复（非 4 分钟），但 cap 之上仍可缓慢抬高——这条不判 FAIL
 8. **语义声明** —— 明确写「target 是 feedforward 下限 + 软上限，不是硬目标」，并说明为什么不做硬上限。**验收 agent 不应按「实际 lead 收敛到 target」判 FAIL**
 
 ## 后续衔接
@@ -665,5 +711,5 @@ report 侧：
 - **S9（断线重连）** —— 重连后 session 变更，tracker 必须重建。`Join`（`BattleComponent.cs:61-70`）已有 session 复用分支，S9 要复核 tracker 在那条路径上的处理
 - **lag compensation** —— 本阶段建的服务端 RTT 是它的前置。若将来做命中判定回退，直接消费 `ServerRttTracker.ControlRttMs`
 - **旧计数器归因** —— `LateInputDropCount` / `FutureInputRejectCount` 仍是全局计数不分玩家（`BattleLogic.cs:53-55`）。改它要动确定性内核，刻意不做，记为遗留项
-- **传输层 RTT 测量** —— 要堵住「延迟回 Ack」需在 KCP 层测，服务端 Fantasy 无源码（`Entity.csproj:13`）。换网络库或拿到源码后可重启
+- **传输层 RTT 测量** —— 要堵住「延迟回 Ack」需在 KCP 层测，服务端 Fantasy 无源码（`Entity.csproj:13`）。本阶段的 `EnvelopeSampleCapMs` 把危害从分钟级压到约 48 秒但未根除；换网络库或拿到源码后可重启
 - **判定与拒收** —— 若将来 demo 变成有排名/经济的真实项目，判定就有了校准信号。**恢复前必读 [设计教训-两类静默失效.md](设计教训-两类静默失效.md) 第一节**
