@@ -11,7 +11,6 @@ namespace GameLogic.FrameSync
     public sealed class ClientTickDriver : MonoBehaviour
     {
         private const int MaxCatchUpTicksPerFrame = 8;
-        private const int SnapshotBufferCapacity = 24;
         private const float AheadTimeScale = 0.5f;
 
         [SerializeField]
@@ -23,15 +22,14 @@ namespace GameLogic.FrameSync
         private TickDispatcher _dispatcher;
         private FrameTimerService _timerService;
         private BattleWorldState _worldState;
-        private SnapshotManager _snapshotManager;
         private UnityFrameSyncLogger _logger;
+        private bool _snapshotSelfTestExecuted;
         private uint _targetFrame;
         private bool _hasTargetFrame;
 
         public TickDispatcher Dispatcher => _dispatcher;
         public FrameTimerService TimerService => _timerService;
         public BattleWorldState WorldState => _worldState;
-        public SnapshotManager SnapshotManager => _snapshotManager;
         public IFrameSyncLogger Logger => _logger;
         public bool IsRunning { get; private set; }
 
@@ -132,12 +130,24 @@ namespace GameLogic.FrameSync
 
             _worldState = new BattleWorldState();
             _timerService = new FrameTimerService(timerPriority, _logger);
-            _snapshotManager = new SnapshotManager(
-                _worldState,
-                new SnapshotBuffer<BattleWorldSnapshot>(SnapshotBufferCapacity),
-                timerPriority);
             _dispatcher.Register(_timerService);
-            _dispatcher.Register(_snapshotManager);
+            // SnapshotManager 是 v0.3-arch 留下的孤儿 tickable：LatestHash/RollBack 全仓零消费。
+            // 启动期一次性跑 SnapshotSelfTest，省掉每帧 TakeSnapshot + Hash 的分配。
+            if (!_snapshotSelfTestExecuted)
+            {
+                string failedCase;
+                bool passed = SnapshotSelfTestSuite.Run(out failedCase);
+                if (passed)
+                {
+                    Debug.Log("[SnapshotTest] ALL PASS");
+                }
+                else
+                {
+                    Debug.LogWarning($"[SnapshotTest] FAIL: {failedCase}");
+                }
+
+                _snapshotSelfTestExecuted = true;
+            }
         }
 
         private sealed class UnityFrameSyncLogger : IFrameSyncLogger
