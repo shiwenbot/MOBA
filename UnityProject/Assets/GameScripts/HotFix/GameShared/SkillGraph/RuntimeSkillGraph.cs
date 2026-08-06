@@ -474,6 +474,8 @@ namespace GameShared.SkillGraph
         }
 
         public int PreloadedSkillCount => _graphsBySkillId.Count;
+        public int ActiveExecutionCount => _activeExecutionsByCasterId.Count;
+        public int QueuedSkillRequestCount => _queuedRequests.Count;
 
         public bool HasSkill(int skillId)
         {

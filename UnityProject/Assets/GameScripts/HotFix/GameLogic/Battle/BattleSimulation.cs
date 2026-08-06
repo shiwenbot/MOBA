@@ -25,6 +25,7 @@ namespace GameLogic
         private static readonly float FixedDeltaMilliseconds = DeterminismRules.FixedDeltaTime * 1000f;
 
         private readonly BattleWorldState _worldState;
+        private readonly RemotePlayerBuffer _remotePlayers = new RemotePlayerBuffer();
         private readonly BattleInputSender _onSendInput;
         private readonly Action<ulong> _onSendPing;
         private readonly Action<uint, ulong>? _onSendHashReport;
@@ -134,6 +135,8 @@ namespace GameLogic
         public float RenderErrorOffsetY => _predictionErrorSmoother.OffsetY;
         public float LastPredictionCorrectionMagnitude => _predictionErrorSmoother.LastCorrectionMagnitude;
         public float PredictionSmoothingRemainingSeconds => _predictionErrorSmoother.RemainingSeconds;
+        public RemotePlayerBuffer RemotePlayers => _remotePlayers;
+        public int ActiveSkillExecutionCount => _skillGraphRuntime.ActiveExecutionCount;
 
         public void AdvancePredictionErrorSmoothing(float deltaTime)
         {
@@ -324,7 +327,14 @@ namespace GameLogic
                 return;
             }
 
-            ReconcileAuthoritativeSnapshot(snapshot, _localFrame, DeterminismRules.FixedDeltaTimeFixed64, true, "manual");
+            // 手动入口：强制回滚。
+            ReconcileAuthoritativeSnapshot(
+                snapshot,
+                _localFrame,
+                DeterminismRules.FixedDeltaTimeFixed64,
+                ConsistencyResult.Miss,
+                forceRollback: true,
+                "manual");
         }
 
         public static bool RunSelfTest(out string failedCase)
@@ -358,7 +368,8 @@ namespace GameLogic
                 }
 
                 UpdateLeadFramesFromAcceptedInput(snapshot.FrameIndex, pendingSnapshot.SelfLatestAcceptedInputFrame);
-                bool mismatch = CheckConsistency(snapshot);
+                ConsistencyResult consistencyResult = CheckConsistency(snapshot);
+                bool mismatch = consistencyResult == ConsistencyResult.Miss;
                 consistencyMismatch |= mismatch;
 
                 uint replayTargetFrame = currentFrame;
@@ -375,7 +386,8 @@ namespace GameLogic
                     snapshot,
                     replayTargetFrame,
                     fixedDt,
-                    mismatch,
+                    consistencyResult,
+                    forceRollback: false,
                     mismatch ? "consistency-miss" : string.Empty);
                 snapshotApplied = true;
             }
@@ -397,7 +409,7 @@ namespace GameLogic
             return true;
         }
 
-        private bool CheckConsistency(BattleWorldSnapshot snapshot)
+        private ConsistencyResult CheckConsistency(BattleWorldSnapshot snapshot)
         {
             bool hasAuthoritativeSelf = TryGetAuthoritativeSelf(snapshot, out PlayerStateSnapshot authoritativeSelf);
             bool hasPrediction = _selfPredictions.TryGetValue(snapshot.FrameIndex, out SelfPrediction prediction);
@@ -410,7 +422,7 @@ namespace GameLogic
             if (!hasAuthoritativeSelf || !hasPrediction)
             {
                 _skippedNoRecord++;
-                return false;
+                return ConsistencyResult.NoRecord;
             }
 
             _checked++;
@@ -420,21 +432,19 @@ namespace GameLogic
             if (matched)
             {
                 _hits++;
-            }
-            else
-            {
-                _misses++;
-                Fixed64 deltaX = authoritativeSelf.X - prediction.X;
-                Fixed64 deltaY = authoritativeSelf.Y - prediction.Y;
-                Log.Warning(
-                    $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
-                    $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({(float)deltaX:F4},{(float)deltaY:F4}) " +
-                    $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
-                    $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack}) " +
-                    $"predBuffs={FormatBuffs(prediction.Snapshot.ActiveBuffs)} authBuffs={FormatBuffs(authoritativeSelf.ActiveBuffs)}");
+                return ConsistencyResult.Hit;
             }
 
-            return !matched;
+            _misses++;
+            Fixed64 deltaX = authoritativeSelf.X - prediction.X;
+            Fixed64 deltaY = authoritativeSelf.Y - prediction.Y;
+            Log.Warning(
+                $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
+                $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({(float)deltaX:F4},{(float)deltaY:F4}) " +
+                $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
+                $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack}) " +
+                $"predBuffs={FormatBuffs(prediction.Snapshot.ActiveBuffs)} authBuffs={FormatBuffs(authoritativeSelf.ActiveBuffs)}");
+            return ConsistencyResult.Miss;
         }
 
         private bool TryGetAuthoritativeSelf(BattleWorldSnapshot snapshot, out PlayerStateSnapshot selfSnapshot)
@@ -454,12 +464,10 @@ namespace GameLogic
             return false;
         }
 
-        private void ApplySnapshotToWorldState(BattleWorldSnapshot snapshot)
-        {
-            _worldState.RestoreSnapshot(snapshot);
-        }
-
-        private void ApplyAuthoritativeSnapshot(BattleWorldSnapshot snapshot)
+        private void ApplyAuthoritativeSnapshot(
+            BattleWorldSnapshot snapshot,
+            ConsistencyResult consistencyResult,
+            bool forceRollback)
         {
             if (TryGetAuthoritativeSelf(snapshot, out PlayerStateSnapshot authoritativeSelf))
             {
@@ -473,23 +481,51 @@ namespace GameLogic
             }
 
             _lastAppliedFrame = snapshot.FrameIndex;
-            ApplySnapshotToWorldState(snapshot);
-            _lastPredictedFrame = snapshot.FrameIndex;
+
+            // 别人永远不进 _worldState，只进 RemotePlayerBuffer。
+            _remotePlayers.ApplyAuthoritative(snapshot, _selfPlayerId);
+
+            // Hit：自己预测已与权威一致，保持现状。
+            // Miss / NoRecord / 手动回滚：RestoreSelfOnly 只恢复自己。
+            bool restoreSelf = forceRollback || consistencyResult != ConsistencyResult.Hit;
+            if (restoreSelf)
+            {
+                _worldState.RestoreSelfOnly(snapshot, _selfPlayerId);
+            }
+
+            // 只有真的拨回自己时才回退预测游标 / 清技能。
+            if (restoreSelf)
+            {
+                _lastPredictedFrame = snapshot.FrameIndex;
+                _skillGraphRuntime.Clear();
+            }
+
             RemoveConfirmedInputHistory(snapshot.FrameIndex);
-            _skillGraphRuntime.Clear();
         }
 
         private void ReconcileAuthoritativeSnapshot(
             BattleWorldSnapshot snapshot,
             uint replayTargetFrame,
             Fixed64 fixedDt,
-            bool logRollback,
+            ConsistencyResult consistencyResult,
+            bool forceRollback,
             string rollbackReason)
         {
+            // S3 依赖：权威快照必须先入库，禁止因一致短路吞掉 Save。
             _authoritativeSnapshots.Save(snapshot.FrameIndex, snapshot);
-            ApplyAuthoritativeSnapshot(snapshot);
-            DiscardPredictionsAtOrAfter(snapshot.FrameIndex);
+            ApplyAuthoritativeSnapshot(snapshot, consistencyResult, forceRollback);
 
+            // 一致时保留后续帧预测：同一 tick 内后续快照还要用它们做 CheckConsistency。
+            // 失配/无记录/手动回滚才丢弃 snapshot 帧及之后的预测。
+            bool restoreSelf = forceRollback || consistencyResult != ConsistencyResult.Hit;
+            if (restoreSelf)
+            {
+                DiscardPredictionsAtOrAfter(snapshot.FrameIndex);
+            }
+
+            // logRollback 同时控制日志与回滚重放：true = 失配或强制回滚。
+            // NoRecord 会 RestoreSelfOnly，但不计 rollback、不在此处重放（Tick 末尾 AdvancePredictionTo 补齐）。
+            bool logRollback = forceRollback || consistencyResult == ConsistencyResult.Miss;
             int replayFrames = 0;
             Stopwatch? rollbackTimer = null;
             if (logRollback)
@@ -497,7 +533,8 @@ namespace GameLogic
                 rollbackTimer = Stopwatch.StartNew();
             }
 
-            if (replayTargetFrame > snapshot.FrameIndex)
+            // 一致时跳过重放；正常向前推进仍由 Tick 末尾的 AdvancePredictionTo 负责。
+            if (logRollback && replayTargetFrame > snapshot.FrameIndex)
             {
                 replayFrames = unchecked((int)(replayTargetFrame - snapshot.FrameIndex));
                 AdvancePredictionTo(replayTargetFrame, fixedDt);
@@ -523,6 +560,13 @@ namespace GameLogic
 
             Log.Info(
                 $"[Rollback] reason={rollbackReason} frame={snapshot.FrameIndex} replayTo={replayTargetFrame} replayFrames={replayFrames} elapsedMs={_lastRollbackElapsedMs:F3}");
+        }
+
+        private enum ConsistencyResult
+        {
+            Hit,
+            Miss,
+            NoRecord
         }
 
         private void CapturePredictionErrorAfterReconciliation()
@@ -823,6 +867,7 @@ namespace GameLogic
             }
 
             _stalePlayerIds.Clear();
+            _remotePlayers.Clear();
         }
 
         public void EnqueueApplyBuff(ApplyBuffCommand command)
