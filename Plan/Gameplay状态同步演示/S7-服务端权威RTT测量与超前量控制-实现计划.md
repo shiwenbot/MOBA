@@ -1,7 +1,7 @@
-# S5：服务端权威 RTT 测量与超前量控制 实现计划
+# S7：服务端权威 RTT 测量与超前量控制 实现计划
 
-> **状态**：未开始。执行编号 **S5**，见 [00-总索引.md](00-总索引.md)。
-> **前置**：S1~S4 已完成；**T1（proto 往返通路）应先做**。基线 HEAD `a2b8006a`，行号按此核对。
+> **状态**：未开始。执行编号 **S7**，见 [00-总索引.md](00-总索引.md)。
+> **前置**：S1~S4 已完成；**S5（proto 往返通路）与 S6（回滚粒度改造）应先做**。基线 HEAD `a2b8006a`，行号按此核对。
 > **相关**：[设计教训-两类静默失效.md](设计教训-两类静默失效.md) —— 本阶段的判据设计直接受其约束，**动手前读第一节**。
 
 ## 本阶段做什么
@@ -345,7 +345,7 @@ OnSnapshotMessage
 
 弱网注入时这些值会一起动，是讲 S4 注入能力时最好的配图：注入 200ms → RTT 抬升 → 超前量放宽 → 输入仍被接受。**一屏说完整条因果链。**
 
-面板归属见 S9，本阶段只做最小显示，不做布局打磨。
+面板归属见 S10，本阶段只做最小显示，不做布局打磨。
 
 ## 架构
 
@@ -424,7 +424,7 @@ uint32 TargetLeadFrames = <下一个可用字段号>;
 
 当前最大 opcode 是 `C2B_StateHashReport = 134227735`（`OuterOpcode.cs:21`）。改完跑 `GameServer/Tools/ProtocolExportTool/Run.bat`，一次刷新服务端与客户端四个生成文件。`uint64` 在本 proto 已有先例（`C2B_Ping.SendTimestampMs`、`C2B_StateHashReport.StateHash`）。
 
-> **T1 必须先做**：T1 让 37 条用例全部走 proto 往返，本步新增的 `TargetLeadFrames` 才会被自动覆盖。顺序反了，这个字段就是又一个未被测到的字段。
+> **S5 必须先做**：S5 让 37 条用例全部走 proto 往返，本步新增的 `TargetLeadFrames` 才会被自动覆盖。顺序反了，这个字段就是又一个未被测到的字段。
 
 ### Step 2：`ServerRttTracker` 与 nonce 源
 
@@ -473,7 +473,7 @@ EMA 口径与客户端一致（`alpha = 0.2`，首个样本直接赋值），便
 | `BATTLE_RTT_TIGHTEN_RATE_MS_PER_SEC` | `20` | RTT 下降时收紧速率。宁大勿小，收太快会在抖动网络里反复抽紧 |
 | `BATTLE_RTT_AUTHORITATIVE_LEAD` | `1` | 关闭时客户端退回自算 RTT |
 
-**不照抄它的饿汉式静态 `Current`**（`BattleBandwidthConfig.cs:15`）—— 做成可变实例便于用例切换与 S9 运行时开关。
+**不照抄它的饿汉式静态 `Current`**（`BattleBandwidthConfig.cs:15`）—— 做成可变实例便于用例切换与 S10 运行时开关。
 
 `BattleComponent` 改动：
 
@@ -598,7 +598,7 @@ report 侧：
 | **新场景名只登记一处** | `--scenario=all` 假 PASS。三处都要登记 |
 | 客户端 handler 漏注销 | 场景重入时重复注册。`:114` 附近一并加 |
 | 参数校验静默 clamp | 配错参数让整轮观测无意义。校验失败抛异常 |
-| 沿用饿汉式静态 `Current` | S9 要运行时切换，做成可变实例省一次返工 |
+| 沿用饿汉式静态 `Current` | S10 要运行时切换，做成可变实例省一次返工 |
 | 服务端运行中报 `MSB3027` | 先停服务端，或只 build `Entity.csproj` |
 
 ## 相关实现文件
@@ -660,9 +660,9 @@ report 侧：
 
 ## 后续衔接
 
-- **S6（跳过重放）** —— 与本阶段无耦合。验收标准三条并列（性能 + `HashNoRecordCount` 仍为 0 + 哈希一致率不变），见总索引
-- **S7（击退）** —— 击退是服务端权威，不经输入通路，本阶段不影响它
-- **S8（断线重连）** —— 重连后 session 变更，tracker 必须重建。`Join`（`BattleComponent.cs:61-70`）已有 session 复用分支，S8 要复核 tracker 在那条路径上的处理
+- **S6（回滚粒度改造）** —— **执行顺序在本阶段之前**。与本阶段无耦合，但**先做 S6 有一个好处**：S6 之后重放只涉及自己，本阶段调 `targetLeadFrames` 时「重放多少帧」的成本模型更干净。见 [S6 计划](S6-回滚粒度改造-别人不参与回滚-实现计划.md)
+- **S8（击退）** —— 击退是服务端权威，不经输入通路，本阶段不影响它
+- **S9（断线重连）** —— 重连后 session 变更，tracker 必须重建。`Join`（`BattleComponent.cs:61-70`）已有 session 复用分支，S9 要复核 tracker 在那条路径上的处理
 - **lag compensation** —— 本阶段建的服务端 RTT 是它的前置。若将来做命中判定回退，直接消费 `ServerRttTracker.ControlRttMs`
 - **旧计数器归因** —— `LateInputDropCount` / `FutureInputRejectCount` 仍是全局计数不分玩家（`BattleLogic.cs:53-55`）。改它要动确定性内核，刻意不做，记为遗留项
 - **传输层 RTT 测量** —— 要堵住「延迟回 Ack」需在 KCP 层测，服务端 Fantasy 无源码（`Entity.csproj:13`）。换网络库或拿到源码后可重启
