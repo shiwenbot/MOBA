@@ -80,6 +80,23 @@ namespace GameShared.FrameSync.Battle
                 dy * DeterminismRules.MoveSpeed);
         }
 
+        public void SetBodyKinematicObstacle(int bodyId, bool isKinematicObstacle)
+        {
+            EnsureBody(bodyId, Fixed64.Zero, Fixed64.Zero);
+            FixedPhysicsBody body = _bodies[bodyId];
+            body.IsKinematicObstacle = isKinematicObstacle;
+            if (isKinematicObstacle)
+            {
+                body.LinearVelocityX = Fixed64.Zero;
+                body.LinearVelocityY = Fixed64.Zero;
+                body.AngularVelocity = Fixed64.Zero;
+                _pendingLinearVelocities.Remove(bodyId);
+                _pendingImpulses.Remove(bodyId);
+            }
+
+            _bodies[bodyId] = body;
+        }
+
         public void ApplyBodyImpulse(int bodyId, Fixed64 impulseX, Fixed64 impulseY)
         {
             EnsureBody(bodyId, Fixed64.Zero, Fixed64.Zero);
@@ -99,14 +116,19 @@ namespace GameShared.FrameSync.Battle
             for (int i = 0; i < _sortedBodyIdsBuffer.Count; i++)
             {
                 int bodyId = _sortedBodyIdsBuffer[i];
+                FixedPhysicsBody body = _bodies[bodyId];
                 FixedPhysicsVector inputVelocity = GetRequestedVelocity(bodyId, _pendingLinearVelocities);
                 FixedPhysicsVector impulse = GetPendingImpulse(bodyId);
                 FixedPhysicsVector requestedVelocity = new FixedPhysicsVector(
                     inputVelocity.X + impulse.X,
                     inputVelocity.Y + impulse.Y);
+                if (body.IsKinematicObstacle)
+                {
+                    requestedVelocity = FixedPhysicsVector.Zero;
+                }
+
                 requestedVelocities[bodyId] = requestedVelocity;
 
-                FixedPhysicsBody body = _bodies[bodyId];
                 body.LinearVelocityX = requestedVelocity.X;
                 body.LinearVelocityY = requestedVelocity.Y;
                 body.AngularVelocity = Fixed64.Zero;
@@ -145,23 +167,31 @@ namespace GameShared.FrameSync.Battle
 
         public PhysicsWorldSnapshot TakeSnapshot()
         {
-            PhysicsBodySnapshot[] bodies = new PhysicsBodySnapshot[_bodies.Count];
-            int index = 0;
+            List<PhysicsBodySnapshot> bodies = new List<PhysicsBodySnapshot>(_bodies.Count);
+            HashSet<int> snapshotBodyIds = new HashSet<int>();
             foreach (KeyValuePair<int, FixedPhysicsBody> pair in _bodies)
             {
-                bodies[index++] = pair.Value.ToSnapshot(pair.Key);
+                if (pair.Value.IsKinematicObstacle)
+                {
+                    continue;
+                }
+
+                bodies.Add(pair.Value.ToSnapshot(pair.Key));
+                snapshotBodyIds.Add(pair.Key);
             }
 
-            Array.Sort(bodies, PhysicsBodySnapshotComparer.Instance);
+            bodies.Sort(PhysicsBodySnapshotComparer.Instance);
 
-            PhysicsContactSnapshot[] contacts = new PhysicsContactSnapshot[_occupancyContacts.Count];
-            index = 0;
+            List<PhysicsContactSnapshot> contacts = new List<PhysicsContactSnapshot>(_occupancyContacts.Count);
             foreach (PhysicsContactSnapshot contact in _occupancyContacts.Values)
             {
-                contacts[index++] = contact;
+                if (snapshotBodyIds.Contains(contact.BodyAId) && snapshotBodyIds.Contains(contact.BodyBId))
+                {
+                    contacts.Add(contact);
+                }
             }
 
-            Array.Sort(contacts, PhysicsContactSnapshotComparer.Instance);
+            contacts.Sort(PhysicsContactSnapshotComparer.Instance);
             return new PhysicsWorldSnapshot(bodies, contacts);
         }
 
@@ -358,33 +388,24 @@ namespace GameShared.FrameSync.Battle
             out Fixed64 normalX,
             out Fixed64 normalY)
         {
-            if (distanceSquared > OccupancyEpsilon)
-            {
-                Fixed64 inverseDistance = Fixed64.One / FixedMath.Sqrt(distanceSquared);
-                normalX = deltaX * inverseDistance;
-                normalY = deltaY * inverseDistance;
-                return;
-            }
-
             FixedPhysicsVector requestedVelocityA = GetRequestedVelocity(bodyAId, requestedVelocities);
             FixedPhysicsVector requestedVelocityB = GetRequestedVelocity(bodyBId, requestedVelocities);
-            Fixed64 relativeVelocityX = requestedVelocityA.X - requestedVelocityB.X;
-            Fixed64 relativeVelocityY = requestedVelocityA.Y - requestedVelocityB.Y;
-            Fixed64 relativeVelocitySquared =
-                (relativeVelocityX * relativeVelocityX) + (relativeVelocityY * relativeVelocityY);
-            if (relativeVelocitySquared > OccupancyEpsilon)
-            {
-                Fixed64 inverseLength = Fixed64.One / FixedMath.Sqrt(relativeVelocitySquared);
-                normalX = relativeVelocityX * inverseLength;
-                normalY = relativeVelocityY * inverseLength;
-                return;
-            }
-
-            normalX = bodyAId <= bodyBId ? Fixed64.One : -Fixed64.One;
-            normalY = Fixed64.Zero;
+            SeparationNormalResolver.Resolve(
+                bodyAId,
+                bodyBId,
+                deltaX,
+                deltaY,
+                distanceSquared,
+                requestedVelocityA.X,
+                requestedVelocityA.Y,
+                requestedVelocityB.X,
+                requestedVelocityB.Y,
+                true,
+                out normalX,
+                out normalY);
         }
 
-        private static void CalculateSeparationShares(
+        private void CalculateSeparationShares(
             int bodyAId,
             int bodyBId,
             Fixed64 normalX,
@@ -394,6 +415,24 @@ namespace GameShared.FrameSync.Battle
             out Fixed64 moveBodyA,
             out Fixed64 moveBodyB)
         {
+            bool bodyAKinematic = _bodies.TryGetValue(bodyAId, out FixedPhysicsBody bodyA) &&
+                                  bodyA.IsKinematicObstacle;
+            bool bodyBKinematic = _bodies.TryGetValue(bodyBId, out FixedPhysicsBody bodyB) &&
+                                  bodyB.IsKinematicObstacle;
+            if (bodyAKinematic || bodyBKinematic)
+            {
+                if (bodyAKinematic && bodyBKinematic)
+                {
+                    moveBodyA = Fixed64.Zero;
+                    moveBodyB = Fixed64.Zero;
+                    return;
+                }
+
+                moveBodyA = bodyAKinematic ? Fixed64.Zero : penetration;
+                moveBodyB = bodyBKinematic ? Fixed64.Zero : penetration;
+                return;
+            }
+
             Fixed64 bodyATowardIntent = GetTowardIntent(bodyAId, normalX, normalY, requestedVelocities);
             Fixed64 bodyBTowardIntent = GetTowardIntent(bodyBId, -normalX, -normalY, requestedVelocities);
             bool bodyAPushing = bodyATowardIntent > MovementIntentEpsilon;

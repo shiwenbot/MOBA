@@ -309,6 +309,11 @@ namespace GameLogic
                 global::TEngine.Log.Info($"[SkillGraph][StepB][Smoke] {message}");
             }
 
+            public bool TryConsumeStamina(long playerId, int amount)
+            {
+                return true;
+            }
+
             public FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)
             {
                 return FTask<bool>.FromResult(true);

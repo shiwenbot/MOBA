@@ -1,73 +1,59 @@
 # S8：Dash / 体力 / Recover / 撞击击退 实现计划
 
-> **状态**：未开始。执行编号 **S8**，见 [00-总索引.md](00-总索引.md)。对应 Timeline 的 **P2**。
-> **前置**：S1（误差平滑，击退误差靠它吸收）必须已完成 —— 已于 2026-08-04 落地。S7 正在施工中，本阶段用例基数须在 S7 落地后重数。
-> **相关**：[设计教训-两类静默失效.md](设计教训-两类静默失效.md) —— 本阶段新增两个状态机与一条服务端权威通路，**动手前读第一节**。
-> **行号约定**：S7 正在改 `BattleSimulation.cs` / `BattleClientController.cs` / `BattleComponent.cs`，本文所引行号会漂。**关键位置一律按方法名定位，动手前重核。**
-> **修订（2026-08-06，独立复审）**：经代码核实修正六处，用例 21 → 26，估时 3-4 天 → 4-4.5 天。两处阻断级：**体力必须是两个 `AttributeKind`**（`MaxStamina` 无 kind 则无法独立重算，「Buff 提升上限」落空）、**`NumericSnapshot` 的两个体力 base 必须协议化**（漏则 `RestoreRuntimeState` 里紧跟的 `Recalculate` 当场把体力算成 0）。四处高风险：**`Decay` 必须紧跟 `Apply`**（排在触发后则首帧速度从未参与积分）、**`resetVelocity` 不等于只读**（需显式 `IsKinematicObstacle`）、**`DetermineSeparationNormal` 是 private 需抽出**（否则只能复制，违反本计划自己的约束）、**Dash 按键须走既有 `InputBuffer`**（否则丢按键或长按连发）。另修正验收口径为固定场景定量阈值，并更正「零输入常量方向」的理由（是确定性要求，非抗丢包）。
+> **状态**：已完成（2026-08-07）。实现、编译与无头验收均通过；按本次验收口径不执行 Unity 实机、双客户端或画面测试。执行编号 **S8**，见 [00-总索引.md](00-总索引.md)。对应 Timeline 的 **P2**。
+> **前置**：S1（误差平滑）已完成（2026-08-04），S7 已完成（2026-08-07）；S8 在其 73 条预测用例基线上新增 33 条，总数为 106。
+> **相关**：[设计教训-两类静默失效.md](设计教训-两类静默失效.md) —— 新增位移 effect 通道与 SkillGraph 快照通路，**动手前读第一节**。
+> **行号约定**：实现期间相关文件持续演进，本文所引行号可能漂移；关键位置一律按方法名定位。
+
+> **设计动机**：Dash/击退走 SkillGraph + Buff。参考项目 NKGMobaBasedOnET 并未真正解决技能图可回滚（靠服务器权威 Delta 兜底，行为树执行态不快照、回滚不回写）；WeDoBest 走全量快照路线，故 SkillGraph 执行态必须真正进快照。调研依据见文末**附录 A**。
 
 ## 本阶段做什么
 
-把 demo 从「同步 Transform」升级为「同步 Gameplay 行为状态」，并给出一个明确标注「故意不预测」的对照项。
+把 demo 从「同步 Transform」升级为「同步 Gameplay 行为状态」，并给出一个明确标注「故意不预测」的对照项。四件事：
 
-四件事：
-
-1. **Dash** —— Shift 触发，消耗体力，起手帧锁定方向，若干帧内高速位移。**全程客户端预测。**
-2. **体力** —— 按逻辑帧恢复，不足则无法 Dash。**全程客户端预测。**
-3. **Recover** —— Dash 结束后进入硬直，期间禁止再次 Dash。**全程客户端预测。**
-4. **撞击击退** —— 两球相撞由服务端权威裁决。**触发不预测，演化照常预测**（决策三，与 Timeline 原表述有出入，见该决策）。
+1. **Dash** —— Shift 触发，走 SkillGraph，消耗体力，起手帧锁定方向，若干帧内高速位移。**全程客户端预测。** 载体：技能图触发 + Buff 承载持续效果。
+2. **体力** —— 按逻辑帧恢复，不足则无法 Dash。**全程客户端预测。** 载体：属性系统（与技能图/Buff 正交）。
+3. **Recover** —— Dash 结束后进入硬直，期间禁止再次 Dash。**全程客户端预测。** 载体：一个禁用 Buff（技能图条件节点检查）。
+4. **撞击击退** —— **Dash 撞人**触发，服务端权威裁决击退方向。**触发不预测，演化照常预测**（决策三）。载体：击退 Buff + 位移 effect。冲撞让 Dash（预测）与击退（不预测）两个对照在一次操作里衔接。
 
 前三项演示「能预测就预测」，第四项演示「不该预测的别预测」。**本阶段是 S1~S11 里唯一的玩法增量**，也是 S11 录屏的主要素材来源。
 
 ## Context
 
-以下事实均已在当前工作区逐条核对。**其中前两条推翻了既有文档的表述。**
+以下事实均已在当前工作区逐条核对。**前两条推翻了既有文档的表述。**
 
 ### 玩家间碰撞一直在跑 —— S6 决策六的前提是错的
 
-S6 决策六写着「S2 拆掉 Box2D 后 `FrameSyncPhysicsWorld` 只做定点积分，玩家之间无碰撞」。**这条不成立。**
+`FrameSyncPhysicsWorld.cs` 现含 `ResolvePlayerOccupancy`（圆-圆穿透分离，4 次迭代）、`RebuildOccupancyContacts`（每帧重建接触对）、`MinimumPlayerSeparation = 0.9`。它从 v0.4a 就在，S2 重写时被保留。
 
-`FrameSyncPhysicsWorld.cs` 现为 **555 行**（S2 计划称缩到 102 行，该数字已过期），其中包含：
+真实后果是 S6 引入了一处不对称：**服务端** `BattleLogic` 持有全部 body，分离正常跑；**客户端** S6 后 `_worldState` 只剩自己，`_bodies.Count == 1`，该函数在 `_sortedBodyIdsBuffer.Count <= 1` 处直接早退。于是两球接触期间客户端预测「能走过去」、服务端推回来，每帧失配、每帧回滚。S8 的击退演示必然让两球接触，**这是本阶段必须处理的既有缺口**（决策五）。
 
-| 成员 | 作用 |
-|---|---|
-| `ResolvePlayerOccupancy` | 圆-圆穿透分离，4 次迭代，按移动意图分配分离量 |
-| `RebuildOccupancyContacts` | 每帧重建接触对，进 `PhysicsWorldSnapshot.Contacts` |
-| `MinimumPlayerSeparation` | `PlayerRadius × 2 = 0.9` |
+### `ApplyBodyImpulse` 已存在，语义是当帧速度增量
 
-`git log -S "ResolvePlayerOccupancy"` 只有一条命中：`f71857a9`（v0.4a Box2D 接入）。**即它从 v0.4a 就在，S2 重写时被保留** —— S2 拆掉的是 Box2D 求解器，不是玩家间分离。
+`FrameSyncPhysicsWorld.ApplyBodyImpulse(bodyId, impulseX, impulseY)`（`FrameSyncPhysicsWorld.cs:83`）把 `_pendingImpulses` 与移动输入相加写进 `LinearVelocity`，末尾 `_pendingImpulses.Clear()`。它是「本帧额外速度」入口，**正好复用**为位移 effect 的物理出口，物理层保持无状态。持续状态全在 gameplay 层（`PlayerState` + 快照），每帧重新喂。
 
-**真实后果是 S6 引入了一处不对称，而 S6 计划因为前提错误没有预见它**：
+### SkillGraph 执行态可快照，但容器级未接通（前置 B）
 
-- **服务端** `BattleLogic` 持有全部玩家的 body，`ResolvePlayerOccupancy` 正常跑，重叠的两球被推开
-- **客户端** S6 后 `_worldState` 只剩自己，`_bodies.Count == 1`，该函数在 `_sortedBodyIdsBuffer.Count <= 1` 处直接早退
+`SkillGraphRunner` **已有完整快照读写**：
+- `GetSnapshot()`（`SkillGraphRunner.cs:564`）→ `SkillExecutionSnapshot`（currentNodeId/status/executedSteps/frameIndex/blackboard/delayRemainingFrames）
+- `Restore(SkillExecutionSnapshot)`（`:584`）→ 全部回写
+- `SkillBlackboard.CaptureSnapshot()/RestoreSnapshot()` 已实现
 
-于是两球接触期间，客户端预测「能走过去」、服务端把它推回来，**每帧失配、每帧回滚**。单人 demo 与当前 5 个 scenario 都看不见（没有两球贴身场景），但 S8 的击退演示必然让两球接触。**这是本阶段必须处理的既有缺口，不是本阶段引入的**，见决策五。
+但 `BattleSkillGraphRuntime`（`RuntimeSkillGraph.cs:455`）执行容器**只有 `Clear()`（:548），无 Capture/Restore**。客户端回滚时整体清空，技能执行态凭空丢失。**前置 B 把 runner 快照接到容器级 → PlayerState → 哈希/协议/回滚。** 这是 Dash 能挂 SkillGraph 的前提。
 
-### `ApplyBodyImpulse` 已存在但生产零调用，且语义只够单帧
+### Buff 系统只支持属性修饰，不支持位移（前置 A）
 
-`FrameSyncPhysicsWorld.ApplyBodyImpulse` 与 `IPhysicsMovementWorld` 上的声明都在，但全仓生产调用为零 —— 唯二命中是 `BattlePredictionSelfTestSuite` 与 `SnapshotSelfTestSuite` 的桩。
+`BuffEffect` 是 `readonly struct`，仅 `AttributeKind/ValueType/Value`；`AttributeKind` 只有 `Health/MaxHealth/Mana/MaxMana/Attack`；`ApplyBuffEffects`（`BuffSystem.cs:294-302`）唯一出口 `target.Numeric.AddModifier(...)`。`ModifierValueType` 仅 `Flat/Percent`。
 
-它的语义是**当帧速度增量**：`Step` 把 `_pendingImpulses` 与移动输入相加写进 `LinearVelocity`，**末尾 `_pendingImpulses.Clear()`**。
+**属性修饰器是「恒定值持续生效」，击退/Dash 需要「每帧衰减的位移」—— 模型不匹配。** 不能把位移塞进 Numeric 管线（衰减难表达、污染 Numeric 快照）。**前置 A 新增 `DisplacementEffect` 通道**，Dash 与击退共用。
 
-两个直接推论：
+### 挂 Buff 的技能图节点 handler 已就绪
 
-1. **它承载不了跨帧击退** —— 下一帧就没了。
-2. **它不进快照** —— 回滚重放时凭空丢失。
-
-所以击退的**持续状态必须放 gameplay 层**（`PlayerState` + 快照），每帧由 gameplay 重新喂给物理。`ApplyBodyImpulse` 作为「本帧额外速度」的入口**正好可以复用**，不需要新增物理 API —— 它和移动输入相加的行为就是击退需要的语义，物理层保持无状态。
-
-### SkillGraph 的运行时状态不进快照
-
-`BattleLogic.SubmitInput` 已带 `skillId` 参数（`C2B_PlayerInput.SkillId = 5` 也已在协议里），`QueueSkillRequests` → `_skillGraphRuntime.QueueSkillRequest` 通路是通的。**但 `BattleSkillGraphRuntime`（`GameShared/SkillGraph/RuntimeSkillGraph.cs:455`）的 `_activeExecutionsByCasterId` 没有任何 Capture / Restore 方法**，客户端回滚时只能整体 `Clear()`（`ApplyAuthoritativeSnapshot` 里就是这么做的）。
-
-这违反 Timeline 技术约束 3：「进入预测链路的状态必须纳入快照、哈希、一致性检查、历史缓存和回滚重播」。**所以 Dash 不能挂 SkillGraph**，见决策一。这与 Timeline 把它定为 `PredictableAction`「不命名为技能」的原意一致。
+`SkillHandlers.cs` 的 `ApplyBuffNodeHandler`（:93）、`RemoveBuffNodeHandler`（:121）、`BuffConditionNodeHandler`（:145）已写好并在 `RegisterDefaults` 注册，通过 `context.BuffCommandSink.EnqueueApplyBuff` 挂 Buff。`BattleSkillGraphRuntime` 持有 `IBuffCommandSink`（`RuntimeSkillGraph.cs:462`）并注入 `SkillContext`（:600）。**Dash 技能图挂 Buff 无需补 handler，只需新增 Buff 配置数据。**
 
 ### 属性系统现状：5 项，体力需要新增
 
-`AttributeKind`（`NumericModifier.cs:9-16`）只有 `Health` / `MaxHealth` / `Mana` / `MaxMana` / `Attack`；`PlayerAttributeDirtyFlags` 对应 5 个 bit，`All` 是这 5 位的并。
-
-`Mana` / `MaxMana` 已在协议、脏同步、哈希、Numeric 修饰器全通路上跑，**但 gameplay 没有任何消费方** —— 体力可以复用它，也可以新增第 6 项。见决策二。
+`AttributeKind`（`NumericModifier.cs`）只有 `Health/MaxHealth/Mana/MaxMana/Attack`。体力新增 `Stamina=6`、`MaxStamina=7` 两个 kind（决策二）。
 
 ### 一致性比较与哈希的覆盖范围不同，新字段要加两处
 
@@ -76,668 +62,668 @@ S6 决策六写着「S2 拆掉 Box2D 后 `FrameSyncPhysicsWorld` 只做定点积
 | `ArePlayerSnapshotsEquivalent` | 位置、5 个属性、`NextRuntimeBuffId`、Buff 列表、Numeric 修饰器。**不含 `PhysicsSnapshot`** |
 | `StateHasher.Hash` | 上述玩家字段 **+ `PhysicsSnapshot`** 的 body 位置/速度/角速度/旋转/两个 bool + 接触对 |
 
-**任何新增字段必须同时进这两处。** 漏 `ArePlayerSnapshotsEquivalent` → 该字段失配不触发回滚；漏 `StateHasher` → S3 哈希对账放过该字段的错误。两处各配专项用例。
+任何新增字段必须同时进这两处。漏前者 → 该字段失配不触发回滚；漏后者 → S3 哈希对账放过该字段错误。
 
 ### 平滑阈值与击退距离的硬约束
 
-`PredictionErrorSmoother`：`SmoothingDurationSeconds = 0.12f`、`MaxSmoothingDistance = 6.0f`，`magnitude > MaxSmoothingDistance` 走硬跳。
+`PredictionErrorSmoother`：`SmoothingDurationSeconds = 0.12f`、`MaxSmoothingDistance = 6.0f`，超限走硬跳。`MaxSmoothingDistance` 必须大于单次击退最大瞬时偏差（决策四）。
 
-房间与运动参数：`RoomHalfWidth = 12`、`RoomHalfHeight = 8`、`PlayerRadius = 0.45`、`DeterminismRules.MoveSpeed = 5`。
+## 前置任务
 
-**`MaxSmoothingDistance` 必须大于单次击退造成的最大瞬时预测偏差**，否则击退走硬跳，毁掉 S1 的并排对比演示。这是 Timeline P2 的「反向约束」，本阶段必须显式验算，见决策四。
+两个前置必须先做，是 Dash/击退的关键路径。
 
-### 用例基数
+### 前置 A：位移 effect 通道（Buff 系统扩展）
 
-当前 `AllCaseNames` 实际 **54 条**（与 S6 计划一致）。
+现有 Buff 只能做属性修饰。新增一个与属性修饰并列的 effect 通道，承载 Dash/击退的「每帧衰减位移」。设计（乙路径）：
 
-> **S7 计划里「37 → 56」的 37 是 S5/S6 之前的旧基数**，已于本次一并修正为 54。故 **S7 落地后应为 73 条**，本阶段在 73 上追加。**动手前重数一遍，不要沿用任何文档里的数字。**
+- `BuffConfig` 新增 `DisplacementEffect?`（初始速度 `VelX/VelY`、衰减比 `DecayNumerator/Denominator`、持续帧 `DurationFrames`、`DisplacementKind` 区分 Dash/Knockback）。
+- `BuffSystem.ApplyBuff` 加非 Numeric 分支：识别 `DisplacementEffect` 时，把初始速度写进 `PlayerState` 对应位移字段（`DashVelX/Y` 或 `KnockbackVelX/Y`）+ `RemainingFrames = DurationFrames`，**不走 Numeric**。
+- `PlayerState` 加位移字段（Dash 位移 + 击退位移，各 `VelX/VelY/RemainingFrames`），进快照/哈希/diff/proto（既有 PlayerState 通路）。
+- 新增 `DisplacementSystem`（纯静态，两端共用）：每帧读 PlayerState 位移字段 → 衰减 → `ApplyBodyImpulse` → `remaining--` → 到 0 清零。
+- **位移字段生命周期绑定 Buff**（P1-3 修正）：位移字段必须记录所属 `RuntimeBuffId`。`RemoveBuffInternal`（`BuffSystem.cs:457`）当前只清 Numeric 修饰器、**不碰位移字段** —— 漏了则位移 Buff 到期/撞停移除后 `DashVel/RemainingFrames` 残留，球停不下来。必须在 `RemoveBuffInternal` 里加：若被移除的 Buff 带 DisplacementEffect，清零对应位移字段（过期/手动移除/互斥替换统一走它）。
+
+**为什么不扩展 BuffEffect 做属性修饰（甲路径）**：属性修饰器是恒定值，击退的 `v *= 0.75` 衰减要么每帧增删修饰器（破坏确定性、污染 Numeric 快照），要么改 Numeric 重算。绕且险。位移运行时状态放 `PlayerState` 字段、配置放 `DisplacementEffect`，最直。
+
+**Dash 与击退共用同一套**，不各自为政。
+
+### 前置 B：SkillGraph 可回滚通路（容器级快照胶水）
+
+runner 级 `GetSnapshot/Restore` 现成，缺容器级收集与接线：
+
+- `BattleSkillGraphRuntime` 加 `CaptureExecutions()` → `Dictionary<long, ActiveSkillExecutionSnapshot>`（按 casterId），其中 `ActiveSkillExecutionSnapshot { CasterId, TargetId, SkillId, RunnerSnapshot: SkillExecutionSnapshot }`。**`SkillExecutionSnapshot`（`SkillGraphRunner.cs:309`）本身不含 SkillId/TargetId**，而 `Restore`（`:584`）要求 Runner 已 `Initialize`（`:382`，需 graph+context），故身份字段必须单独存。
+- `RestoreExecutions(dict)`：按 SkillId 查 `_graphsBySkillId` 得 graph → 用 CasterId/TargetId/SkillId 建 context → `new Runner` + `Initialize(graph, context)` → `Restore(runnerSnapshot)`。
+- 该字典挂进 `PlayerState`，进 `ArePlayerSnapshotsEquivalent` / `StateHasher.Hash` / proto / 回滚恢复。
+- `SkillExecutionSnapshot` 的 `blackboard`、`delayRemainingFrames` 是 `Dictionary`，**进哈希/proto 必须按键排序**，否则两端哈希不一致。
+- 补用例 `skillgraph-restore-resumes-correct-graph`：不同 SkillId/TargetId 的执行恢复后继续跑正确的图。
 
 ## 目标
 
 1. **Dash / 体力 / Recover 全程客户端预测** —— 弱网下不等服务端确认，三者进快照、哈希、diff、回滚重播。
-2. **撞击击退服务端权威** —— 触发不预测，误差走 S1 平滑层，不出现硬跳。
-3. **修掉决策五那条接触期持续 mismatch** —— 击退演示里回滚次数应与碰撞次数同量级，不是与击退帧数同量级。
-4. **mismatch 日志能区分字段** —— `PositionMismatch` / `StaminaMismatch` / `StateMismatch`（Timeline 完成标准明列）。
-5. **画面产出** —— Dash 拖影、体力条、击退时 ghost 与实体分离。这是 S11 录屏的主素材。
+2. **SkillGraph 执行态真正进快照可回滚**（前置 B）—— Dash 技能图回滚后逐位恢复。
+3. **撞击击退服务端权威** —— 触发不预测，误差走 S1 平滑层，不出现硬跳。
+4. **修掉接触期持续 mismatch**（决策五）—— 回滚次数与碰撞次数同量级。
+5. **mismatch 日志能区分字段** —— `PositionMismatch` / `StaminaMismatch` / `StateMismatch`。
+6. **画面产出** —— Dash 拖影、体力条、击退时 ghost 与实体分离（S11 主素材）。
 
 ## 非目标
 
-- 不做 SkillGraph（决策一）、不做技能表现资源。
-- 不做伤害、命中、目标选择，不新增 Buff 配置。击退**不走 Buff 系统**（决策三）。
+- 不做技能表现资源、不做伤害/命中/目标选择、不新增除 Dash/击退外的 Buff 配置。
 - 不做击退的**触发**预测（刻意选择，非缺陷）。
-- 不做远端插值曲线（S10）。本阶段别人的显示位置仍是最新权威值。
+- 不做远端插值曲线（S10）。
 - 不动 S3 哈希口径、不动 S7 的 RTT 通路。
 - 不做体力 UI 的布局打磨（S10/S11）。
 
-## 决策一：Dash 是 `PlayerState` 的一等状态机，不挂 SkillGraph
+## 决策一：Dash 走 SkillGraph 触发 + Buff/位移 effect 承载
 
-`PlayerState` 新增三个字段，全部进快照、哈希、diff：
+Dash 不再是 `PlayerState` 上的独立状态机，而是**一张技能图 + 两个 Buff**：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `DashPhase` | 枚举 `None` / `Dashing` / `Recovering` | 当前相位 |
-| `DashPhaseRemainingFrames` | `int` | 当前相位剩余帧 |
-| `DashDirX` / `DashDirY` | `Fixed64` | **起手帧锁定**的方向 |
+> **实现前置（P1-2 修正）**：当前技能图链路缺三条通道，**不是"只配数据不补代码"**：① `QueueSkillRequest`（`RuntimeSkillGraph.cs:485`）不带方向，需加 Fixed64 dx/dy（**不走 float 黑板**，否则丢定点精度）；② `ApplyBuffCommand`（`SkillHandlers.cs:107`）无法传 DisplacementEffect 的动态初始速度，需扩展或新增 handler；③ `ISkillRuntimeServices`（`SkillContext.cs:9`）没有扣体力/读属性接口，需新增原子化的"校验体力并扣除"服务。
+
+- **触发**：Shift → 走既有技能输入通路（`SkillId = DashId`）→ `QueueSkillRequest` → SkillGraph 执行 Dash 技能图。
+- **持续效果由 Buff 承载**：
+  - Dash 位移 Buff（带 `DisplacementEffect`，初始速度=起手帧输入方向 × `DashSpeed`）→ 由 `DisplacementSystem` 每帧演化。
+  - Recover Buff（禁用，`durationFrames = RecoverFrames`）→ 技能图条件节点 `BuffConditionNodeHandler` 检查它来阻止再次起手。
+- **体力消耗**：起手时扣 `DashStaminaCost`（技能图节点或挂 Buff 时扣）。
 
 ### 方向在起手帧锁定，Dash 期间不跟随输入
 
-**这是可预测性的要求，不是手感偏好。** 若 Dash 期间跟随输入转向，则服务端在丢包复用旧输入时（`BattleLogic.cs` 的 `ReusedInputCount` 分支）方向会与客户端不同，**每次上行丢包都产生一次方向级 mismatch**。锁定后 Dash 是「起手帧输入 + 固定帧数」的纯函数，与后续输入是否送达无关。
+**这是可预测性的要求。** Dash 位移 Buff 挂上时初始速度取起手帧输入方向并固化；之后 `DisplacementSystem` 只做衰减，不读输入。若 Dash 期间跟随输入，服务端丢包复用旧输入时方向与客户端不同，**每次上行丢包产生一次方向级 mismatch**。锁定后是「起手帧输入 + 固定帧数」的纯函数。
 
-代价是不能中途转向。对本 demo 无影响。
+实现：起手方向经 `QueueSkillRequest` 的 Fixed64 dx/dy 传入（**不走 float 黑板**，避免丢定点精度），技能图执行时读出、归一化后作为 DisplacementEffect 的 VelX/VelY。零向量在归一化前替换为常量 `(1,0)`。
 
-### 状态机推进顺序：先递减、后起手
+### 零输入时起手方向定为常量 `(1, 0)`
 
-顺序错了会有两个具体 bug：
+起手帧输入为零向量时**不拒绝 Dash**，方向取常量 `(1, 0)`。理由是**确定性**：零向量无定义良好的归一化结果，两端必须约定同一个值。**不是抗丢包措施**（`SkillId` 与方向同消息、同到达同丢失，服务端不会复用出 Dash）。
 
-- **先起手后递减** → 起手帧就被扣掉一帧，Dash 实际少一帧
-- **不分离两步** → 同一帧「Recover 结束」与「新 Dash 起手」会同时成立，Recover 形同不存在
+### Recover 用 Buff，起手判定拦截重入
 
-约定顺序：**递减当前相位 → 相位到期则转移（`Dashing` → `Recovering` → `None`）→ 判定本帧能否起手**。
+Recover = 一个禁用 Buff（到期自动移除）。**不要在 `PlayerState` 上再加 Dash 相位枚举** —— 相位由「有没有这两个 Buff」隐式表达，状态来源单一。
 
-### 零输入时起手方向定为常量
+**入口拦截（P1-5 修正）**：仅查「无 Recover Buff」不够 —— Dash 期间（位移 Buff 在、Recover 没挂）条件仍通过，而 `StartQueuedExecutions`（`RuntimeSkillGraph.cs:584`）收到同 caster 新请求会**直接覆盖** `_activeExecutionsByCasterId[casterId]`，导致重置位移、重复扣体力、原执行挂不上 Recover。入口必须**同时拒绝**：已有活跃 Dash 执行（容器层）**或**已有位移 Buff（Buff 层）。补用例 `dash-blocked-while-dashing`（不只测 Recover 阶段）。
 
-起手帧输入为零向量时，**不拒绝 Dash**，方向取常量 `(1, 0)`。
+### 为什么体力消耗不进 Buff
 
-理由是**确定性**，不是抗丢包：零向量没有定义良好的归一化结果，两端必须约定同一个值，否则各自的兜底写法一旦不同就是永久分歧。约定成常量则两端必然一致。
-
-> **这条不是抗丢包措施，别那么讲。** `DashRequest` 与方向在同一条 `C2B_PlayerInput` 里，一起到达、一起丢失。丢包时服务端走复用分支，而 `ConsumedInput`（`BattleLogic.cs:615-625`）只存 `Dx`/`Dy`、**不含 `DashRequest`** —— 所以服务端不会复用出一次 Dash，客户端起手而服务端没有，这是丢包的正常后果，靠回滚修正，与方向常量无关。
->
-> 手感上「零输入时向右冲」是个可议的选择（也可以改成朝最近一次非零方向），但那是手感问题，**不影响可预测性**。
-
-### 为什么不走 Buff 系统
-
-Buff 系统（`BuffSystem.cs` 503 行）功能上够用，但会引入 `BuffId` 配置、命令队列、相等性判定三层间接，且把 Dash 的时序绑到 `ProcessBuffCommands` 的执行顺序上 —— 多一个出错点，收益为零。三个字段 + 逐帧递减更直接。
+体力是属性系统的量（决策二），扣体力是「瞬时属性变更」，不是持续效果。起手时直接 `SetAttributeValue` 扣减即可，无需 Buff。Buff 只承载「持续效果」。
 
 ## 决策二：体力走新增 `AttributeKind.Stamina`，不复用 `Mana`
 
-两种候选：
+两种候选：复用 `Mana/MaxMana`（❌ 诊断输出会说谎，全是 `mp:`）vs 新增 `Stamina/MaxStamina`（✅）。新增白拿现有属性通路：脏同步、B1 baseline 校验、每 60 帧周期性全量恢复、Numeric 修饰器、自动进哈希。
 
-| 方案 | 判断 |
-|---|---|
-| 复用 `Mana` / `MaxMana` | ❌ 协议零改动、通路现成，但**诊断输出会说谎** —— mismatch 日志、HUD、report 里全是 `mp:`，讲解时得每次口头翻译成体力。且将来真要加法力就得再拆一次 |
-| 新增 `Stamina` + `MaxStamina` **两个 kind** | ✅ 选定 |
+### 必须是两个 `AttributeKind`
 
-新增的收益是白拿现有属性通路：**脏同步、B1 的 baseline 帧号校验、每 60 帧周期性全量恢复、Numeric 修饰器**（将来「Buff 提升体力上限」直接可用）、以及自动进哈希。
+当前值与上限是两个独立 kind（`Mana/MaxMana` 即如此）。只加 `Stamina=6` 却要两个值自相矛盾：`MaxStamina` 没 kind 则无法独立重算、无法被修饰器命中，「Buff 提升体力上限」落空。**定为 `Stamina=6` 与 `MaxStamina=7` 两个 kind，脏标记拆两位。**
 
-### 必须是两个 `AttributeKind`，不是一个
-
-**当前值与上限在本项目里是两个独立 kind** —— `Mana` / `MaxMana` 就是这么建的（`NumericModifier.cs:9-16`）。`GetBaseValue`（`NumericState.cs:54`）、`SetBaseValue`（`:67`）、`CalculateFinalValue` 的修饰器筛选（`:159`）全部以 kind 为键。
-
-所以只加 `Stamina = 6` 却要两个值是自相矛盾的：`MaxStamina` 没有 kind 就无法被独立重算，也无法被修饰器命中 —— 上面刚说的「Buff 提升体力上限」直接落空。
-
-**定为 `Stamina = 6` 与 `MaxStamina = 7` 两个 kind，脏标记也拆成两位。**
-
-### 改动点清单（漏一处就是静默失效）
+### 改动点清单（漏一处即静默失效）
 
 | 位置 | 改动 |
 |---|---|
 | `AttributeKind` | 加 `Stamina = 6`、`MaxStamina = 7` |
-| `PlayerAttributeDirtyFlags` | 加 `Stamina = 1 << 5`、`MaxStamina = 1 << 6`，**`All` 必须一并更新** |
-| `PlayerAttributeSnapshot` | 加两字段 + 构造参数 + `Default` |
-| `PlayerAttributeSync` | `ComputeDirtyMask` 加两项比较、`Merge` 加两项分支 |
-| `PlayerState` | 加两属性 + `SetAttributeValue` 的两条 switch 分支 |
-| **`NumericState.GetBaseValue`** | **加两条 switch 分支**（漏则 base 恒读 0） |
-| **`NumericState.SetBaseValue`** | **加两条分支**，每条都要重新构造完整的 7 字段快照 |
-| **`NumericState.Recalculate`** | **加两行**：`maxStamina = Max(0, CalculateFinalValue(MaxStamina))`、`stamina = Clamp(CalculateFinalValue(Stamina), 0, maxStamina)`，照 `Mana` 的写法 |
-| **`StateHasher.Hash`** | **玩家段与 `Numeric.BaseAttributes` 段各加两处** |
-| **`AreAttributesEqual`** | **加两项比较** |
-| `OuterMessage.proto` | `PlayerSnapshot` 末尾追加 25 / 26；**`NumericSnapshot` 末尾追加 `BaseStamina` / `BaseMaxStamina`**（见下节） |
-| `BattleSnapshotProtocolMapper` | `PlayerSnapshot` 与 **`NumericSnapshot`** 的 To / From 各加两项 |
+| `PlayerAttributeDirtyFlags` | 加两位，**`All` 一并更新** |
+| `PlayerAttributeSnapshot` | 加两字段 + 构造参数 + `Default`。**不加默认值参数**（让漏改处编译失败） |
+| `PlayerAttributeSync` | `ComputeDirtyMask` / `Merge` 各加两项 |
+| `PlayerState` | 加两属性 + `SetAttributeValue` 两条 switch |
+| **`NumericState.GetBaseValue`** | 加两条分支（漏则 base 恒读 0） |
+| **`NumericState.SetBaseValue`** | 加两条分支，每条重新构造完整 7 字段快照 |
+| **`NumericState.Recalculate`** | 加两行，照 `Mana` 写法 |
+| **`StateHasher.Hash`** | 玩家段 + `Numeric.BaseAttributes` 段各加两处 |
+| **`AreAttributesEqual`** | 加两项比较 |
+| `OuterMessage.proto` | `PlayerSnapshot` 末尾追加 25/26；**`NumericSnapshot` 末尾追加 `BaseStamina`/`BaseMaxStamina`** |
+| `BattleSnapshotProtocolMapper` | `PlayerSnapshot` 与 **`NumericSnapshot`** 的 To/From 各加两项 |
 
-**`SetBaseValue` 的写法有个坑**：它每条分支都 `new PlayerAttributeSnapshot(...)` 把其余字段原样传回。加两个字段后**每条既有分支都要多传两个参数** —— 漏改任何一条会让该属性被设值时把体力清零。构造函数加参数会让漏改处编译失败，**这是好事，不要给构造函数加默认值绕过它**。
+### `NumericSnapshot` 的 base 必须协议化
 
-### `NumericSnapshot` 的 base 也必须协议化
+只同步最终 `Stamina` 而不同步 `Numeric.BaseAttributes.Stamina` **必然失配**：`PlayerState.RestoreRuntimeState` 在 `Numeric.RestoreSnapshot` 之后立刻调 `Numeric.Recalculate`，而 `Recalculate` 走 `GetBaseValue` 取 base，base 为 0 则最终体力算成 0，**当场覆盖刚同步来的权威值**。表现为「体力永远 0 且回滚不停」。
 
-当前协议只有 `BaseHealth` ~ `BaseAttack` 五项（`OuterMessage.proto` 的 `NumericSnapshot`）。**只同步最终 `Stamina` 而不同步 `Numeric.BaseAttributes.Stamina` 会必然失配，不是可能失配。**
+### 恢复必须是整数节律，计数器进快照
 
-链条是：`PlayerState.RestoreRuntimeState`（`PlayerState.cs:106-107`）在 `Numeric.RestoreSnapshot` 之后**立刻调 `Numeric.Recalculate(this)`**，而 `Recalculate` 走 `CalculateFinalValue` → `GetBaseValue` 取的是 **base**。base 是 0 则最终体力被算成 0（无修饰器时 `finalValue = base`），**当场覆盖掉刚同步来的权威体力值**。
+`StaminaRegenCounterFrames` 每帧 +1，达 `StaminaRegenIntervalFrames` 时体力 +`StaminaRegenAmount` 并清零。**不用小数累加器**（累加器自身是逻辑状态，漏进快照则回滚后漂移）。该计数器是 `PlayerState` 一等字段，进快照/哈希/diff，不走属性脏同步。**Recover 期间照常恢复体力。**
 
-所以每次客户端应用权威快照（`RestoreSelfOnly` → `RestoreRuntimeState`）体力都会被清零，然后下一帧又失配。表现为「体力永远是 0 且回滚不停」。
+## 决策三：击退触发不预测、演化照常预测，载体走 Buff/位移 effect
 
-需追加：`NumericSnapshot.BaseStamina` / `BaseMaxStamina` 两字段、mapper To/From 两侧、以及专项用例 `numeric-stamina-base-proto-roundtrip`。
+**与 Timeline 原表述有出入，以本决策为准。** Timeline P2 写「客户端不预测击退」，若按字面实现成「客户端对击退全无感知」，击退持续 8 帧则每帧失配，画面连续 8 次抖动，`rollbackCount` 每次碰撞暴涨 8。
 
-`AttributeBroadcastBaseline` 无需改动：它存的是整个 `PlayerAttributeSnapshot` 结构体，不逐字段拆解，新字段自动跟随。
-
-### 恢复必须是整数节律，且计数器必须进快照
-
-**不要用「每帧加 0.x 点」的小数累加器。** 那样累加器自身也成了逻辑状态，必须进快照与哈希；漏了则回滚后累加器错位、体力逐渐漂移 —— 这类 bug 表现为「偶发的体力 mismatch」，极难定位。
-
-改为整数节律：`StaminaRegenCounterFrames` 每帧 +1，达到 `StaminaRegenIntervalFrames` 时体力 +`StaminaRegenAmount` 并清零计数器。
-
-**该计数器是 `PlayerState` 的一等字段，必须进快照、哈希、diff。** 它不走属性脏同步（否则脏位几乎每帧都置），单独占快照字段。
-
-**Recover 期间照常恢复体力** —— Recover 的作用是禁止连续 Dash，不是中断恢复。
-
-## 决策三：击退是**触发不预测、演化照常预测**
-
-**这一条与 Timeline 的原表述有出入，以本决策为准。**
-
-Timeline P2 写的是「客户端不预测击退」。若按字面实现成「客户端对击退全无感知」，后果是：击退持续 8 帧，则这 8 帧客户端每帧都算出「没被击退」的位置、每帧被权威修正，**画面上是连续 8 次抖动而非一次干净的位移**，且 `rollbackCount` 与 `consistencyMisses` 每次碰撞暴涨 8。演示效果与 S6 刚拿到的收益一起毁掉。
-
-改为拆两段：
+拆两段：
 
 | 阶段 | 谁做 | 客户端预测? |
 |---|---|---|
-| **触发**（判定两球相撞、算冲量方向与大小） | 服务端独占 | ❌ **不预测** |
-| **演化**（击退速度逐帧衰减、位移积分、到期清零） | 两端同一份代码 | ✅ **照常预测** |
+| **触发**（判定 Dash 撞人、算冲量方向与大小） | 服务端独占 | ❌ **不预测** |
+| **演化**（击退速度逐帧衰减、位移积分、到期清零） | 两端同一份 `DisplacementSystem` | ✅ **照常预测** |
 
-做法是把击退状态放进快照：`KnockbackVelX` / `KnockbackVelY` / `KnockbackRemainingFrames`。客户端**不实现触发**，但在收到含击退状态的权威快照后，重放时按同一份衰减规则演化。
+击退状态用 **Buff + `DisplacementEffect`** 承载：服务端触发时挂击退 Buff（带 `DisplacementEffect`），Buff 状态进既有快照通路（可回滚性白拿）。客户端收到含击退 Buff 的权威快照后，由 `DisplacementSystem` 按同一份衰减规则演化。**触发帧吃一次 mismatch（拿到击退状态），后续帧不再失配。**
 
-于是：**触发帧吃一次 mismatch（拿到击退状态），后续帧不再失配。** 回滚从「每击退帧一次」压到「每次碰撞约一次」。
+### 触发条件：Dash 撞人，三种情况
 
-**这让完成标准从「看起来不抖」变成可断言的数字**（见完成标准 6）。
+击退不是任意碰撞都触发，**只有 Dash 状态的球撞人才触发**（Dash 是"冲撞"手段）。Dash 状态由"身上有没有位移 Buff"判定（决策一）。新接触对触发时，按双方 Dash 状态分三种：
+
+| 碰撞情况 | 判定 | 效果 |
+|---|---|---|
+| **Dash 撞非 Dash** | 有位移 Buff 的是主动方 | 被动方被击退飞出；主动方**撞停**（移除位移 Buff）+ 进 Recover |
+| **双方 Dash 同帧对撞** | 都是主动方 | **互相击退**（都弹开）；双方都撞停 + 都进 Recover |
+| **双方都非 Dash** | — | 只占位分离，**不击退**（决策五的镜像 body 处理） |
+
+双方对撞"互相击退"参照 OW 莱因哈特对冲锋的做法（对称结算，不判谁先）—— 同帧用对称规则，确定性简单，不需要打破平局。
+
+**撞停**让 Dash 有两个结束路径：正常到期（6 帧跑完）或撞人提前结束，两者都进同一个 Recover Buff。
 
 ### 讲解口径
 
-对外说的是「**击退的裁决权在服务端，客户端不猜谁撞了谁；但拿到裁决结果后，客户端和服务端跑同一套衰减，所以只在裁决那一帧修正一次**」。
+「击退裁决权在服务端，客户端不猜谁撞了谁；但拿到裁决结果后，客户端和服务端跑同一套衰减，所以只在裁决那一帧修正一次。」**不要说「客户端完全不预测击退」** —— 与代码不符。
 
-**不要说「客户端完全不预测击退」** —— 与代码不符，被追问「那为什么只回滚一次」就露。
+### 触发边沿：新接触 **或** 接触期间起 Dash
 
-### 为什么不走 Buff 系统
+两种边沿都要触发击退：
+- **新接触**：上一帧没接触、本帧接触了。防止贴身期间每帧重灌速度、永不衰减。
+- **接触期间起 Dash**（P1-4 修正）：两人已贴身，随后一方起 Dash —— 接触对不是新的，但 Dash 资格从 false→true。**只看新接触会漏掉这个场景**。
 
-同决策一：会把击退时序绑到 Buff 命令队列的执行顺序上。且击退是**每帧衰减的连续量**，Buff 的 `RemainingFrames` + 修饰器模型表达它要绕一层。
+实现：触发键不只看 contactPair 新旧，还要追踪「该对是否已因当前 Dash 触发过」。维护「已触发集合」，键为 `(contactPair, dashEpoch)`，dashEpoch = 该方当前位移 Buff 的 RuntimeBuffId（每次新 Dash 是新 epoch）。新接触且任一方在 Dash → 触发并记录；接触持续期间某方 Dash false→true 且该 epoch 未触发 → 触发。该集合服务端私有，不进快照。补用例 `dash-starts-while-already-in-contact`。
 
-### 复用 `ApplyBodyImpulse`，不新增物理 API
+### 触发实现
 
-每帧由 gameplay 把当前 `KnockbackVel` 通过 `ApplyBodyImpulse` 喂给物理，物理照旧与移动输入相加、当帧清空。**物理层保持无状态，持续状态全在 gameplay 层且在快照里。**
+击退由碰撞触发，不经技能图节点。服务端在 `DetectNewContactsAndTriggerKnockback` 里：① 按上述两种边沿判定是否触发（新接触 / 接触期间起 Dash）→ ② 检查双方 Dash 状态（有没有位移 Buff）→ ③ 按决策三三种情况挂击退 Buff（被动方 / 互挂）→ ④ 主动方撞停（移除位移 Buff + 挂 Recover Buff）。**撞停移除走 `RemoveBuffInternal`，位移字段随前置 A 的生命周期绑定一并清零。**
 
-这样占位分离（`ResolvePlayerOccupancy`）也自动对击退生效 —— 击退把球推向对手时仍会被正确分离。
-
-### 触发按「新接触」判定，不是「正在接触」
-
-`RebuildOccupancyContacts` 每帧重建接触对，**接触持续期间每帧都在集合里**。若按「集合里有就触发」，则贴身期间每帧重新灌满击退速度，**击退永不衰减、两球持续弹开**。
-
-必须维护「上一帧接触对集合」，只对**本帧新出现**的对触发。该集合是服务端 `BattleLogic` 的私有字段，不进快照（客户端不做触发，不需要它）。
+`DisplacementEffect` 配置（初始速度=冲量方向×`KnockbackSpeed`、衰减 3/4、`DurationFrames=8`）在 `KnockbackTuning` 里。
 
 ## 决策四：击退参数与 S1 平滑阈值联立，且在构造期断言
 
-Timeline P2 的反向约束：`MaxSmoothingDistance = 6.0` 必须大于单次击退造成的最大瞬时预测偏差。
-
-### 参数取值与验算
+`MaxSmoothingDistance = 6.0` 必须大于单次击退最大瞬时偏差。
 
 | 参数 | 取值 |
 |---|---|
 | `KnockbackSpeed` | `12`（≈ `MoveSpeed × 2.4`） |
 | `KnockbackFrames` | `8`（30Hz 下约 0.27s） |
-| `KnockbackDecayNumerator / Denominator` | `3 / 4`（每帧 ×0.75，整数比避免定点除法歧义） |
+| `DecayNumerator/Denominator` | `3/4`（整数比避免定点除法歧义） |
 
-单次击退总位移是等比级数：`12 × (1/30) × (1 + 0.75 + 0.75² + ... )`，8 项和约 `3.75`，故总位移约 **1.5**。
+总位移等比级数：`12 × (1/30) × (1 + 0.75 + …)`，8 项和约 3.75，总位移约 **1.5**。最坏瞬时偏差保守估约 **2.8**（含客户端收到击退状态前累积）。**2.8 < 6.0，约 2 倍余量。**
 
-最坏瞬时偏差不是总位移，而是**客户端在收到击退状态前累积的偏差**。上界为击退全程位移 + 该期间客户端按无击退预测的位移差，保守估约 **2.8**（RTT 高到 `MaxLeadFrames = 20` 帧未确认时）。
-
-**2.8 < 6.0，留约 2 倍余量。**
-
-### 断言必须在构造期，不是文档里
-
-`KnockbackTuning` 静态构造里断言 `估算最大偏差 < PredictionErrorSmoother.MaxSmoothingDistance`，**越界抛异常，不静默 clamp**。
-
-理由是这条约束**极易在调参时被破坏且破坏后症状隐蔽** —— 有人为了"手感更爽"把 `KnockbackSpeed` 调到 30，击退就开始走硬跳分支，画面上是瞬移，但**所有无头用例照样全绿**（哈希只管一致性，不管好不好看）。这正是[设计教训](设计教训-两类静默失效.md)第一节那类失效：机制完整自洽、有测试、但判据绕过了真实区间。
-
-**调参后必须重跑该断言。** 写进验收指南。
+`KnockbackTuning` 静态构造里断言 `估算最大偏差 < MaxSmoothingDistance`，越界抛异常不静默 clamp。**调参后必须重跑。** 理由：调猛后画面瞬移但无头用例照样全绿（哈希只管一致性），属设计教训第一类失效。
 
 ## 决策五：客户端把别人镜像成只读碰撞 body
 
-这是修 Context 第一条那个既有缺口。四种选择：
-
-| 方案 | 判断 |
-|---|---|
-| 什么都不做 | ❌ 接触期每帧 mismatch。击退演示必然触发，且会掩盖击退本身的 mismatch 信号 |
-| 客户端也不做分离，服务端也关掉 | ❌ 两球可完全重叠，画面上穿模，演示效果差 |
-| 别人重新进 `_worldState` | ❌ 直接退回 S6 之前，别人重新参与回滚，S6 白做 |
-| **别人作为只读 body 进物理世界** | ✅ 选定 |
-
-做法：每次应用权威快照后，把 `RemotePlayerBuffer` 里每个玩家的最新权威位置写进物理世界对应 body（`SetBodyTransform`，`resetVelocity: true`）。
+修 Context 第一条的既有缺口。做法：每次应用权威快照后，把 `RemotePlayerBuffer` 里每个玩家最新权威位置写进物理世界对应 body（`SetBodyTransform(resetVelocity: true`）。
 
 三条边界：
-
-1. **只读、纯障碍物** —— 不进 `_worldState`、不进 `_selfPredictions`、不参与 `AdvancePredictionTo`、不参与回滚。它只是让自己的球「撞得到」。
+1. **只读、纯障碍物** —— 不进 `_worldState`、不进 `_selfPredictions`、不参与 `AdvancePredictionTo`、不参与回滚。
 2. **位置恒取最新权威值，不插值不推进** —— 插值归 S10。
-3. **随 buffer 移除而清理 body** —— 否则留下隐形墙，重开局后撞空气。`RemotePlayerBuffer` 移除条目处同步 `RemoveBody`。
+3. **随 buffer 移除而清理 body** —— `RemotePlayerBuffer` 移除条目处同步 `RemoveBody`，否则留隐形墙。
 
 ### 「只读」必须在物理层显式建模，`resetVelocity` 不够
 
-**`SetBodyTransform(resetVelocity: true)` 只清速度，不会让 body 免于被推。** `CalculateSeparationShares` 在双方都没有「朝向对方的意图」时 `moveBodyA = penetration * Half` —— 各分一半穿透量。
+`SetBodyTransform(resetVelocity: true)` 只清速度，不让 body 免于被推。`CalculateSeparationShares` 在双方都无朝向意图时各分一半穿透量。镜像 body 的 `requestedVelocity` 恒为零 → 自己静止而权威更新让两者重叠时，**镜像被推走**，在重放 `_leadFrames` 帧期间持续漂移。
 
-镜像 body 的 `requestedVelocity` 恒为零（不在 `_pendingLinearVelocities`、也无 impulse），所以 `GetTowardIntent` 恒返回 0、永不 pushing。于是：
-
-- 自己**朝向**对方移动时：自己 pushing → `moveBodyA = penetration` 全由自己承担 → 镜像不动 ✓
-- 自己**静止或朝其他方向**、而权威位置更新让两者重叠时：两者都不 pushing → **各分一半 → 镜像 body 被推走** ✗
-
-第二种情形在 `AdvancePredictionTo` 重放 `_leadFrames` 帧的过程中每帧都可能发生，镜像位置会在两次权威快照之间持续漂移。**所以「静态障碍物」这个说法与现有物理层的实际行为不符**，用例名若叫 `remote-body-mirrored-as-static-obstacle` 就是名不副实。
-
-**必须显式建模。** 最小改动：`FixedPhysicsBody` 加 `IsKinematicObstacle` 标志，`CalculateSeparationShares` 里若一方带该标志则**全部穿透量由另一方承担**（等价于无限质量）。该标志需进 `PhysicsBodySnapshot` 与哈希吗？**不需要** —— 服务端从不设它（服务端所有 body 都是真实玩家），它是纯客户端本地概念，不进快照就不影响哈希基线与两端对账。
-
-`FrameSyncPhysicsWorld` 需要一个 `SetBodyKinematicObstacle(int bodyId, bool value)` 入口。**这是本阶段唯一必要的物理 API 新增**（Context 第二条说的「不新增物理 API」指的是不为击退新增，此处是为决策五）。
+最小改动：`FixedPhysicsBody` 加 `IsKinematicObstacle` 标志，`CalculateSeparationShares` 里若一方带该标志则全部穿透量由另一方承担（等价无限质量）。`FrameSyncPhysicsWorld` 加 `SetBodyKinematicObstacle(bodyId, value)`。**该标志不进快照** —— 服务端从不设它，纯客户端本地概念，不影响哈希基线。**这是本阶段唯一必要的物理 API 新增**（为决策五，非为击退）。
 
 ### 残差有界但不为零
 
-客户端用的是延迟约 RTT/2 的对手位置，分离结果必然与服务端不同。**残差从「完整穿透深度」缩小到「对手在 RTT/2 内的移动距离」**，量级降一档但不归零。
-
-**写进验收指南，不判 FAIL。** 彻底消除需要预测别人，那与 S6 的整个方向相反。
+客户端用延迟约 RTT/2 的对手位置，分离结果与服务端不同。残差从「完整穿透深度」缩到「对手在 RTT/2 内的移动距离」，量级降一档不归零。**写进验收指南，不判 FAIL。** 彻底消除需预测别人，与 S6 方向相反。
 
 ### 与 S6 决策六的关系
 
-S6 决策六的结论「客户端零碰撞代码、不维护远端物理体」**建立在"玩家之间无碰撞"这个错误前提上**，本阶段修正为上述镜像方案。
-
-**但 S6 的核心原则保留且未被削弱**：别人不参与预测、不参与回滚、不进 `_worldState`。改的只是「别人在客户端物理世界里有没有一个只读的碰撞占位」。
-
-**需回写 S6 计划决策六一条勘误。**
+S6 决策六「客户端零碰撞代码」建立在「玩家间无碰撞」错误前提上，本阶段修正为镜像方案。**但 S6 核心原则保留**：别人不参与预测/回滚/`_worldState`。改的只是「别人在客户端物理世界里有没有只读碰撞占位」。**需回写 S6 计划决策六勘误。**
 
 ## 决策六：击退判定进 `BattleLogic`，哈希基线**必须**变
 
-S3~S7 一律要求「`BattleLogic` 零改动、哈希基线不变」。**本阶段相反。**
+S3~S7 一律要求「`BattleLogic` 零改动、哈希基线不变」。**本阶段相反。** 击退判定是 gameplay 规则，属确定性内核（纯几何判定，完全确定性），与 S7 拒绝的墙钟时间性质不同。
 
-击退判定是 gameplay 规则，本身就属于确定性内核。它与 S7 拒绝的东西性质不同：S7 要塞进去的是**墙钟时间**（破坏可复现性），本阶段塞进去的是**纯几何判定**（完全确定性）。
+代价是两个哈希基线合法变化：`fixed-physics-bit-exact` 与 Determinism scenario。新增快照字段必然改哈希，**预期结果，非 bug**。
 
-代价是两个哈希基线合法变化：`fixed-physics-bit-exact`（当前 `0xD2120B5F0F5A5FE5`）与 Determinism scenario（当前 `0xD01E17BC0F96A3EB`）。新增快照字段必然改变哈希，**这是预期结果，不是 bug**。
+### 验收判据是「变一次后稳定」
 
-### 验收判据是「变一次后稳定」，不是「不变」
-
-流程：实现完成后跑一次记录新基线 → **再跑一次确认逐位一致** → 更新用例常量与验收指南。
-
-**只跑一次就更新是错的** —— 会把一次偶发结果固化成基准（同 S7 决策三边界 2 的教训）。
+实现完成跑一次记录新基线 → **再跑一次确认逐位一致** → 更新用例常量与验收指南。**只跑一次就更新是错的**（固化偶发结果）。
 
 ### 必须同步改三份既有验收指南
 
-**这是本阶段最容易漏的交付物。** 三份既有指南写的都是「基线必须不变」，其中 S3 那份是明文强判据：
-
 | 指南 | 现状 | 需改成 |
 |---|---|---|
-| `哈希上报与服务端告警-验收测试指南-20260804.md` | **「与 S1/S2 相反：哈希基线必须不变」** | 注明 S8 是唯一例外 |
-| `回滚粒度改造-验收测试指南-20260806.md` | `fixed-physics-bit-exact` 基线必须不变 | 同上 |
+| `哈希上报与服务端告警-验收测试指南-20260804.md` | **「哈希基线必须不变」** | 注明 S8 是唯一例外 |
+| `回滚粒度改造-验收测试指南-20260806.md` | `fixed-physics-bit-exact` 必须不变 | 同上 |
 | `弱网自动化测试-验收测试指南-20260805.md` | 用例数与基线 | 更新数字 |
 
-漏改的后果是**验收 agent 照指南判 FAIL 而实现是对的**，然后有人回头去"修"一个不存在的 bug。
+漏改的后果是验收 agent 照指南判 FAIL 而实现是对的。
 
-## 决策七：输入用独立 `DashRequest` 布尔，不复用 `SkillId`
+## 决策七：Dash 复用既有 `SkillId` 输入通路
 
-`C2B_PlayerInput.SkillId = 5` 已存在，复用能省一个字段。但：
+Dash 走 SkillGraph，就是技能，故复用 `SkillId`。`C2B_PlayerInput.SkillId` 已存在并已路由进 `QueueSkillRequests` → SkillGraph，**输入通路无需新增字段**。两点前提：
+- 既有技能输入已进 `BufferedInput` / `_inputHistory` / `PendingInput`，Dash 复用即自动满足「重放时 Dash 输入不消失」，无需给这些结构加字段。
+- 前置 B 让 SkillGraph 执行态进快照，输入与执行态单一语义，不挤在两个字段里。
 
-- Dash **不是技能**（Timeline 明确「不命名为技能」）
-- `SkillId > 0` 会被 `QueueSkillRequests` 路由进 SkillGraph，得加排除逻辑
-- 回滚时 SkillGraph 走 `Clear()`、Dash 走快照恢复，**两套语义挤在一个字段里**
+### 仍须确认：`SkillId` 已在 `_inputHistory`
 
-新增 `bool DashRequest = 6`，与 `SkillId` 并存互不干扰。
+但动手前需核实 `QueueSkillRequests` 在客户端重放路径上同样被调用（否则 Dash 输入在重放时丢失）。
 
-### 必须存进 `_inputHistory`，否则 Dash 在重放时消失
+### Dash 走既有 `InputBuffer`，不在 `Tick` 里直接读
 
-`BufferedInput`（`BattleSimulation.cs:1152`）与服务端 `PendingInput` 都要加该字段，`SaveInputHistory` / `_onSendInput` / `Tick` 签名一并更新。
+`BattleClientController` 已有技能通路：`Update` 里 `GetKeyDown` → `_inputBuffer.Record(BufferedInputKind.Skill, skillId, SkillInputBufferFrames=2)`，`Tick` 里 `TryConsume`。**Dash 照抄，`BufferedInputKind.Skill` 传 `DashId` 即可，不另起一套。** 两个它防的 bug 仍适用：
 
-**漏了的症状极具误导性**：首次预测有 Dash，回滚重放时 `_inputHistory` 里没有 → 重放结果与首次预测不同 → **每次回滚都产生一次新 mismatch**，看起来像「随机失配」或「网络问题」，实际是输入历史缺字段。
+| 错误做法 | 症状 |
+|---|---|
+| `Tick` 里直接 `GetKeyDown` | 渲染帧率高于 30Hz 时按下发生在两次 Tick 之间**丢按键** |
+| 用 `GetKey`（长按） | Recover 结束瞬间**自动连发**，体力被抽干 |
 
-`BattleLogic.SubmitInput` 有一个 **test-only 的 `float` 重载**，`DashRequest` 要在**两个重载**上都作为末位参数追加 —— 否则测试与生产走不同参数语义，这类错误正好被用例本身放过。
+自动化输入走既有 `TryGetSkillRequest`，传 `DashId`。
 
 ## 架构
 
 ```
-新增：GameShared/FrameSync/Battle/DashPhase.cs          ← 枚举
-      GameShared/FrameSync/Battle/DashTuning.cs         ← Dash / 体力常量
-      GameShared/FrameSync/Battle/KnockbackTuning.cs    ← 击退常量 + 与平滑阈值的联立断言
-      GameShared/FrameSync/Battle/DashSystem.cs         ← 纯静态：推进相位、判定起手、解析移动速度
-      GameShared/FrameSync/Battle/StaminaSystem.cs      ← 纯静态：整数节律恢复
-      GameShared/FrameSync/Battle/KnockbackSystem.cs    ← 纯静态：逐帧应用与衰减（两端共用）
-      GameServer/…/BattleLogic 内私有：上一帧接触对集合 + 触发判定（服务端独占）
+新增：
+  GameShared/FrameSync/Battle/DisplacementEffect.cs      ← 位移 effect 配置（前置 A）
+  GameShared/FrameSync/Battle/DisplacementSystem.cs      ← 纯静态：逐帧衰减 + ApplyBodyImpulse（Dash/击退共用）
+  GameShared/FrameSync/Battle/StaminaSystem.cs           ← 纯静态：整数节律恢复
+  GameShared/FrameSync/Battle/KnockbackTuning.cs         ← 击退常量 + 与平滑阈值联立断言（决策四）
+  GameShared/FrameSync/Battle/DashTuning.cs              ← Dash/体力常量
+  GameShared/FrameSync/Battle/SeparationNormalResolver.cs← 法线解析纯函数（Step 4 抽取）
+  GameShared/SkillGraph/SkillExecutionSnapshotCodec.cs   ← 容器级快照收集/恢复（前置 B）
 
 服务端 BattleLogic.Tick 内顺序：
-  DashSystem.Advance(state)                  ← 递减 → 相位转移
-  DashSystem.TryStart(state, input)          ← 判定起手、扣体力
-  移动速度 = DashSystem.ResolveVelocity(...) ← Dashing 用锁定方向 × DashSpeed，否则用输入
-  KnockbackSystem.Apply(state, physics)      ← 当前击退速度 → ApplyBodyImpulse
-  KnockbackSystem.Decay(state)               ← 紧跟 Apply，见下方「衰减必须紧跟 Apply」
-  physics.Step(dt)                           ← 内含占位分离
+  SkillGraphRuntime.Step(frame)                  ← 含 Dash 技能图执行、挂/移 Buff
+  DisplacementSystem.ApplyAll(states, physics)   ← 当前位移速度 → ApplyBodyImpulse
+  DisplacementSystem.DecayAll(states)            ← 紧跟 Apply（见下）
+  physics.Step(dt)                               ← 内含占位分离
   SyncPlayerStatesFromPhysics()
   ── 以下服务端独占 ──
-  DetectNewContactsAndTriggerKnockback()     ← 新接触 → 写双方 KnockbackVel（本帧不再被 Decay）
+  DetectNewContactsAndTriggerKnockback()         ← 新接触→判Dash状态→挂击退Buff(被动方/互挂)+主动方撞停(移位移Buff+挂Recover)
   StaminaSystem.Tick(state)
 
-客户端 ApplyLocalPrediction 内：同上，但**跳过 DetectNewContacts**，并在应用权威快照后镜像远端 body
+客户端 ApplyLocalPrediction 内：同上，但跳过 DetectNewContacts，应用权威快照后镜像远端 body
 ```
 
 ### 衰减必须紧跟 Apply，不能放在触发之后
 
-**若 `Decay` 排在 `DetectNewContacts` 之后**，本帧刚写入的 `KnockbackSpeed = 12` 会立刻被衰减成 9，下一帧 `Apply` 用的是 9 —— **12 从未参与任何一帧积分**，决策四的 `12 × dt × (1 + 0.75 + …)` 验算不成立，实际总位移少一档。
+若 `DecayAll` 排在 `DetectNewContacts` 之后，本帧刚写入的 `KnockbackSpeed=12` 立刻被衰减成 9，**12 从未参与积分**，决策四验算失效。`Decay` 紧跟 `Apply`（都在 `physics.Step` 之前），新写入值天然不被本帧衰减。时序：
 
-把 `Decay` 紧跟 `Apply`（都在 `physics.Step` 之前）即可，**不需要区分「本帧新写入」与「已有状态」**：`Decay` 在触发之前就执行完了，新写入的值天然不会被本帧衰减。
-
-于是时序是：
-
-| 帧 | Apply 用的速度 | 帧末 remaining |
+| 帧 | Apply 速度 | 帧末 remaining |
 |---|---|---|
-| N（碰撞发生） | — （触发在帧末） | 8 |
+| N（碰撞） | —（触发在帧末） | 8 |
 | N+1 | **12**（完整） | 7 |
-| N+2 | 9 | 6 |
-| … | … | … |
 | N+8 | 12 × 0.75⁷ | 0 |
 
-共 8 帧积分，与 `KnockbackFrames = 8` 对齐，等比级数和 3.75 成立。
+共 8 帧积分，与 `KnockbackFrames=8` 对齐。**用例必须逐帧断言速度、remaining、位移增量。**
 
-**用例必须逐帧断言速度、`remaining` 与位移增量**，只断言「最终归零」会放过整条时序错位。
-
-四个 System 全是纯静态、零引擎依赖，放 `GameShared` 两端共用。**这是 Dash 状态机两端一致的结构性保证** —— 各写一份必然漂移。
+所有 System 纯静态、零引擎依赖，放 `GameShared` 两端共用 —— 各写一份必然漂移。
 
 ## 实现步骤
 
+### Step 0a：前置 A —— 位移 effect 通道
+
+新增 `DisplacementEffect`、改 `BuffConfig`/`BuffSystem.ApplyBuff` 加非 Numeric 分支、`PlayerState` 加位移字段（Dash 位移 + 击退位移，**字段记录所属 RuntimeBuffId**）+ 快照/哈希/diff/proto。**改 `RemoveBuffInternal`（`BuffSystem.cs:457`）：移除带 DisplacementEffect 的 Buff 时清零对应位移字段**（P1-3）。单独跑全量用例确认「只有基线变、行为不变」。
+
+### Step 0b：前置 B —— SkillGraph 可回滚通路
+
+`BattleSkillGraphRuntime` 加 `CaptureExecutions`/`RestoreExecutions`（**value 是 `ActiveSkillExecutionSnapshot{CasterId,TargetId,SkillId,RunnerSnapshot}`，不只 SkillExecutionSnapshot** —— P1-1），接 `PlayerState` 快照/`StateHasher`/`ArePlayerSnapshotsEquivalent`/proto（Dictionary 按键排序）。加用例 `skillgraph-execution-replays-after-rollback` + `skillgraph-restore-resumes-correct-graph`。
+
 ### Step 1：体力接入属性系统
 
-按决策二的清单改 10 处。`MaxStamina` 默认 100、初值满。
+按决策二清单改 12 处。`MaxStamina` 默认 100、初值满。**单独跑一次全量用例。**
 
-**这一步单独跑一次全量用例。** 它会改动两个哈希基线，也会波及既有的属性与 Buff 用例。先确认「只有基线变了、其他行为不变」，再往下做 —— 否则后面出问题时分不清是哪一步引入的。
+### Step 2：Dash 技能图 + Buff 配置
 
-若属性或 Buff 用例失败，**是某处映射漏了，改代码不改用例**。
+新建 Dash 技能图数据 + **补三条代码通道（P1-2）**：`QueueSkillRequest` 加 Fixed64 dx/dy、`ApplyBuffCommand`/新 handler 携带动态初始速度、新增"校验体力并扣除"服务。`DashTuning`：`DashFrames=6`、`RecoverFrames=20`、`DashSpeed=18`、`DashStaminaCost=30`。技能图入口**同时检查**：无 Recover Buff、无活跃 Dash 执行、无位移 Buff、体力足够（P1-5）。
 
-### Step 2：Dash 状态机
+位移交汇点在 `DisplacementSystem`，**不在 `MoveSystem` 加 Dash 分支**。
 
-新增 `DashPhase` / `DashTuning` / `DashSystem`。默认值：`DashFrames = 6`、`RecoverFrames = 20`、`DashSpeed = 18`、`DashStaminaCost = 30`。
+### Step 3：Dash 输入通路
 
-`PlayerState` 与 `PlayerStateSnapshot` 加 Dash 三字段 + `StaminaRegenCounterFrames`，进哈希与 `ArePlayerSnapshotsEquivalent`。
-
-`DashSystem.ResolveVelocity` 是 Dash 与移动的唯一交汇点：`Dashing` 相位返回锁定方向 × `DashSpeed`，否则返回输入方向 × `MoveSpeed`。**不要在 `MoveSystem` 里加 Dash 分支** —— `MoveSystem.Apply` 当前只是转发给 `SetBodyMovementInput`，把 Dash 塞进去会让「移动」和「Dash」的职责混在一起。
-
-### Step 3：输入通路加 `DashRequest`
-
-proto 加字段 → 跑 `GameServer/Tools/ProtocolExportTool/Run.bat` → 客户端采样 Shift → `Tick` / `SaveInputHistory` / `_onSendInput` / `BufferedInput` / `PendingInput` / `SubmitInput` 两个重载。
-
-### Dash 按键必须走既有 `InputBuffer`，不能在 `Tick` 里直接读
-
-`BattleClientController` 已有 `InputBuffer<BufferedInputKind, int>`（`:39`），技能就是这么接的：`Update` 里 `Input.GetKeyDown` → `_inputBuffer.Record(BufferedInputKind.Skill, skillId, SkillInputBufferFrames=2)`（`:215-221`），`Tick` 里 `_inputBuffer.TryConsume`（`:254`）。
-
-Dash 照抄这条通路，**不要另起一套**：
-
-- `BufferedInputKind` 加 `Dash`（该枚举是私有的，`:92`）
-- `Update` 里 `GetKeyDown(LeftShift) || GetKeyDown(RightShift)` → `Record`，缓冲帧数沿用 2
-- `Tick` 里 `TryConsume`，**每次逻辑 Tick 最多消费一次**
-
-两个具体 bug 是这条通路专门防的：
-
-| 错误做法 | 症状 |
-|---|---|
-| `Tick` 里直接 `GetKeyDown` | 渲染帧率高于 30Hz 时，按下发生在两次逻辑 Tick 之间就**丢按键** |
-| 用 `GetKey`（长按） | Recover 结束瞬间**自动连发 Dash**，体力被一路抽干 |
-
-**自动化输入也要走同一语义**：`_automationInputSource` 已有 `TryGetSkillRequest`（`:248`），需加 `TryGetDashRequest`。注意既有结构里 `TryConsume` 在 `else` 分支 —— **自动化输入存在时不消费键盘缓冲**，Dash 照抄这个结构，否则两个来源会互相干扰。
-
-服务端两处接线点（**行号会漂，按方法名定位**）：`BattleComponent.SubmitInput` 转发处追加参数、`BattleComponent.Tick` 驱动处。
+复用既有技能通路：`Update` 里 `GetKeyDown(LeftShift/RightShift)` → `Record(BufferedInputKind.Skill, DashId, 2)`，`Tick` 里 `TryConsume`。自动化源 `TryGetSkillRequest` 传 `DashId`。服务端两处接线点（`SubmitInput` 转发、`Tick` 驱动）按方法名定位。
 
 ### Step 4：击退
 
-新增 `KnockbackTuning`（含决策四的构造期断言）与 `KnockbackSystem`。`PlayerState` 与快照加 `KnockbackVelX/Y` + `KnockbackRemainingFrames`，进哈希、diff、proto。
+`KnockbackTuning`（含决策四断言）。服务端加「已触发集合」键为 `(contactPair, dashEpoch)`，追踪**两种边沿**：新接触 / 接触期间起 Dash（P1-4）。触发前判双方 Dash 状态，按决策三三种情况处理，主动方撞停（移位移 Buff + 挂 Recover，**走 RemoveBuffInternal 清位移字段**）。冲量方向取两球中心连线；**完全重合时必须与占位分离用同一退化规则**。
 
-服务端加「上一帧接触对集合」与新接触触发。冲量方向取两球中心连线；**完全重合时（`distanceSquared <= OccupancyEpsilon`）必须与占位分离用同一套退化规则** —— 两处不一致会产生极难复现的偏差。
-
-**但 `DetermineSeparationNormal` 目前是 `FrameSyncPhysicsWorld` 的 `private static` 方法，`BattleLogic` 调不到。** 只写「沿用它」的话，实现者唯一的出路是复制一份 —— 正好违反这条约束本身。
-
-**所以本步含一项结构改造**：把法线解析抽成 `GameShared/FrameSync/Battle/SeparationNormalResolver.cs` 的纯静态函数，`ResolvePlayerOccupancy` 与击退触发共同调用。
-
-抽取时注意它现在的第二级退化依赖 `requestedVelocities`（相对速度方向）—— 击退触发发生在 `physics.Step` 之后，此时 `_pendingLinearVelocities` 与 `_pendingImpulses` 已被清空，**拿不到 `requestedVelocities`**。故纯函数签名要允许「无速度信息」的调用方式，此时直接落到第三级退化（bodyId 排序）。**两个调用方在同一输入下必须得到同一结果，这是抽取的全部意义**，用例专守。
+`DetermineSeparationNormal` 现为 `FrameSyncPhysicsWorld` 的 `private static`，`BattleLogic` 调不到。**本步含结构改造**：抽成 `SeparationNormalResolver` 纯静态，占位分离与击退触发共用。抽取注意其第二级退化依赖 `requestedVelocities`，而击退触发在 `physics.Step` 之后 `_pendingLinearVelocities`/`_pendingImpulses` 已清空，拿不到 —— 纯函数签名要允许「无速度信息」调用，直接落第三级退化（bodyId 排序）。**两调用方同输入同结果，用例专守。**
 
 ### Step 5：远端 body 镜像（决策五）
 
-在 `ApplyAuthoritativeSnapshot` 里，`_remotePlayers.ApplyAuthoritative(...)` 之后、对每个远端玩家 `SetBodyTransform(resetVelocity: true)`。
-
-**唯一的顺序陷阱**：`RestoreSelfOnly` 内部会 `ClearBodies()` 再只重建自己。所以镜像写入**必须在 `RestoreSelfOnly` 之后**。写在前面会被整块清掉，决策五完全失效 —— 而且症状与「没实现决策五」一模一样，排查时容易误判成方案无效。
-
-buffer 移除条目处同步 `RemoveBody`。
+`ApplyAuthoritativeSnapshot` 里 `_remotePlayers.ApplyAuthoritative(...)` 之后、对每个远端 `SetBodyTransform(resetVelocity: true)` + `SetBodyKinematicObstacle(true)`。**顺序陷阱**：`RestoreSelfOnly` 内部 `ClearBodies()` 再重建自己，镜像写入**必须在 `RestoreSelfOnly` 之后**，否则被清掉（症状与「没实现」一模一样）。buffer 移除处同步 `RemoveBody`。
 
 ### Step 6：表现层
 
-Dash 期间拖影/变色；体力条；击退时 ghost 与实体分离最明显（S11 主素材）；HUD 加 Dash 相位、体力、击退剩余帧。
-
-复用 S1 的 ghost 与既有 HUD 结构，**不做布局打磨**（S10/S11）。
+Dash 拖影/变色；体力条；击退 ghost 分离（S11 主素材）；HUD 加 Dash 相位、体力、击退剩余帧。复用 S1 ghost 与既有 HUD，**不做布局打磨**。
 
 ### Step 7：mismatch 日志分字段
 
-`CheckConsistency` 的 MISMATCH 日志已含位置、属性、Buff。追加体力、Dash 相位、击退，并在**首个不一致字段**处打对应标签。
-
-判定顺序：**先 gameplay 语义（体力 → Dash 相位 → 击退），后位置与属性。** 位置失配往往是前三者的**后果**，先报位置会指错方向。
+`CheckConsistency` 追加体力、Dash、击退标签，在**首个不一致字段**处打标签。判定顺序：**先 gameplay 语义（体力 → Dash → 击退），后位置与属性** —— 位置失配往往是前三者后果。
 
 ### Step 8：无头用例
 
-**注册两处**（`AllCaseNames` 数组 + `RunCase` 的 switch 表达式），**只追加不改既有**。
+注册两处（`AllCaseNames` + `RunCase` switch），**只追加不改既有**。
 
-Dash 与体力（8 条）：
-
-| 用例 | 断言 |
-|---|---|
-| `dash-consumes-stamina-and-enters-recover` | 起手扣体力、相位转 `Dashing`、到期转 `Recovering` |
-| `dash-blocked-during-recover` | Recover 期间起手请求被忽略，体力不扣 |
-| `dash-blocked-when-stamina-insufficient` | 体力不足时不起手、不扣体力、相位不变 |
-| `dash-direction-latched-at-start` | 起手后改输入方向，位移仍按起手方向 |
-| `dash-zero-input-uses-default-direction` | 零输入起手取常量 `(1,0)`，不拒绝 |
-| `dash-phase-advance-order-is-decrement-then-start` | 同一帧 Recover 到期 + 新请求：Recover 完整生效，不被吞 |
-| **`dash-request-survives-replay`** | **守决策七**。含 Dash 的帧回滚重放后结果与首次预测逐位相同 |
-| **`stamina-regen-counter-restores-on-rollback`** | **守决策二**。回滚后 `StaminaRegenCounterFrames` 恢复到权威值，体力不漂移 |
-
-Dash 输入通路（2 条，守 Step 3）：
+前置与 SkillGraph（5 条）：
 
 | 用例 | 断言 |
 |---|---|
-| `dash-input-buffered-across-render-frames` | 渲染帧按下、当帧无逻辑 Tick 时，**下一个逻辑 Tick 仍能消费到** |
-| `dash-hold-does-not-autofire` | 持续按住 Shift 跨越整个 Dash + Recover 周期，**只起手一次** |
+| `displacement-effect-applies-and-decays` | 挂位移 Buff 后 PlayerState 位移字段=初始速度；逐帧衰减、到期清零 |
+| **`displacement-cleared-on-buff-expiry`** | **守前置 A 生命周期（P1-3）**。位移 Buff 到期/手动移除后位移字段立即清零；下一帧冲量为零（不只 Buff 不存在） |
+| **`skillgraph-execution-replays-after-rollback`** | **守前置 B**。含 Dash 执行的帧回滚重放后 runner 状态逐位恢复 |
+| **`skillgraph-restore-resumes-correct-graph`** | **守前置 B 身份字段（P1-1）**。不同 SkillId/TargetId 的执行恢复后继续跑正确的图，不串图 |
+| `dash-buff-latches-direction-at-start` | 起手后改输入，位移仍按起手方向 |
 
-击退（7 条）：
+Dash 与体力（7 条）：
+
+| 用例 | 断言 |
+|---|---|
+| `dash-consumes-stamina-and-enters-recover` | 起手扣体力、挂位移 Buff、随后挂 Recover Buff |
+| `dash-blocked-during-recover` | Recover Buff 在时拒绝起手，体力不扣 |
+| **`dash-blocked-while-dashing`** | **守 P1-5**。Dash 期间再次按 Shift：不起手、不扣体力、不覆盖当前执行、位移不重置 |
+| `dash-blocked-when-stamina-insufficient` | 体力不足不起手 |
+| `dash-zero-input-uses-default-direction` | 零输入起手取常量 `(1,0)` |
+| **`dash-input-survives-replay`** | 含 Dash 的 SkillId 输入回滚重放后结果与首次预测逐位相同 |
+| **`stamina-regen-counter-restores-on-rollback`** | 回滚后 `StaminaRegenCounterFrames` 恢复权威值 |
+
+Dash 输入通路（2 条）：
+
+| 用例 | 断言 |
+|---|---|
+| `dash-input-buffered-across-render-frames` | 渲染帧按下、当帧无逻辑 Tick 时下一 Tick 仍消费到 |
+| `dash-hold-does-not-autofire` | 持续按住跨越整个 Dash+Recover 周期，只起手一次 |
+
+击退（11 条）：
 
 | 用例 | 断言 |
 |---|---|
 | `knockback-triggers-only-on-new-contact` | 接触持续 5 帧只触发一次；分离后再接触再触发一次 |
-| **`knockback-decay-timeline-is-frame-exact`** | **守决策三时序**。逐帧断言速度、`remaining`、位移增量：帧 N+1 速度为**完整** `KnockbackSpeed`、N+2 为 ×0.75、…、N+8 后归零，共 **8 帧**积分。**只断言「最终归零」会放过整条时序错位** |
-| `knockback-total-displacement-matches-series` | 总位移与等比级数和（3.75 项）一致，即决策四验算成立 |
-| `separation-normal-resolver-agrees-across-callers` | **守 Step 4 抽取**。同一输入下占位分离与击退触发得到同一法线；完全重合时都落到 bodyId 排序退化 |
-| **`knockback-state-replays-without-new-mismatch`** | **守决策三核心**。应用含击退状态的权威快照后，重放不产生新 mismatch |
-| `knockback-worst-case-deviation-under-smoothing-threshold` | 决策四验算：最坏偏差 < `MaxSmoothingDistance` |
+| **`dash-starts-while-already-in-contact`** | **守 P1-4**。两人已贴身、一方起 Dash：击退触发（不只看新接触）；同 Dash epoch 不重复触发 |
+| **`dash-collision-knockbacks-passive-player`** | **守决策三**。Dash 撞非 Dash：被动方击退飞出、主动方撞停 + 进 Recover |
+| **`dual-dash-collision-knockbacks-both`** | **守决策三**。双方 Dash 对撞：互相击退、双方都撞停 + 都进 Recover |
+| `non-dash-collision-no-knockback` | 双方都非 Dash 碰撞只占位分离，不挂击退 Buff |
+| **`knockback-decay-timeline-is-frame-exact`** | 逐帧断言：N+1 速度完整 `KnockbackSpeed`、N+2 ×0.75、…、N+8 归零，共 8 帧 |
+| `knockback-total-displacement-matches-series` | 总位移与级数和（3.75 项）一致 |
+| `separation-normal-resolver-agrees-across-callers` | 同输入下占位分离与击退触发同法线；重合都落 bodyId 排序退化 |
+| **`knockback-state-replays-without-new-mismatch`** | **守决策三核心**。应用含击退 Buff 的权威快照后重放不产生新 mismatch |
+| `knockback-worst-case-deviation-under-smoothing-threshold` | 最坏偏差 < `MaxSmoothingDistance` |
 | `client-prediction-never-self-triggers-knockback` | 客户端预测路径不含触发逻辑，孤立跑不产生击退 |
 
 远端 body 镜像（4 条）：
 
 | 用例 | 断言 |
 |---|---|
-| `remote-body-blocks-self-movement` | 自己撞不进远端玩家占位；远端不在 `_worldState`、`PlayerCount == 1` |
-| **`remote-body-not-displaced-by-occupancy`** | **守决策五的 kinematic 建模**。自己静止、两者重叠时连跑多帧，**镜像位置逐位不变**（全部穿透量由自己承担）。**不加 `IsKinematicObstacle` 时这条必挂** |
+| `remote-body-blocks-self-movement` | 自己撞不进远端占位；远端不在 `_worldState`、`PlayerCount==1` |
+| **`remote-body-not-displaced-by-occupancy`** | **守 kinematic 建模**。自己静止且重叠时连跑多帧镜像逐位不变。**不加 `IsKinematicObstacle` 时必挂** |
 | **`remote-body-mirror-survives-restore-self-only`** | **守 Step 5 顺序陷阱**。`RestoreSelfOnly` 后镜像仍在 |
-| `remote-body-removed-with-buffer-entry` | 玩家消失后 body 一并移除，不留隐形墙 |
+| `remote-body-removed-with-buffer-entry` | 玩家消失后 body 一并移除 |
 
-字段同步（5 条）：
+字段同步（4 条）：
 
 | 用例 | 断言 |
 |---|---|
-| `dash-state-proto-roundtrip` | Dash 三字段往返位精确 |
-| `knockback-state-proto-roundtrip` | 击退三字段往返位精确 |
-| **`numeric-stamina-base-proto-roundtrip`** | **守决策二第二节**。`Numeric.BaseAttributes` 的两个体力 base 往返位精确；**base 不同步时 `Recalculate` 会把体力清零**，这条专门抓它 |
-| `stamina-recovers-after-packet-loss` | 守 B1 周期全量对体力生效 |
-| `stamina-mismatch-triggers-rollback` | 守决策二 `AreAttributesEqual` |
+| `dash-displacement-state-proto-roundtrip` | Dash 位移字段往返位精确 |
+| `knockback-state-proto-roundtrip` | 击退位移字段往返位精确 |
+| **`numeric-stamina-base-proto-roundtrip`** | **守决策二**。两个体力 base 往返位精确；base 不同步时 `Recalculate` 把体力清零 |
+| `stamina-mismatch-triggers-rollback` | 守 `AreAttributesEqual` |
 
-合计 **26 条**，总数 **73 → 99**（基数须在 S7 落地后重数）。
+合计 **33 条**，总数须在 S7 落地后重数再加。
 
 ### Step 9：report 与场景
 
-`BattleAutomationClientSnapshot` 加 `dashCount`、`staminaAtEnd`、`knockbackTriggerCount`、`contactMismatchFrames`。新增场景 `two-client-knockback`。
-
-**场景名登记三处**（`TestRunner.Execute` 的 switch、`NormalizeScenario`、`TestScenario` 常量表）—— 只登记一处会让 `--scenario=all` 假 PASS，既有验收指南已列为 FAIL 判据。
-
-**必须有一条断言是「击退确实发生了」**（`knockbackTriggerCount > 0`）。否则碰撞判定失效时，所有判据都会以「一切正常」的姿态通过 —— 同 S4 Step 7、S7 Step 7 同一类陷阱。
+`BattleAutomationClientSnapshot` 加 `dashCount`、`staminaAtEnd`、`knockbackTriggerCount`、`contactMismatchFrames`。新场景 `two-client-knockback`，**登记三处**（`TestRunner.Execute` switch、`NormalizeScenario`、`TestScenario` 常量表）。**必须有一条断言「击退确实发生了」（`knockbackTriggerCount > 0`）**，否则碰撞判定失效时所有判据假通过。
 
 ## 验证方式
 
+> **本次验收范围（2026-08-07）**：以代码编译、无头用例、哈希双跑和确定性扫描为完成门禁；Unity Play Mode、真实双客户端 report 与画面观测不执行，也不阻塞本次交付。
+
 - **无头**：`--mode=test --scenario=all` 全通过，退出码 `0`
-- **基线稳定性**：两个哈希基线变化**一次**后，连续两跑逐位一致（决策六）
+- **基线稳定性**：两个哈希基线变化**一次**后连续两跑逐位一致（决策六）
 - **确定性扫描**：`--mode=validate --duration-seconds 30 --update-hz 60`，Issues 零
-- **弱网 Dash**：`two-client-weaknet-delay` 下 Dash 起手不等服务端确认，体力与相位最终收敛
-- **弱网击退**：`two-client-knockback` 固定场景（下方定量判据）
-- **接触期对比**：`contactMismatchFrames` 的 before/after 数字
+- **弱网 Dash**：`two-client-weaknet-delay` 下起手不等确认，体力与位移最终收敛
+- **弱网击退**：`two-client-knockback` 固定场景定量判据（下方）
+- **接触期对比**：`contactMismatchFrames` before/after
 
-### 定量判据必须绑定固定场景
+### 定量判据绑定固定场景
 
-「mismatch 与碰撞次数同量级」这种说法**不可执行** —— 没有网络参数、接触持续时间与上界公式，验收 agent 无法判定。改为在**固定场景**下给死数字：
-
-场景 `two-client-knockback` 固定参数：**注入双向各 100ms 延迟、零丢包、固定种子、两球对撞 3 次、每次接触持续约 4 帧**。
+场景 `two-client-knockback` 固定参数：**双向各 100ms 延迟、零丢包、固定种子、Dash 撞人 3 次（含 1 次双方 Dash 对撞）、每次接触约 4 帧**。
 
 | 判据 | 阈值 |
 |---|---|
 | 每次服务端击退触发引起的 `StateMismatch` | **≤ 1** |
 | 全程 `StateMismatch` 总数 | **≤ 3**（= 碰撞次数） |
-| `contactMismatchFrames`（接触期 `PositionMismatch`，决策五残差） | **≤ 6**（3 次接触 × 2 帧余量） |
+| `contactMismatchFrames`（接触期 `PositionMismatch`，决策五残差） | **≤ 6** |
 | 同场景相对决策五实施前的 `contactMismatchFrames` | **下降 ≥ 60%** |
 
-**`StateMismatch` 与 `PositionMismatch` 必须分开统计** —— 前者是击退状态到达引起的（决策三，应恰好每次碰撞一次），后者是镜像位置滞后的残差（决策五，有界但不为零）。混在一个计数里则两者互相掩盖，任何一个退化都看不出来。
-
-阈值按上述固定参数标定。**换网络参数必须重新标定，不要拿别的场景的数字判 FAIL。**
-- **HUD / 录屏**：Dash 拖影、体力条、击退时 ghost 与实体分离可见
+**`StateMismatch` 与 `PositionMismatch` 必须分开统计** —— 前者是击退状态到达（决策三），后者是镜像滞后残差（决策五）。混计则互相掩盖。**换网络参数必须重新标定。**
 
 ## 完成标准
 
-1. **Dash / 体力 / Recover 全程客户端预测**，弱网下不等服务端确认；三者及 `StaminaRegenCounterFrames` 全部进快照、哈希、diff、回滚重播。
-2. **Dash 方向在起手帧锁定**，零输入起手取常量方向（决策一）。
-3. **体力走独立 `AttributeKind.Stamina`**，`AreAttributesEqual` 与 `StateHasher` 两处都已加（决策二）。
-4. **体力恢复是整数节律**，计数器进快照；`stamina-regen-counter-restores-on-rollback` 通过。
-5. **击退裁决权在服务端**，客户端预测路径不自触发（`client-prediction-never-self-triggers-knockback` 通过）。
-6. **击退状态随快照下发并被客户端重放** —— `knockback-state-replays-without-new-mismatch` 通过；固定场景 `two-client-knockback` 下**每次触发引起的 `StateMismatch` ≤ 1、总数 ≤ 3**（决策三）。**这条是本阶段演示价值的核心判据。**
-7. **触发按新接触判定**，接触持续期不重复触发（`knockback-triggers-only-on-new-contact` 通过）。
-8. **击退衰减时序逐帧正确** —— 首帧用完整 `KnockbackSpeed`、共 8 帧积分、总位移与级数和一致（`knockback-decay-timeline-is-frame-exact` 通过）。**`Decay` 紧跟 `Apply`，不在触发之后。**
-9. **击退参数与平滑阈值的联立断言在构造期生效**，越界抛异常（决策四）。**调参后必须重跑。**
-10. **法线解析已抽成两端共用的纯函数**，占位分离与击退触发同输入同结果（`separation-normal-resolver-agrees-across-callers` 通过）。
-11. **客户端把别人镜像成只读碰撞 body**，不进 `_worldState`、不参与回滚；`RestoreSelfOnly` 后镜像仍在（决策五）。
-12. **镜像 body 已显式建模为 kinematic**，自己静止且重叠时镜像位置逐位不变（`remote-body-not-displaced-by-occupancy` 通过）。**仅靠 `resetVelocity` 不够。**
-13. **接触期残差有界** —— `contactMismatchFrames ≤ 6` 且相对实施前下降 ≥ 60%；**`StateMismatch` 与 `PositionMismatch` 分开统计**。
-14. **Dash 按键走既有 `InputBuffer`** —— 渲染帧按下下一逻辑帧仍可消费、长按不自动连发（两条用例通过）；自动化输入走同一单帧请求语义。
-15. **`Numeric.BaseAttributes` 的两个体力 base 已协议化** —— `numeric-stamina-base-proto-roundtrip` 通过。**漏了则每次应用权威快照都把体力清零。**
-16. **体力是两个独立 `AttributeKind`**（`Stamina` / `MaxStamina`），`GetBaseValue` / `SetBaseValue` / `Recalculate` 三处都已加分支。**「Buff 提升体力上限」实际可用。**
-17. **mismatch 日志按类型区分** `PositionMismatch` / `StaminaMismatch` / `StateMismatch`，判定顺序先 gameplay 语义后位置。
-18. **`DashRequest` 进 `_inputHistory` 且重放复现**（`dash-request-survives-replay` 通过）。
-19. 四个 System 与 `SeparationNormalResolver` 零 `UnityEngine` / `Fantasy` 引用，两端共用同一份实现。
-20. **两个哈希基线已按新字段更新且连续两跑稳定**；**三份既有验收指南的「基线必须不变」已同步改注**（决策六）。
-21. **`knockbackTriggerCount > 0` 已进判据**，防碰撞判定失效时假通过。
-22. **S6 决策六勘误已回写** —— 说明「玩家间无碰撞」不成立、客户端改为只读镜像、S6 核心原则未被削弱。
-23. 能说清**为什么击退触发不预测**（对手位置在本地是过去时，预测它期望值为负）、**为什么演化照常预测**（否则每击退帧一次回滚），以及两者不矛盾。
+1. **Dash / 体力 / Recover 全程客户端预测**，弱网下不等确认；三者及 `StaminaRegenCounterFrames` 进快照/哈希/diff/回滚。
+2. **SkillGraph 执行态进快照可回滚**（前置 B）—— `skillgraph-execution-replays-after-rollback` 通过。
+3. **位移 effect 通道可用**（前置 A）—— `displacement-effect-applies-and-decays` 通过；Dash/击退共用。
+4. **Dash 走 SkillGraph + Buff**，方向起手锁定、零输入取常量；Recover 是禁用 Buff、条件节点拦截。
+5. **体力走两个 `AttributeKind`**，`AreAttributesEqual` 与 `StateHasher` 两处都已加；整数节律恢复，计数器进快照。
+6. **击退裁决权在服务端**，客户端不自触发（`client-prediction-never-self-triggers-knockback`）。
+7. **击退状态随快照下发并被客户端重放** —— `knockback-state-replays-without-new-mismatch` 通过；固定场景每次触发 `StateMismatch ≤ 1`、总数 `≤ 3`。**核心判据。**
+8. **触发按新接触判定**（`knockback-triggers-only-on-new-contact`）。
+9. **击退衰减时序逐帧正确** —— 首帧完整速度、8 帧积分、总位移与级数和一致。`Decay` 紧跟 `Apply`。
+10. **参数与平滑阈值联立断言在构造期生效**，越界抛异常。调参后重跑。
+11. **法线解析抽成两端共用纯函数**（`separation-normal-resolver-agrees-across-callers`）。
+12. **客户端镜像别人为只读碰撞 body**，不进 `_worldState`/回滚；`RestoreSelfOnly` 后镜像仍在。
+13. **镜像 body 显式建模为 kinematic**，自己静止重叠时镜像逐位不变。**仅 `resetVelocity` 不够。**
+14. **接触期残差有界** —— `contactMismatchFrames ≤ 6` 且下降 ≥ 60%；`StateMismatch`/`PositionMismatch` 分开统计。
+15. **Dash 按键走既有 `InputBuffer`** —— 渲染帧按下下一帧可消费、长按不连发；自动化走同一语义。
+16. **`Numeric.BaseAttributes` 两个体力 base 已协议化**（`numeric-stamina-base-proto-roundtrip`）。
+17. **mismatch 日志按类型区分**，判定顺序先 gameplay 语义后位置。
+18. **`SkillId`(Dash) 进 `_inputHistory` 且重放复现**（`dash-input-survives-replay`）。
+19. 所有 System 与 `SeparationNormalResolver` 零 `UnityEngine`/`Fantasy` 引用，两端共用。
+20. **两个哈希基线按新字段更新且连续两跑稳定**；三份既有验收指南「基线必须不变」已改注。
+21. **`knockbackTriggerCount > 0` 进判据**，防碰撞失效假通过。
+22. **S6 决策六勘误已回写**。
+23. 能说清**为什么击退触发不预测**（对手位置在本地是过去时，预测期望值为负）、**为什么演化照常预测**（否则每击退帧一次回滚），两者不矛盾。
+24. 能说清**为什么 Dash 走 SkillGraph 但击退 Buff 不走**（Dash 由玩家输入触发、击退由碰撞触发），以及**为什么位移用 DisplacementEffect 而非属性修饰**（衰减量与恒定修饰模型不匹配）。
+25. **位移字段随 Buff 移除统一清零**（P1-3）—— `displacement-cleared-on-buff-expiry` 通过；位移 Buff 到期/撞停后下一帧冲量为零，不只 Buff 不存在。
+26. **SkillGraph 快照含身份字段，恢复后跑正确的图**（P1-1）—— `skillgraph-restore-resumes-correct-graph` 通过；不同 SkillId/TargetId 不串图。
+27. **Dash 入口拒绝重入**（P1-5）—— `dash-blocked-while-dashing` 通过；Dash 期间再按 Shift 不起手、不扣体力、不覆盖执行。
+28. **击退触发覆盖两种边沿**（P1-4）—— `dash-starts-while-already-in-contact` 通过；贴身起 Dash 也触发，不只新接触。
 
 ## 风险与对策
 
 | 风险 | 对策 |
 |---|---|
-| **沿用 S6「玩家间无碰撞」旧结论** | 会整个漏掉决策五，击退演示里两球接触期持续 mismatch，且该 mismatch 会掩盖击退本身的信号。`ResolvePlayerOccupancy` 从 v0.4a 就在（Context 第一条） |
-| **`DashRequest` 漏存 `_inputHistory`** | 重放时 Dash 消失，**每次回滚新增一次 mismatch，看起来像随机失配或网络问题**。`dash-request-survives-replay` 专守（决策七） |
-| **体力恢复用小数累加器** | 累加器自身是逻辑状态，漏进快照则回滚后体力漂移，表现为偶发体力 mismatch。用整数节律 + 计数器进快照（决策二） |
-| **漏 `AreAttributesEqual` 的体力比较** | 体力失配不触发回滚，永久错位而系统自认一致。`stamina-mismatch-triggers-rollback` 专守 |
-| **漏 `StateHasher` 的新字段** | S3 哈希对账放过该字段的所有错误。两处（玩家段 + `Numeric.BaseAttributes` 段）都要加 |
-| **击退用 `ApplyBodyImpulse` 承载持续状态** | 它当帧清空且不进快照，回滚后凭空消失。持续状态放 `PlayerState` + 快照，每帧重新喂（Context 第二条） |
-| **击退客户端完全不感知** | 8 帧击退 = 8 次回滚，画面连续抖动，S6 收益一起毁掉。触发不预测、演化照常预测（决策三） |
-| **触发按「正在接触」判定** | 贴身期间每帧重新灌满击退速度，**击退永不衰减、两球持续弹开**。维护上一帧接触对集合（决策三末节） |
-| **重合时法线退化规则另写一套** | 与占位分离不一致会产生极难复现的偏差。**但 `DetermineSeparationNormal` 是 `private static`，不抽出来就只能复制** —— Step 4 含抽成 `SeparationNormalResolver` 的结构改造，`separation-normal-resolver-agrees-across-callers` 专守 |
-| **`Decay` 排在触发之后** | 本帧刚写入的 `KnockbackSpeed` 立刻被衰减，**首帧速度从未参与积分**，决策四验算失效、总位移少一档。`Decay` 紧跟 `Apply`；`knockback-decay-timeline-is-frame-exact` 逐帧断言 |
-| **击退用例只断言「最终归零」** | 放过整条时序错位（首帧被衰减、积分帧数少一帧）。必须逐帧断言速度、`remaining`、位移增量 |
-| **体力只加一个 `AttributeKind`** | `MaxStamina` 无 kind 则无法独立重算、无法被修饰器命中，**「Buff 提升体力上限」直接落空**。必须两个 kind（决策二） |
-| **漏 `NumericSnapshot` 的两个体力 base** | `RestoreRuntimeState` 里紧接着调 `Recalculate`，base 为 0 则**当场把刚同步来的体力算成 0**。表现为「体力永远是 0 且回滚不停」。`numeric-stamina-base-proto-roundtrip` 专守（决策二第二节） |
-| **`SetBaseValue` 既有分支漏传新参数** | 该属性被设值时把体力清零。**不要给 `PlayerAttributeSnapshot` 构造函数加默认值** —— 让漏改处编译失败 |
-| **以为 `resetVelocity: true` 就等于只读** | 它只清速度。双方都无朝向意图时占位分离**各分一半穿透量**，镜像 body 在重放中持续漂移。必须加 `IsKinematicObstacle`（决策五）；`remote-body-not-displaced-by-occupancy` 专守 |
-| **Dash 在 `Tick` 里直接 `GetKeyDown`** | 渲染帧率高于 30Hz 时按下发生在两次逻辑 Tick 之间就**丢按键**。走既有 `InputBuffer`（Step 3） |
-| **Dash 用 `GetKey` 长按** | Recover 结束瞬间**自动连发**，体力被一路抽干。用 `GetKeyDown` + `Record` / `TryConsume` |
-| **「mismatch 与碰撞次数同量级」当判据** | 无网络参数与上界公式，验收不可执行。绑定固定场景给死阈值，且 **`StateMismatch` 与 `PositionMismatch` 分开统计**（验证方式一节） |
-| **把零输入常量方向说成抗丢包措施** | `DashRequest` 与方向同消息、同到达同丢失，且 `ConsumedInput` 不含 `DashRequest`（服务端不会复用出 Dash）。它是**确定性**要求（零向量归一化未定义），不是抗丢包（决策一） |
-| **镜像 body 写在 `RestoreSelfOnly` 之前** | 被内部 `ClearBodies()` 清掉，决策五完全失效，**症状与「没实现」一模一样**，容易误判成方案无效。`remote-body-mirror-survives-restore-self-only` 专守（Step 5） |
-| **远端 body 不随玩家移除** | 隐形墙残留，重开局后撞空气。buffer 移除处同步 `RemoveBody` |
-| **把镜像 body 说成「预测别人」** | 它不推进、不插值、不回滚，就是障碍物。口径错了会与 S6 的叙事冲突（决策五） |
-| **按「哈希基线必须不变」判 FAIL** | 本阶段是唯一要求基线变化的阶段。**三份既有指南都要改注，尤其 S3 那份是明文强判据**（决策六） |
-| **基线只跑一次就更新** | 把偶发结果固化成基准。连续两跑确认后再更新（决策六） |
-| **Dash 期间跟随输入转向** | 服务端复用旧输入时方向与客户端不同，**每次上行丢包一次方向级 mismatch**。起手锁定（决策一） |
-| **零输入起手判为拒绝** | 「客户端有输入、服务端复用到零」时产生分歧。定成常量 `(1,0)`（决策一） |
-| **状态机先起手后递减** | Dash 少一帧；且同帧 Recover 到期 + 新起手会让 Recover 形同不存在。递减在前（决策一） |
-| **Dash 挂 SkillGraph** | 其执行状态无快照/恢复，回滚走整体 `Clear()`，违反 Timeline 技术约束 3。走一等字段（决策一） |
-| **击退走 Buff 系统** | 把时序绑到 Buff 命令队列顺序，且连续衰减量用 Buff 模型表达要绕一层，收益为零（决策三） |
-| **击退参数调猛后走硬跳** | 画面瞬移但**无头用例照样全绿**（哈希只管一致不管好看）。构造期断言 + 调参后重跑（决策四） |
-| **新场景名只登记一处** | `--scenario=all` 假 PASS。三处都要登记（Step 9） |
-| **无「击退确实发生了」的断言** | 碰撞判定失效时全部判据假通过（Step 9） |
-| **proto 新字段插在中间** | opcode / 字段号按声明顺序，后续全部改号。**末尾追加**：体力 25/26、Dash 与击退 27 起 |
-| **`SubmitInput` 只改一个重载** | 有 test-only 的 `float` 重载，只改一个会让测试与生产走不同参数语义，**这类错误正好被用例本身放过**（决策七） |
+| **沿用 S6「玩家间无碰撞」旧结论** | 漏掉决策五，接触期持续 mismatch 且掩盖击退信号。`ResolvePlayerOccupancy` 从 v0.4a 就在 |
+| **SkillGraph 容器级快照漏接** | Dash 技能图回滚丢失，每次回滚 Dash 状态错。`skillgraph-execution-replays-after-rollback` 专守（前置 B） |
+| **`SkillExecutionSnapshot` 的 Dictionary 不排序** | `blackboard`/`delayRemainingFrames` 进哈希/proto 时不排序 → 两端哈希不一致。按键排序后处理（前置 B） |
+| **位移状态漏进快照** | 回滚后位移凭空消失。`PlayerState` 位移字段进既有通路（前置 A） |
+| **位移 effect 误走 Numeric 管线** | 衰减难表达、污染 Numeric 快照。`DisplacementEffect` 走独立分支，不进 `ApplyBuffEffects` 的 Numeric 路径（前置 A） |
+| **位移 Buff 移除不清位移字段** | 撞停/到期后 DashVel 残留，球停不下来。位移字段记录 RuntimeBuffId，RemoveBuffInternal 统一清理（前置 A，P1-3）。`displacement-cleared-on-buff-expiry` 专守 |
+| **SkillGraph 快照缺身份字段** | 只存 SkillExecutionSnapshot 无法重建 Runner（Restore 需先 Initialize）。存 ActiveSkillExecutionSnapshot{CasterId,TargetId,SkillId,RunnerSnapshot}（前置 B，P1-1）。`skillgraph-restore-resumes-correct-graph` 专守 |
+| **方向/体力无传入通道** | QueueSkillRequest 不带方向、ApplyBuffCommand 不传动态速度、无扣体力接口。补 Fixed64 方向 + 动态速度 handler + 体力服务（决策一，P1-2）。**不走 float 黑板** |
+| **贴身起 Dash 漏触发** | 只看新接触漏掉"已接触+起 Dash"。追踪 (contactPair, dashEpoch) 边沿（决策三，P1-4）。`dash-starts-while-already-in-contact` 专守 |
+| **Dash 期间重入覆盖执行** | StartQueuedExecutions 直接覆盖同 caster 执行，重置位移重复扣体力。入口同时拒活跃执行/位移 Buff（决策一，P1-5）。`dash-blocked-while-dashing` 专守 |
+| **体力恢复用小数累加器** | 累加器漏进快照则回滚后漂移，偶发体力 mismatch。整数节律 + 计数器进快照（决策二） |
+| **漏 `AreAttributesEqual` 体力比较** | 体力失配不触发回滚，永久错位。`stamina-mismatch-triggers-rollback` 专守 |
+| **漏 `StateHasher` 新字段** | S3 哈希对账放过该字段错误。两处（玩家段 + `Numeric.BaseAttributes` 段）都要加 |
+| **漏 `NumericSnapshot` 两个体力 base** | `RestoreRuntimeState` 紧跟的 `Recalculate` 把体力算成 0。`numeric-stamina-base-proto-roundtrip` 专守 |
+| **`SetBaseValue` 既有分支漏传新参数** | 该属性设值时把体力清零。**不给构造函数加默认值**，让漏改处编译失败 |
+| **体力只加一个 `AttributeKind`** | `MaxStamina` 无 kind 无法独立重算/被修饰器命中。必须两个 kind |
+| **击退客户端完全不感知** | 8 帧击退 = 8 次回滚，画面连续抖动。触发不预测、演化照常预测（决策三） |
+| **触发按「正在接触」判定** | 贴身期间每帧重灌速度，永不衰减。维护上一帧接触对集合（决策三） |
+| **重合时法线退化另写一套** | 与占位分离不一致产生极难复现偏差。`DetermineSeparationNormal` 是 `private static`，必须抽成 `SeparationNormalResolver`（Step 4） |
+| **`Decay` 排在触发之后** | 首帧速度从未参与积分，决策四验算失效。`Decay` 紧跟 `Apply`；逐帧断言 |
+| **击退用例只断言「最终归零」** | 放过整条时序错位。逐帧断言速度/remaining/位移增量 |
+| **击退参数调猛走硬跳** | 画面瞬移但无头用例全绿。构造期断言 + 调参后重跑（决策四） |
+| **以为 `resetVelocity: true` 等于只读** | 双方无意图时各分一半穿透，镜像漂移。必须 `IsKinematicObstacle`（决策五） |
+| **镜像 body 写在 `RestoreSelfOnly` 之前** | 被 `ClearBodies()` 清掉，症状与「没实现」一样。写在之后；`remote-body-mirror-survives-restore-self-only` 专守 |
+| **远端 body 不随玩家移除** | 隐形墙残留。buffer 移除处同步 `RemoveBody` |
+| **Dash 在 `Tick` 里直接 `GetKeyDown`** | 高渲染帧率下丢按键。走既有 `InputBuffer`（决策七） |
+| **Dash 用 `GetKey` 长按** | Recover 结束自动连发。`GetKeyDown` + `Record`/`TryConsume` |
+| **「mismatch 与碰撞次数同量级」当判据** | 不可执行。绑定固定场景给死阈值，`StateMismatch`/`PositionMismatch` 分开统计 |
+| **把零输入常量方向说成抗丢包** | 它是确定性要求（零向量归一化未定义），不是抗丢包（决策一） |
+| **Dash 期间跟随输入转向** | 丢包时方向级 mismatch。起手锁定（决策一） |
+| **位移 effect 配置塞进 `BuffEffect` 当属性修饰** | 衰减无法表达。走独立 `DisplacementEffect` 通道（前置 A） |
+| **击退 Buff 经技能图节点触发** | 击退由碰撞触发，不经技能图。服务端直接挂（决策三） |
+| **按「哈希基线必须不变」判 FAIL** | 本阶段是唯一要求基线变化的阶段。三份指南改注，S3 那份优先（决策六） |
+| **基线只跑一次就更新** | 固化偶发结果。连续两跑确认（决策六） |
+| **新场景名只登记一处** | `--scenario=all` 假 PASS。三处登记（Step 9） |
+| **无「击退确实发生了」断言** | 碰撞失效时判据假通过（Step 9） |
+| **proto 新字段插中间** | opcode/字段号按声明顺序，后续全改号。**末尾追加** |
 | **服务端运行中报 `MSB3027`** | 先停服务端，或只 build `Entity.csproj` |
 
 ## 相关实现文件
 
 | 文件 | 改动 |
 |---|---|
-| `GameShared/FrameSync/Battle/DashPhase.cs` | 新建，枚举 |
-| `GameShared/FrameSync/Battle/DashTuning.cs` | 新建，Dash 与体力常量 |
-| `GameShared/FrameSync/Battle/KnockbackTuning.cs` | 新建，含与 `MaxSmoothingDistance` 的联立断言（决策四） |
-| `GameShared/FrameSync/Battle/DashSystem.cs` | 新建，纯静态：推进 / 起手 / 解析移动速度 |
+| `GameShared/FrameSync/Battle/DisplacementEffect.cs` | **新建**（前置 A），位移 effect 配置 |
+| `GameShared/FrameSync/Battle/DisplacementSystem.cs` | **新建**，纯静态：逐帧衰减 + ApplyBodyImpulse，Dash/击退共用 |
 | `GameShared/FrameSync/Battle/StaminaSystem.cs` | 新建，纯静态：整数节律恢复 |
-| `GameShared/FrameSync/Battle/KnockbackSystem.cs` | 新建，纯静态：逐帧应用与衰减，两端共用 |
-| `GameShared/FrameSync/Battle/SeparationNormalResolver.cs` | **新建**，法线解析纯函数，占位分离与击退触发共用（Step 4 结构改造） |
-| `GameShared/FrameSync/Battle/NumericModifier.cs` | `AttributeKind` 加 `Stamina = 6`、`MaxStamina = 7` |
-| `GameShared/FrameSync/Battle/PlayerAttributeDirtyFlags.cs` | 加两位，**`All` 一并更新** |
-| `GameShared/FrameSync/Battle/PlayerAttributeSnapshot.cs` | 加两字段 + 构造参数 + `Default`。**不加默认值参数** |
-| `GameShared/FrameSync/Battle/PlayerAttributeSync.cs` | `ComputeDirtyMask` / `Merge` 各加两项 |
-| `GameShared/FrameSync/Battle/PlayerState.cs` | Dash 三字段、击退三字段、恢复计数器、两个体力属性 + switch 分支 |
+| `GameShared/FrameSync/Battle/KnockbackTuning.cs` | 新建，含与 `MaxSmoothingDistance` 联立断言（决策四） |
+| `GameShared/FrameSync/Battle/DashTuning.cs` | 新建，Dash/体力常量 |
+| `GameShared/FrameSync/Battle/SeparationNormalResolver.cs` | **新建**，法线解析纯函数（Step 4） |
+| `GameShared/FrameSync/Battle/BuffConfig.cs` | 加 `DisplacementEffect?`（前置 A） |
+| `GameShared/FrameSync/Battle/BuffSystem.cs` | `ApplyBuff` 加非 Numeric 分支写位移字段；**`RemoveBuffInternal`（:457）加位移字段清理**（P1-3） |
+| `GameShared/FrameSync/Battle/PlayerState.cs` | 位移字段（Dash/击退各 VelX/Y/RemainingFrames）、恢复计数器、两体力属性 + switch |
 | `GameShared/FrameSync/Battle/PlayerStateSnapshot.cs` | 同上全部字段 |
-| `GameShared/FrameSync/Battle/NumericState.cs` | **`GetBaseValue` / `SetBaseValue` / `Recalculate` 三处**各加两条分支（决策二） |
-| `GameShared/FrameSync/Snapshot/StateHasher.cs` | **玩家段 + `Numeric.BaseAttributes` 段各加**（最易漏） |
-| `GameShared/FrameSync/Battle/FixedPhysicsBody.cs` | 加 `IsKinematicObstacle`（**不进快照**，纯客户端本地概念，决策五） |
-| `GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs` | 加 `SetBodyKinematicObstacle` 入口、`CalculateSeparationShares` 尊重该标志、`DetermineSeparationNormal` 改调 `SeparationNormalResolver` |
-| `GameShared/FrameSync/Battle/RemotePlayerBuffer.cs` | 移除条目处同步 `RemoveBody`（决策五） |
-| `GameServer/Tools/NetworkProtocol/Outer/OuterMessage.proto` | `PlayerSnapshot`、`C2B_PlayerInput`、**`NumericSnapshot`** 三处**末尾追加**，跑 `Run.bat` |
-| `GameServer/Server/Entity/Battle/BattleLogic.cs` | Tick 内驱动四 System、新接触触发、`SubmitInput` **两个重载**加 `DashRequest`。**本阶段刻意改内核**（决策六） |
-| `GameServer/Server/Entity/Battle/BattleComponent.cs` | `SubmitInput` 转发处、`Tick` 驱动处。**按方法名定位，行号会漂** |
-| `GameLogic/Battle/BattleSimulation.cs` | `ApplyLocalPrediction` 驱动四 System（**不含触发**）、`ApplyAuthoritativeSnapshot` 镜像远端 body、`BufferedInput` 加字段、`CheckConsistency` 日志分字段 |
-| `GameLogic/Battle/BattleClientController.cs` | `BufferedInputKind` 加 `Dash`、`Update` 里 `Record`、`Tick` 里 `TryConsume`、Dash 拖影、体力条、HUD |
-| `GameLogic/Battle/BattleSnapshotProtocolMapper.cs` | `PlayerSnapshot` 与 **`NumericSnapshot`** 的 To / From 双向补全（**S5 通路，漏则该字段静默丢失**） |
-| 自动化输入源接口 | 加 `TryGetDashRequest`，与 `TryGetSkillRequest` 同构（Step 3） |
-| `GameLogic/Battle/BattlePredictionSelfTestSuite.cs` | **26 条**，注册两处 |
-| `GameLogic/Battle/Automation/BattleAutomationRuntime.cs` | 四个 report 字段（`StateMismatch` 与 `PositionMismatch` **分开计**）+ 新场景判据 |
+| `GameShared/FrameSync/Battle/NumericModifier.cs` | `AttributeKind` 加 `Stamina=6`、`MaxStamina=7` |
+| `GameShared/FrameSync/Battle/PlayerAttributeDirtyFlags.cs` | 加两位，**`All` 一并更新** |
+| `GameShared/FrameSync/Battle/PlayerAttributeSnapshot.cs` | 加两字段 + 构造参数。**不加默认值参数** |
+| `GameShared/FrameSync/Battle/PlayerAttributeSync.cs` | `ComputeDirtyMask`/`Merge` 各加两项 |
+| `GameShared/FrameSync/Battle/NumericState.cs` | **`GetBaseValue`/`SetBaseValue`/`Recalculate` 三处**各加两条分支 |
+| `GameShared/FrameSync/Snapshot/StateHasher.cs` | **玩家段 + `Numeric.BaseAttributes` 段 + SkillGraph 执行态段各加**（最易漏） |
+| `GameShared/FrameSync/Battle/FixedPhysicsBody.cs` | 加 `IsKinematicObstacle`（**不进快照**，决策五） |
+| `GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs` | `SetBodyKinematicObstacle` 入口、`CalculateSeparationShares` 尊重标志、`DetermineSeparationNormal` 改调 `SeparationNormalResolver` |
+| `GameShared/FrameSync/Battle/RemotePlayerBuffer.cs` | 移除条目处同步 `RemoveBody` |
+| `GameShared/SkillGraph/RuntimeSkillGraph.cs` | `BattleSkillGraphRuntime` 加 `CaptureExecutions`/`RestoreExecutions`（前置 B，value=`ActiveSkillExecutionSnapshot{CasterId,TargetId,SkillId,RunnerSnapshot}`，P1-1）；**`QueueSkillRequest` 加 Fixed64 dx/dy**（P1-2） |
+| `GameShared/SkillGraph/SkillExecutionSnapshotCodec.cs` | **新建**（前置 B），Dictionary 排序序列化/哈希 |
+| Dash 技能图数据 + Dash/击退 Buff 配置 | **新建**（Step 2/4）；既有 `ApplyBuffNodeHandler` 不携带动态速度，**需补动态速度 handler + 体力校验扣除服务**（P1-2） |
+| `GameShared/SkillGraph/SkillHandlers.cs` | **新增动态速度 handler**（给 DisplacementEffect 传起手方向，P1-2） |
+| `GameShared/SkillGraph/SkillContext.cs` | `ISkillRuntimeServices` 加"校验体力并扣除"接口（P1-2） |
+| `GameServer/Tools/NetworkProtocol/Outer/OuterMessage.proto` | `PlayerSnapshot`、**`NumericSnapshot`**、`SkillExecutionSnapshot` 段**末尾追加**，跑 `Run.bat` |
+| `GameServer/Server/Entity/Battle/BattleLogic.cs` | Tick 内驱动 SkillGraph/Displacement/Stamina、新接触触发挂击退 Buff。**本阶段刻意改内核**（决策六） |
+| `GameServer/Server/Entity/Battle/BattleComponent.cs` | `SubmitInput`/`Tick` 接线。**按方法名定位** |
+| `GameLogic/Battle/BattleSimulation.cs` | `ApplyLocalPrediction` 驱动（**不含触发**）、`ApplyAuthoritativeSnapshot` 镜像远端 body、`CheckConsistency` 日志分字段 |
+| `GameLogic/Battle/BattleClientController.cs` | Dash 走 `BufferedInputKind.Skill`+`DashId`、拖影、体力条、HUD |
+| `GameLogic/Battle/BattleSnapshotProtocolMapper.cs` | `PlayerSnapshot`/`NumericSnapshot`/SkillExecution To/From 双向补全 |
+| `GameLogic/Battle/BattlePredictionSelfTestSuite.cs` | **33 条**，注册两处 |
+| `GameLogic/Battle/Automation/BattleAutomationRuntime.cs` | 四个 report 字段（`StateMismatch`/`PositionMismatch` **分开计**）+ 新场景判据 |
 | `GameServer/Server/Entity/TestHarness/TestRunner.cs` | `two-client-knockback` 登记三处 |
 | `Tools/AutomationAcceptance/` 三份既有指南 | **基线判据改注**（决策六），S3 那份优先 |
-| `Plan/…/S6-回滚粒度改造-…-实现计划.md` | 决策六勘误（决策五末节） |
+| `Plan/…/S6-回滚粒度改造-…-实现计划.md` | 决策六勘误 |
 
 **不需要改**：
-
-- `BuffSystem.cs` / `RuntimeSkillGraph.cs` —— Dash 与击退都不走这两条路（决策一、三）
-- `AttributeBroadcastBaseline.cs` —— 存的是整个 `PlayerAttributeSnapshot` 结构体，不逐字段拆解，两个新字段自动跟随
-- ~~`FrameSyncPhysicsWorld.cs`~~ —— **击退**不需要新物理 API（`ApplyBodyImpulse` 已够用，Context 第二条），但**决策五需要** `SetBodyKinematicObstacle` 与 `SeparationNormalResolver` 的抽取，见上表
-- `NetworkConditionSimulator.cs` —— S4 的注入能力已够
+- `AttributeBroadcastBaseline.cs` —— 存整个 `PlayerAttributeSnapshot` 结构体，两新字段自动跟随
+- `NetworkConditionSimulator.cs` —— S4 注入能力已够
 - S7 的 RTT 通路 —— 无交互
+- SkillGraph 既有节点 handler（`ApplyBuffNodeHandler` 等）—— 已就绪，但**不携带动态速度**，需新增动态速度 handler（见上表，P1-2）
 
 ## 估时
 
-**4~4.5 天**（初版估 3-4 天，复审后因两个 kind、`NumericSnapshot` 协议化、kinematic 建模、法线抽取、输入缓冲五处上修）。是 S1~S7 里最大的一个：协议 + 内核 + 预测层 + 表现层四处同步改，且新增两个状态机。
+**6~7 天**（两个前置上修，但 Dash 输入通路复用 SkillId 省回一部分）。仍是 S1~S7 里最大的一个。
 
 | 部分 | 估时 |
 |---|---|
-| Step 1 体力接入属性系统（两个 kind + `NumericSnapshot` 协议化 + 基线确认） | 6 小时 |
-| Step 2 Dash 状态机 | 4 小时 |
-| Step 3 输入通路 `DashRequest` + `InputBuffer` 接入 + 自动化源 | 3.5 小时 |
+| Step 0a 位移 effect 通道（前置 A） | 6 小时 |
+| Step 0b SkillGraph 可回滚通路（前置 B） | 4 小时 |
+| Step 1 体力接入属性系统（两 kind + `NumericSnapshot` 协议化 + 基线确认） | 6 小时 |
+| Step 2 Dash 技能图 + Buff 配置 | 4 小时 |
+| Step 3 Dash 输入通路（复用 SkillId） | 2 小时 |
 | Step 4 击退 + 服务端触发 + `SeparationNormalResolver` 抽取 | 5 小时 |
 | Step 5 远端 body 镜像 + kinematic 建模 | 3 小时 |
 | Step 6 表现层 + HUD | 3 小时 |
 | Step 7 mismatch 日志分字段 | 1 小时 |
-| Step 8 二十六条用例 | 6.5 小时 |
+| Step 8 三十三条用例 | 8 小时 |
 | Step 9 report + 场景 + 基线更新 + 三份指南改注 | 2.5 小时 |
 
 **建议先写用例再改实现的五条**（风险集中处，症状都具误导性）：
-
-1. `numeric-stamina-base-proto-roundtrip` —— 漏了则体力恒为 0，症状像「体力功能没生效」
-2. `dash-request-survives-replay` —— 漏了则症状像「网络不稳」
-3. `knockback-decay-timeline-is-frame-exact` —— 漏了则症状是「击退比预期弱一点」，几乎不会被注意
-4. `knockback-state-replays-without-new-mismatch` —— 本阶段演示价值的核心
-5. `remote-body-not-displaced-by-occupancy` —— 漏了则症状像「决策五方案无效」
+1. `skillgraph-execution-replays-after-rollback` —— 漏了则 Dash 回滚错位，症状像「网络不稳」
+2. `numeric-stamina-base-proto-roundtrip` —— 漏了则体力恒为 0
+3. `knockback-decay-timeline-is-frame-exact` —— 漏了则「击退比预期弱一点」，几乎不被注意
+4. `knockback-state-replays-without-new-mismatch` —— 本阶段演示价值核心
+5. `remote-body-not-displaced-by-occupancy` —— 漏了则症状像「决策五无效」
 
 ## 验收指南
 
-`Tools/AutomationAcceptance/Dash与击退-验收测试指南-<日期>.md`（随实现一并产出）。
+`Tools/AutomationAcceptance/Dash与击退-验收测试指南-<日期>.md`（随实现一并产出）。必须包含：
 
-必须包含：
-
-1. **哈希基线变化是预期行为** —— 这是与 S3~S7 相反的一条，**放在最前面**。判据是「变一次后连续两跑一致」，不是「不变」
-2. **三份既有指南的改注位置** —— 验收 agent 可能同时手持旧指南
-3. **弱网 Dash 判据** —— 起手不等确认、体力与相位最终收敛
-4. **击退 mismatch 的定量阈值** —— 绑定固定场景（双向 100ms、零丢包、固定种子、3 次对撞）：每次触发 `StateMismatch ≤ 1`、总数 `≤ 3`。**必须写明「换网络参数需重新标定」**，否则验收 agent 会拿别的场景的数字判 FAIL
-5. **`StateMismatch` 与 `PositionMismatch` 分开统计** —— 前者是击退状态到达（决策三），后者是镜像滞后残差（决策五）。混计则两者互相掩盖
-6. **接触期 before/after 对比** —— `contactMismatchFrames ≤ 6` 且下降 ≥ 60%（决策五）
-7. **「击退确实发生了」的断言清单** —— 碰撞判定失效时所有判据会假通过
-8. **残差声明** —— 镜像 body 用的是延迟 RTT/2 的对手位置，分离残差**有界但不为零**，**不判 FAIL**（决策五）
-9. **参数断言** —— 越界即抛异常；调参后必须重跑（决策四）
-10. **口径声明** —— 「触发不预测、演化照常预测」。**验收 agent 不应按「客户端完全不知道击退」判 FAIL**
-11. **真机观测项** —— Dash 拖影、体力条、击退 ghost 分离；**长按 Shift 不自动连发**。无头测不出「看起来如何」
+1. **哈希基线变化是预期行为** —— 与 S3~S7 相反，**放最前面**。判据「变一次后连续两跑一致」
+2. **三份既有指南改注位置** —— 验收 agent 可能手持旧指南
+3. **弱网 Dash 判据** —— 起手不等确认、体力与位移最终收敛
+4. **击退 mismatch 定量阈值** —— 绑定固定场景（双向 100ms、零丢包、固定种子、3 次对撞）：每次触发 `StateMismatch ≤ 1`、总数 `≤ 3`。**写明「换网络参数需重新标定」**
+5. **`StateMismatch` 与 `PositionMismatch` 分开统计**
+6. **接触期 before/after 对比** —— `contactMismatchFrames ≤ 6` 且下降 ≥ 60%
+7. **「击退确实发生了」断言清单**
+8. **残差声明** —— 镜像用延迟 RTT/2 对手位置，残差有界但不为零，**不判 FAIL**
+9. **参数断言** —— 越界抛异常；调参后重跑
+10. **口径声明** —— 「触发不预测、演化照常预测」。不应按「客户端完全不知道击退」判 FAIL
+11. **SkillGraph 可回滚声明** —— Dash 走 SkillGraph，执行态进快照，回滚逐位恢复（前置 B）
+12. **真机观测项** —— Dash 拖影、体力条、击退 ghost 分离；长按 Shift 不连发
 
 ## 后续衔接
 
-- **S9（断线重连）** —— 重连后须恢复 Dash 相位、体力、击退剩余帧。**`StaminaRegenCounterFrames` 最易漏**，它不在属性脏同步里
-- **S10（远端插值）** —— 决策五的镜像 body 位置届时可改用插值值，进一步缩小残差。调试面板加 Dash / 体力 / 击退三项
-- **S11（求职展示）** —— 击退 ghost 分离是主素材。**定稿后回头复核 `MaxSmoothingDistance = 6.0`**（决策四）
-- **玩家间碰撞的客户端预测** —— 决策五只做只读镜像。真要预测别人需另开号，且与 S6 方向相反，需重新论证
-- **服务端脏字段过滤** —— S6 Context 末节列为「另开号」。本阶段新增 7 个快照字段后带宽收益更明显，值得重估
-- **B 编号待查**：`AttributeBroadcastBaseline.Remove` 两个字典删除不一致（帧号字典真删、快照字典置零留空条目）。**与本阶段无关**，但 S9 的同玩家重新加入路径可能踩到，建议 S9 前单独核实
+- **S9（断线重连）** —— 重连后须恢复 Dash 技能图执行态、体力、击退位移。**SkillGraph 执行快照与 `StaminaRegenCounterFrames` 最易漏**
+- **S10（远端插值）** —— 决策五镜像 body 位置届时改用插值值，缩小残差。调试面板加 Dash/体力/击退
+- **S11（求职展示）** —— 击退 ghost 分离是主素材。**定稿后复核 `MaxSmoothingDistance=6.0`**（决策四）
+- **更多技能** —— 本阶段把 SkillGraph 可回滚通路（前置 B）和位移 effect 通道（前置 A）打通后，后续技能直接配技能图 + Buff 即可，无需再动基础设施
+- **玩家间碰撞的客户端预测** —— 决策五只做只读镜像。真要预测别人需另开号，与 S6 方向相反
+- **服务端脏字段过滤** —— S6 Context 末节列为「另开号」。本阶段新增多个快照字段后带宽收益更明显
+- **B 编号待查**：`AttributeBroadcastBaseline.Remove` 两个字典删除不一致。**与本阶段无关**，S9 前单独核实
+
+---
+
+## 附录 A：架构决策调研依据
+
+> 本节是各项决策（含前置 A/B）的调研支撑与证据，供理解「为什么这么定」，**非执行内容**。正文已给出结论，这里补背景、范式对比与行号证据。
+
+### A.1 参考项目 NKGMobaBasedOnET 怎么做（结论：不能照搬）
+
+WeDoBest 的技能图/Buff 设计时参考了 `D:\Unity\NKGMobaBasedOnET`。源码核查结论：
+
+- **技能图 = NPBehave 行为树**：`SkillGraph.cs`（GraphProcessor 节点图）是纯 Editor，运行时是常驻 NPBehave 行为树 `NP_RuntimeTree`，挂 `NP_RuntimeTreeManager`。技能释放 = 往黑板写输入，`BlackboardCondition` 装饰器激活子树；计时走帧级 `Clock`。
+- **技能节点挂 Buff 调用链**：`NP_AddBuffAction.AddBuff()` → `VTDUtilities.AutoAddBuff()` → `BuffFactory.AcquireBuff()` → `ABuffSystemBase.Init()` → `BuffTimerAndOverlayHelper.CalculateTimerAndOverlay()` → `BuffManagerComponent.AddBuff()`。
+- **持续状态全在 Buff 侧**：Buff 的计时/叠加/状态机由目标 Unit 的 `BuffManagerComponent` 持有并快照化；技能图只负责「触发挂 Buff」瞬时动作。可回滚性落在 Buff 一侧，与技能图执行解耦。
+
+**关键真相：参考项目并未真正解决「技能图可回滚」**：
+
+| 事实 | 证据 |
+|---|---|
+| 黑板值进了快照 | `NP_RuntimeTreeBBSnap` 只存黑板键值 |
+| **行为树执行态没进快照** | 不存节点 `currentState`、Composite 游标、Clock 待触发表 |
+| **回滚时不回写技能图** | `NP_RuntimeTreeManagerTicker` 未实现 `OnLSF_RollBackTick` |
+| **Whole 快照不用于还原** | 只用于求 Delta，回滚靠重放权威 Delta + 追帧重算 |
+| **确定性不靠定点数** | 随机只在 `#if SERVER`，靠服务器权威 + 预测校正兜底 |
+
+它「看起来」没问题，是因为服务器每帧广播正确的黑板/Buff Delta，客户端被 `LSF_SyncBuffHandler` 按 ADD/CHANGE/REMOVE 强行校正。**WeDoBest 走全量快照 + 回滚还原路线（Timeline 技术约束 3），不能用参考项目回答「怎么让 SkillGraph 可回滚」。**
+
+> 注：NKGMoba 的 `BuffWorkTypes` 有「击退」槽位（`RePluse=1<<1`），但搜索范围内只见它被当状态互斥标志用，**未验证其真跑通过 Buff 驱动的击退位移**，只能当概念弱参考。
+
+### A.2 范式对照：两套不同模型
+
+| 维度 | NKGMobaBasedOnET | WeDoBest |
+|---|---|---|
+| 同步模型 | 服务器权威 + Delta 校正 + 追帧重算 | 全量快照 + 哈希对账 + 回滚**还原**重放 |
+| 快照用途 | 只算 Delta，**不还原** | 直接还原整份状态 |
+| 确定性来源 | 服务器权威（随机只在服务端） | 定点数 + 纯函数帧逻辑 |
+| 技能图执行态 | **不快照、不回滚**，靠服务器兜底 | 欲快照化（runner 已有 `SkillExecutionSnapshot`，容器层未接通 → 前置 B 补） |
+
+### A.3 WeDoBest 现状实测（带行号）
+
+技能图在 `UnityProject/Assets/GameScripts/HotFix/GameShared/SkillGraph/`，Buff 在 `.../GameShared/FrameSync/Battle/`。
+
+- **技能图运行时**：节点图 + `ISkillNodeHandler.Execute(node, context)` + `SkillContext`（含黑板）+ 条件/变量系统，与 NPBehave 同类。`BattleSkillGraphRuntime`（`RuntimeSkillGraph.cs:455`）执行容器，`Step`（:495）按 casterId 排序驱动各 Runner。**容器只有 `Clear()`（:548），无 Capture/Restore —— 前置 B 的缺口。**
+- **已就绪（降低前置 B 工作量）**：
+  - `SkillGraphRunner.GetSnapshot()`（`SkillGraphRunner.cs:564`）/ `Restore(snapshot)`（:584）/ `SkillBlackboard.CaptureSnapshot`+`RestoreSnapshot` 全现成。
+  - `IBuffCommandSink` 已注入 `SkillContext`（`RuntimeSkillGraph.cs:462,:600`）；`RuntimeBuffTargetSelectors`（:75）已预留。
+  - 挂 Buff handler 已就绪：`ApplyBuffNodeHandler`/`RemoveBuffNodeHandler`/`BuffConditionNodeHandler`（`SkillHandlers.cs:93-158`）并已 `RegisterDefaults`。**Dash 技能图挂 Buff 只需配置数据，不补代码。**
+- **Buff 系统**：`BuffSystem`（静态类）。Buff 列表/`NextRuntimeBuffId`/Numeric 修饰器已进 `ArePlayerSnapshotsEquivalent` 与 `StateHasher.Hash` —— **击退走 Buff 可回滚性白拿**。但 `BuffEffect` 仅 `AttributeKind/ValueType/Value`，`ApplyBuffEffects`（`BuffSystem.cs:294-302`）唯一出口 `Numeric.AddModifier` —— **不支持位移，前置 A 的缺口**。
+
+### A.4 架构原则：B1 两条（缺一不可）
+
+1. **快照通路接通**（前置 B）：`SkillExecutionSnapshot` 接进容器级 → PlayerState → 哈希/协议/回滚，让技能图整体可回滚，是保底。
+2. **持续状态尽量下沉**（设计纪律）：跨帧持续状态（计时、衰减、层数）优先用 Buff/`PlayerState` 字段承载，减少对执行态快照的依赖 —— 执行态越简单，快照/哈希/协议的确定性越易守住。
+
+> 通路接通提供保底能力，下沉原则让日常开发不必每次都赌执行态快照的正确性。
+
+### A.5 动手前待核实（风险表之外）
+
+1. **`SkillBlackboardSnapshot` 结构**：读 `SkillContext.cs` 确认其字段与序列化方式（进 proto 的可行性）。
+2. **`SkillGraphStepBSmokeTest.cs`**（`GameLogic/SkillGraph/`）：已有 Step B 冒烟测试，核实覆盖范围，避免重复造。
+3. **用例基数**：S7 落地后重数，不要沿用任何文档数字。
+4. **`QueueSkillRequests` 重放路径**：决策七复用 SkillId，须核实该路径在客户端重放时同样被调用（否则 Dash 输入在重放时丢失）。
+
+### A.6 参考证据索引
+
+**WeDoBest（实测）**
+- `GameShared/SkillGraph/RuntimeSkillGraph.cs`：`BattleSkillGraphRuntime`（:455-676，`Clear` :548）、`IBuffCommandSink`（:462,:600）、`RuntimeBuffTargetSelectors`（:75）。
+- `GameShared/SkillGraph/SkillGraphRunner.cs`：`SkillExecutionSnapshot`（:309）、`GetSnapshot`（:564）、`Restore`（:584）、`SkillExecutionEvent/Diff/Comparer`（:139-287）。
+- `GameShared/SkillGraph/SkillHandlers.cs`：挂 Buff handler（:93-158）。
+- `GameShared/FrameSync/Battle/BuffSystem.cs`：`ApplyBuffEffects`（:294-302）；同目录 `BuffEffect.cs`（仅三字段）。
+- `GameShared/FrameSync/Battle/FrameSyncPhysicsWorld.cs`：`ApplyBodyImpulse`（:83）。
+
+**NKGMobaBasedOnET（scout 核查）**
+- 技能图=NPBehave：`Model/NKGMOBA/Battle/NPBehave/...`（`NP_RuntimeTree`、`Node.cs`、`Clock.cs`、`Blackboard.cs`、`BlackboardCondition.cs`）。
+- 挂 Buff 链：`NP_AddBuffAction` → `VTDUtilities.AutoAddBuff` → `BuffFactory.AcquireBuff` → `ABuffSystemBase.Init` → `BuffTimerAndOverlayHelper.CalculateTimerAndOverlay` → `BuffManagerComponent.AddBuff`。
+- 帧同步：`Hotfix/.../LockStepStateFrameSync/LSF_ComponentUtilities.cs`、`Ticker/NP_RuntimeTreeManagerTicker.cs`（无 `OnLSF_RollBackTick`）、`Handler/LSF_SyncBuffHandler.cs`。
+- 快照：`Model/.../SkillSystem/LockStepStateFrameSync/BuffSnapInfoCollection.cs`、`Model/.../NPBehave/LockStepStateFrameSync/NP_RuntimeTreeBBSnap.cs`。

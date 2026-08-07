@@ -265,14 +265,14 @@ namespace GameShared.FrameSync.Snapshot
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(100, 100, 40, 100, 10))
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(100, 100, 40, 100, 10, 100, 100))
                 });
 
             BattleWorldSnapshot right = new BattleWorldSnapshot(
                 1,
                 new[]
                 {
-                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(90, 100, 40, 100, 10))
+                    new PlayerStateSnapshot(1, Fixed64.Zero, Fixed64.Zero, new PlayerAttributeSnapshot(90, 100, 40, 100, 10, 100, 100))
                 });
 
             return StateHasher.Hash(left) != StateHasher.Hash(right);
@@ -280,8 +280,8 @@ namespace GameShared.FrameSync.Snapshot
 
         private static bool AttributeDirtyMerge()
         {
-            PlayerAttributeSnapshot previous = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
-            PlayerAttributeSnapshot current = new PlayerAttributeSnapshot(85, 100, 30, 100, 16);
+            PlayerAttributeSnapshot previous = new PlayerAttributeSnapshot(100, 100, 40, 100, 10, 100, 100);
+            PlayerAttributeSnapshot current = new PlayerAttributeSnapshot(85, 100, 30, 100, 16, 100, 100);
             PlayerAttributeDirtyFlags dirtyMask = PlayerAttributeSync.ComputeDirtyMask(true, previous, current);
             PlayerAttributeSnapshot merged = PlayerAttributeSync.Merge(
                 previous,
@@ -290,7 +290,9 @@ namespace GameShared.FrameSync.Snapshot
                 current.MaxHealth,
                 current.Mana,
                 current.MaxMana,
-                current.Attack);
+                current.Attack,
+                current.Stamina,
+                current.MaxStamina);
 
             return dirtyMask == (PlayerAttributeDirtyFlags.Health | PlayerAttributeDirtyFlags.Mana | PlayerAttributeDirtyFlags.Attack) &&
                    merged.Health == current.Health &&
@@ -345,7 +347,7 @@ namespace GameShared.FrameSync.Snapshot
 
         private static bool BuffsAffectHash()
         {
-            PlayerAttributeSnapshot attributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
+            PlayerAttributeSnapshot attributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10, 100, 100);
             BattleWorldSnapshot left = new BattleWorldSnapshot(
                 1,
                 new[]
@@ -861,6 +863,10 @@ namespace GameShared.FrameSync.Snapshot
             {
             }
 
+            public void SetBodyKinematicObstacle(int bodyId, bool isKinematicObstacle)
+            {
+            }
+
             public void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy)
             {
             }
@@ -904,7 +910,10 @@ namespace GameShared.FrameSync.Snapshot
                     DurationFrames = command.DurationFrames,
                     StackCount = command.StackCount,
                     FrameIndex = command.FrameIndex,
-                    Flags = command.Flags
+                    Flags = command.Flags,
+                    HasDisplacementVelocityOverride = command.HasDisplacementVelocityOverride,
+                    DisplacementVelocityX = command.DisplacementVelocityX,
+                    DisplacementVelocityY = command.DisplacementVelocityY
                 });
                 _pendingApplyCommands.Sort(CompareApplyCommands);
             }

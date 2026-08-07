@@ -113,7 +113,10 @@ namespace GameLogic
             _clock = clock ?? SystemBattleClock.Instance;
             _logger = logger;
             _buffConfigProvider = new DefaultBuffConfigProvider();
-            _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
+            _skillGraphRuntime = new BattleSkillGraphRuntime(
+                this,
+                skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs(),
+                new DelegateSkillRuntimeServices(TryConsumeStamina));
         }
 
         public bool IsJoined => _isJoined;
@@ -135,6 +138,15 @@ namespace GameLogic
         public int ConsistencyMisses => _misses;
         public int ConsistencySkippedNoRecord => _skippedNoRecord;
         public int ConsistencySkippedEvicted => _skippedEvicted;
+        public int StateMismatchCount { get; private set; }
+        public int PositionMismatchCount { get; private set; }
+        public int StaminaMismatchCount { get; private set; }
+        /// <summary>
+        /// Position mismatches observed while the authoritative self body was touching
+        /// another body. This isolates the bounded remote-body mirror residual from
+        /// gameplay-state corrections.
+        /// </summary>
+        public int ContactMismatchFrames { get; private set; }
         public int HashReportsSent { get; private set; }
         public int LastServerBufferedInputFrames => _lastServerBufferedInputFrames;
         public int RollbackCount => _rollbackCount;
@@ -318,6 +330,10 @@ namespace GameLogic
             _misses = 0;
             _skippedNoRecord = 0;
             _skippedEvicted = 0;
+            StateMismatchCount = 0;
+            PositionMismatchCount = 0;
+            StaminaMismatchCount = 0;
+            ContactMismatchFrames = 0;
             _leadDecreaseCooldownSnapshots = 0;
             _lastServerBufferedInputFrames = 0;
             _hasLastSentInput = false;
@@ -480,15 +496,53 @@ namespace GameLogic
             }
 
             _misses++;
+            string mismatchLabel = GetMismatchLabel(prediction.Snapshot, authoritativeSelf);
+            if (string.Equals(mismatchLabel, "PositionMismatch", StringComparison.Ordinal))
+            {
+                PositionMismatchCount++;
+                if (IsSelfTouching(snapshot, _selfPlayerId))
+                {
+                    ContactMismatchFrames++;
+                }
+            }
+            else
+            {
+                StateMismatchCount++;
+                if (string.Equals(mismatchLabel, "StaminaMismatch", StringComparison.Ordinal))
+                {
+                    StaminaMismatchCount++;
+                }
+            }
             Fixed64 deltaX = authoritativeSelf.X - prediction.X;
             Fixed64 deltaY = authoritativeSelf.Y - prediction.Y;
             Log.Warning(
-                $"[Consistency] MISMATCH frame={snapshot.FrameIndex} " +
+                $"[Consistency][{mismatchLabel}] MISMATCH frame={snapshot.FrameIndex} " +
                 $"predPos=({prediction.X},{prediction.Y}) authPos=({authoritativeSelf.X},{authoritativeSelf.Y}) deltaPos=({(float)deltaX:F4},{(float)deltaY:F4}) " +
-                $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},atk:{prediction.Attributes.Attack}) " +
-                $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},atk:{authoritativeSelf.Attributes.Attack}) " +
+                $"predAttr=(hp:{prediction.Attributes.Health}/{prediction.Attributes.MaxHealth},mp:{prediction.Attributes.Mana}/{prediction.Attributes.MaxMana},st:{prediction.Attributes.Stamina}/{prediction.Attributes.MaxStamina},atk:{prediction.Attributes.Attack}) " +
+                $"authAttr=(hp:{authoritativeSelf.Attributes.Health}/{authoritativeSelf.Attributes.MaxHealth},mp:{authoritativeSelf.Attributes.Mana}/{authoritativeSelf.Attributes.MaxMana},st:{authoritativeSelf.Attributes.Stamina}/{authoritativeSelf.Attributes.MaxStamina},atk:{authoritativeSelf.Attributes.Attack}) " +
                 $"predBuffs={FormatBuffs(prediction.Snapshot.ActiveBuffs)} authBuffs={FormatBuffs(authoritativeSelf.ActiveBuffs)}");
             return ConsistencyResult.Miss;
+        }
+
+        private static bool IsSelfTouching(BattleWorldSnapshot snapshot, long selfPlayerId)
+        {
+            if (snapshot == null || snapshot.PhysicsSnapshot == null)
+            {
+                return false;
+            }
+
+            IReadOnlyList<PhysicsContactSnapshot> contacts = snapshot.PhysicsSnapshot.Contacts;
+            for (int i = 0; i < contacts.Count; i++)
+            {
+                PhysicsContactSnapshot contact = contacts[i];
+                if (contact.IsTouching &&
+                    (contact.BodyAId == selfPlayerId || contact.BodyBId == selfPlayerId))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool TryGetAuthoritativeSelf(BattleWorldSnapshot snapshot, out PlayerStateSnapshot selfSnapshot)
@@ -526,8 +580,15 @@ namespace GameLogic
 
             _lastAppliedFrame = snapshot.FrameIndex;
 
-            // 别人永远不进 _worldState，只进 RemotePlayerBuffer。
-            _remotePlayers.ApplyAuthoritative(snapshot, _selfPlayerId);
+            // 别人永远不进 _worldState，只进 RemotePlayerBuffer；物理层
+            // 仅保留 kinematic 镜像供本地占位预测。
+            _stalePlayerIds.Clear();
+            _remotePlayers.ApplyAuthoritative(snapshot, _selfPlayerId, _stalePlayerIds);
+            foreach (long removedPlayerId in _stalePlayerIds)
+            {
+                _worldState.PhysicsWorld.RemoveBody(checked((int)removedPlayerId));
+            }
+            _stalePlayerIds.Clear();
 
             // Hit：自己预测已与权威一致，保持现状。
             // Miss / NoRecord / 手动回滚：RestoreSelfOnly 只恢复自己。
@@ -537,11 +598,14 @@ namespace GameLogic
                 _worldState.RestoreSelfOnly(snapshot, _selfPlayerId);
             }
 
-            // 只有真的拨回自己时才回退预测游标 / 清技能。
+            MirrorRemotePhysicsBodies();
+
+            // 只有真的拨回自己时才回退预测游标并逐位恢复技能执行态。
             if (restoreSelf)
             {
                 _lastPredictedFrame = snapshot.FrameIndex;
-                _skillGraphRuntime.Clear();
+                ClearPendingBuffCommands();
+                _skillGraphRuntime.RestoreExecutions(authoritativeSelf.SkillExecutions);
             }
 
             RemoveConfirmedInputHistory(snapshot.FrameIndex);
@@ -861,16 +925,26 @@ namespace GameLogic
 
             if (skillId > 0)
             {
-                _skillGraphRuntime.QueueSkillRequest(_selfPlayerId, _selfPlayerId, skillId, frameIndex);
+                _skillGraphRuntime.QueueSkillRequest(
+                    _selfPlayerId,
+                    _selfPlayerId,
+                    skillId,
+                    frameIndex,
+                    dx,
+                    dy);
             }
 
             _skillGraphRuntime.Step(frameIndex);
             ProcessBuffCommands(frameIndex);
             MoveSystem.Apply(_worldState, selfPlayer, dx, dy, fixedDt);
+            DisplacementSystem.Apply(selfPlayer, _worldState.PhysicsWorld);
+            DisplacementSystem.Decay(selfPlayer);
             _worldState.PhysicsWorld.Step(fixedDt);
             SyncAllPlayersFromPhysics();
-            RecalculateNumericStates();
             ApplyBuffTicks(frameIndex);
+            StaminaSystem.Tick(selfPlayer);
+            RecalculateNumericStates();
+            SyncSkillExecutionsToSelf(selfPlayer);
             SaveSelfPrediction(frameIndex, selfPlayer);
         }
 
@@ -879,6 +953,33 @@ namespace GameLogic
             foreach (PlayerState player in _worldState.Players)
             {
                 MoveSystem.SyncFromPhysics(_worldState, player);
+            }
+        }
+
+        private bool TryConsumeStamina(long playerId, int amount)
+        {
+            return _worldState.TryGetPlayer(playerId, out PlayerState state) &&
+                   StaminaSystem.TryConsume(state, amount);
+        }
+
+        private void SyncSkillExecutionsToSelf(PlayerState selfPlayer)
+        {
+            Dictionary<long, ActiveSkillExecutionSnapshot> executions = _skillGraphRuntime.CaptureExecutions();
+            selfPlayer.SkillExecutions.Clear();
+            if (executions.TryGetValue(selfPlayer.PlayerId, out ActiveSkillExecutionSnapshot execution))
+            {
+                selfPlayer.SkillExecutions[selfPlayer.PlayerId] = execution;
+            }
+        }
+
+        private void MirrorRemotePhysicsBodies()
+        {
+            foreach (PlayerStateSnapshot remote in _remotePlayers.Players)
+            {
+                int bodyId = checked((int)remote.PlayerId);
+                _worldState.PhysicsWorld.EnsureBody(bodyId, remote.X, remote.Y);
+                _worldState.PhysicsWorld.SetBodyTransform(bodyId, remote.X, remote.Y, true);
+                _worldState.PhysicsWorld.SetBodyKinematicObstacle(bodyId, true);
             }
         }
 
@@ -910,7 +1011,17 @@ namespace GameLogic
                     selfPlayer.CaptureAttributeSnapshot(),
                     selfPlayer.ActiveBuffs,
                     selfPlayer.NextRuntimeBuffId,
-                    selfPlayer.Numeric.CaptureSnapshot()));
+                    selfPlayer.Numeric.CaptureSnapshot(),
+                    selfPlayer.StaminaRegenCounterFrames,
+                    selfPlayer.DashVelocityX,
+                    selfPlayer.DashVelocityY,
+                    selfPlayer.DashRemainingFrames,
+                    selfPlayer.DashRuntimeBuffId,
+                    selfPlayer.KnockbackVelocityX,
+                    selfPlayer.KnockbackVelocityY,
+                    selfPlayer.KnockbackRemainingFrames,
+                    selfPlayer.KnockbackRuntimeBuffId,
+                    selfPlayer.SkillExecutions));
         }
 
         private void ClearWorldState()
@@ -927,6 +1038,7 @@ namespace GameLogic
             }
 
             _stalePlayerIds.Clear();
+            _worldState.PhysicsWorld.ClearBodies();
             _remotePlayers.Clear();
         }
 
@@ -945,6 +1057,9 @@ namespace GameLogic
             queuedCommand.StackCount = command.StackCount;
             queuedCommand.FrameIndex = command.FrameIndex;
             queuedCommand.Flags = command.Flags;
+            queuedCommand.HasDisplacementVelocityOverride = command.HasDisplacementVelocityOverride;
+            queuedCommand.DisplacementVelocityX = command.DisplacementVelocityX;
+            queuedCommand.DisplacementVelocityY = command.DisplacementVelocityY;
             InsertApplyCommand(queuedCommand);
         }
 
@@ -988,7 +1103,9 @@ namespace GameLogic
                    left.MaxHealth == right.MaxHealth &&
                    left.Mana == right.Mana &&
                    left.MaxMana == right.MaxMana &&
-                   left.Attack == right.Attack;
+                   left.Attack == right.Attack &&
+                   left.Stamina == right.Stamina &&
+                   left.MaxStamina == right.MaxStamina;
         }
 
         private bool ArePlayerSnapshotsEquivalent(PlayerStateSnapshot predicted, PlayerStateSnapshot authoritative)
@@ -996,9 +1113,178 @@ namespace GameLogic
             return predicted.X.m_rawValue == authoritative.X.m_rawValue &&
                    predicted.Y.m_rawValue == authoritative.Y.m_rawValue &&
                    AreAttributesEqual(predicted.Attributes, authoritative.Attributes) &&
+                   predicted.StaminaRegenCounterFrames == authoritative.StaminaRegenCounterFrames &&
+                   predicted.DashVelocityX.m_rawValue == authoritative.DashVelocityX.m_rawValue &&
+                   predicted.DashVelocityY.m_rawValue == authoritative.DashVelocityY.m_rawValue &&
+                   predicted.DashRemainingFrames == authoritative.DashRemainingFrames &&
+                   predicted.DashRuntimeBuffId == authoritative.DashRuntimeBuffId &&
+                   predicted.KnockbackVelocityX.m_rawValue == authoritative.KnockbackVelocityX.m_rawValue &&
+                   predicted.KnockbackVelocityY.m_rawValue == authoritative.KnockbackVelocityY.m_rawValue &&
+                   predicted.KnockbackRemainingFrames == authoritative.KnockbackRemainingFrames &&
+                   predicted.KnockbackRuntimeBuffId == authoritative.KnockbackRuntimeBuffId &&
                    predicted.NextRuntimeBuffId == authoritative.NextRuntimeBuffId &&
                    AreBuffsEqual(predicted.ActiveBuffs, authoritative.ActiveBuffs) &&
-                   AreNumericSnapshotsEqual(predicted.Numeric, authoritative.Numeric);
+                   AreNumericSnapshotsEqual(predicted.Numeric, authoritative.Numeric) &&
+                   AreSkillExecutionsEqual(predicted.SkillExecutions, authoritative.SkillExecutions);
+        }
+
+        private static string GetMismatchLabel(
+            PlayerStateSnapshot predicted,
+            PlayerStateSnapshot authoritative)
+        {
+            if (predicted.Stamina != authoritative.Stamina ||
+                predicted.MaxStamina != authoritative.MaxStamina ||
+                predicted.StaminaRegenCounterFrames != authoritative.StaminaRegenCounterFrames)
+            {
+                return "StaminaMismatch";
+            }
+
+            if (predicted.DashVelocityX.m_rawValue != authoritative.DashVelocityX.m_rawValue ||
+                predicted.DashVelocityY.m_rawValue != authoritative.DashVelocityY.m_rawValue ||
+                predicted.DashRemainingFrames != authoritative.DashRemainingFrames ||
+                predicted.DashRuntimeBuffId != authoritative.DashRuntimeBuffId ||
+                !AreSkillExecutionsEqual(predicted.SkillExecutions, authoritative.SkillExecutions))
+            {
+                return "DashMismatch";
+            }
+
+            if (predicted.KnockbackVelocityX.m_rawValue != authoritative.KnockbackVelocityX.m_rawValue ||
+                predicted.KnockbackVelocityY.m_rawValue != authoritative.KnockbackVelocityY.m_rawValue ||
+                predicted.KnockbackRemainingFrames != authoritative.KnockbackRemainingFrames ||
+                predicted.KnockbackRuntimeBuffId != authoritative.KnockbackRuntimeBuffId)
+            {
+                return "KnockbackMismatch";
+            }
+
+            if (predicted.X.m_rawValue != authoritative.X.m_rawValue ||
+                predicted.Y.m_rawValue != authoritative.Y.m_rawValue)
+            {
+                return "PositionMismatch";
+            }
+
+            return "StateMismatch";
+        }
+
+        private static bool AreSkillExecutionsEqual(
+            IReadOnlyDictionary<long, ActiveSkillExecutionSnapshot> left,
+            IReadOnlyDictionary<long, ActiveSkillExecutionSnapshot> right)
+        {
+            int leftCount = left?.Count ?? 0;
+            int rightCount = right?.Count ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            if (leftCount == 0)
+            {
+                return true;
+            }
+
+            foreach (KeyValuePair<long, ActiveSkillExecutionSnapshot> pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out ActiveSkillExecutionSnapshot rightExecution))
+                {
+                    return false;
+                }
+
+                ActiveSkillExecutionSnapshot leftExecution = pair.Value;
+                if (leftExecution.CasterId != rightExecution.CasterId ||
+                    leftExecution.TargetId != rightExecution.TargetId ||
+                    leftExecution.SkillId != rightExecution.SkillId ||
+                    leftExecution.DirectionX.m_rawValue != rightExecution.DirectionX.m_rawValue ||
+                    leftExecution.DirectionY.m_rawValue != rightExecution.DirectionY.m_rawValue ||
+                    !AreRunnerSnapshotsEqual(leftExecution.RunnerSnapshot, rightExecution.RunnerSnapshot))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AreRunnerSnapshotsEqual(
+            SkillExecutionSnapshot left,
+            SkillExecutionSnapshot right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (left == null || right == null ||
+                left.CurrentNodeId != right.CurrentNodeId ||
+                left.Status != right.Status ||
+                left.ExecutedSteps != right.ExecutedSteps ||
+                left.FrameIndex != right.FrameIndex ||
+                !string.Equals(left.Message, right.Message, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            SkillBlackboardSnapshot leftBlackboard = left.Blackboard;
+            SkillBlackboardSnapshot rightBlackboard = right.Blackboard;
+            return AreDictionariesEqual(leftBlackboard?.Strings, rightBlackboard?.Strings, StringComparer.Ordinal) &&
+                   AreFloatDictionariesEqual(leftBlackboard?.Floats, rightBlackboard?.Floats) &&
+                   AreDictionariesEqual(leftBlackboard?.Ints, rightBlackboard?.Ints, EqualityComparer<int>.Default) &&
+                   AreDictionariesEqual(leftBlackboard?.Bools, rightBlackboard?.Bools, EqualityComparer<bool>.Default) &&
+                   AreDictionariesEqual(left.DelayRemainingFrames, right.DelayRemainingFrames, EqualityComparer<int>.Default);
+        }
+
+        private static bool AreFloatDictionariesEqual(
+            IReadOnlyDictionary<string, float> left,
+            IReadOnlyDictionary<string, float> right)
+        {
+            int leftCount = left?.Count ?? 0;
+            int rightCount = right?.Count ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            if (leftCount == 0)
+            {
+                return true;
+            }
+
+            foreach (KeyValuePair<string, float> pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out float value) ||
+                    BitConverter.SingleToInt32Bits(pair.Value) != BitConverter.SingleToInt32Bits(value))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AreDictionariesEqual<TKey, TValue>(
+            IReadOnlyDictionary<TKey, TValue> left,
+            IReadOnlyDictionary<TKey, TValue> right,
+            IEqualityComparer<TValue> comparer)
+        {
+            int leftCount = left?.Count ?? 0;
+            int rightCount = right?.Count ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            if (leftCount == 0)
+            {
+                return true;
+            }
+
+            foreach (KeyValuePair<TKey, TValue> pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out TValue value) || !comparer.Equals(pair.Value, value))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static bool AreBuffsEqual(IReadOnlyList<BuffState> left, IReadOnlyList<BuffState> right)

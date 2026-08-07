@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 
 namespace GameShared.FrameSync.Battle
 {
@@ -198,7 +199,7 @@ namespace GameShared.FrameSync.Battle
                 command.FrameIndex,
                 rule.Flags);
             InsertSorted(target.ActiveBuffs, buffState);
-            ApplyBuffEffects(target, runtimeBuffId, rule, stackCount);
+            ApplyBuffEffects(target, runtimeBuffId, rule, stackCount, command);
             target.Numeric.Recalculate(target);
             return runtimeBuffId;
         }
@@ -221,7 +222,7 @@ namespace GameShared.FrameSync.Battle
             {
                 updated = updated.WithStackCount(nextStackCount);
                 target.Numeric.RemoveBySource(existing.RuntimeBuffId);
-                ApplyBuffEffects(target, existing.RuntimeBuffId, rule, nextStackCount);
+                ApplyBuffEffects(target, existing.RuntimeBuffId, rule, nextStackCount, command);
             }
 
             target.ActiveBuffs[existingIndex] = updated;
@@ -240,6 +241,7 @@ namespace GameShared.FrameSync.Battle
             BuffState existing = target.ActiveBuffs[existingIndex];
             target.ActiveBuffs[existingIndex] =
                 existing.WithRemainingFrames(NormalizeRemainingFrames(rule.DurationFrames, existing.Flags));
+            ApplyDisplacementEffect(target, existing.RuntimeBuffId, rule, command);
             target.Numeric.Recalculate(target);
             return existing.RuntimeBuffId;
         }
@@ -279,27 +281,55 @@ namespace GameShared.FrameSync.Battle
             return true;
         }
 
-        private static void ApplyBuffEffects(PlayerState target, long runtimeBuffId, ResolvedBuffRule rule, int stackCount)
+        private static void ApplyBuffEffects(
+            PlayerState target,
+            long runtimeBuffId,
+            ResolvedBuffRule rule,
+            int stackCount,
+            ApplyBuffCommand command)
         {
             if (target == null)
             {
                 throw new ArgumentNullException(nameof(target));
             }
 
-            if (rule.Effects == null || rule.Effects.Length == 0)
+            if (rule.Effects != null)
+            {
+                for (int i = 0; i < rule.Effects.Length; i++)
+                {
+                    BuffEffect effect = rule.Effects[i];
+                    target.Numeric.AddModifier(new NumericModifier(
+                        runtimeBuffId,
+                        effect.ValueType,
+                        effect.AttributeKind,
+                        MultiplyEffectValue(effect.Value, stackCount)));
+                }
+            }
+
+            ApplyDisplacementEffect(target, runtimeBuffId, rule, command);
+        }
+
+        private static void ApplyDisplacementEffect(
+            PlayerState target,
+            long runtimeBuffId,
+            ResolvedBuffRule rule,
+            ApplyBuffCommand command)
+        {
+            if (!rule.DisplacementEffect.HasValue)
             {
                 return;
             }
 
-            for (int i = 0; i < rule.Effects.Length; i++)
+            DisplacementEffect effect = rule.DisplacementEffect.Value;
+            Fixed64 velocityX = effect.VelocityX;
+            Fixed64 velocityY = effect.VelocityY;
+            if (command != null && command.HasDisplacementVelocityOverride)
             {
-                BuffEffect effect = rule.Effects[i];
-                target.Numeric.AddModifier(new NumericModifier(
-                    runtimeBuffId,
-                    effect.ValueType,
-                    effect.AttributeKind,
-                    MultiplyEffectValue(effect.Value, stackCount)));
+                velocityX = command.DisplacementVelocityX;
+                velocityY = command.DisplacementVelocityY;
             }
+
+            target.SetDisplacement(effect, runtimeBuffId, velocityX, velocityY);
         }
 
         private static void InsertSorted(List<BuffState> activeBuffs, BuffState buffState)
@@ -389,7 +419,8 @@ namespace GameShared.FrameSync.Battle
                     config.Priority,
                     ResolveDurationFrames(durationFrames, config.DurationFrames),
                     ResolveFlags(flags, config.DefaultFlags),
-                    config.Effects ?? Array.Empty<BuffEffect>());
+                    config.Effects ?? Array.Empty<BuffEffect>(),
+                    config.DisplacementEffect);
             }
 
             BuffOverlayType bridgeOverlayType = (flags & BuffFlags.Stackable) != 0
@@ -405,7 +436,8 @@ namespace GameShared.FrameSync.Battle
                 0,
                 durationFrames,
                 flags,
-                Array.Empty<BuffEffect>());
+                Array.Empty<BuffEffect>(),
+                null);
         }
 
         private static int ResolveDurationFrames(int commandDurationFrames, int configuredDurationFrames)
@@ -458,6 +490,7 @@ namespace GameShared.FrameSync.Battle
         {
             BuffState buffState = target.ActiveBuffs[index];
             target.Numeric.RemoveBySource(buffState.RuntimeBuffId);
+            target.ClearDisplacementForBuff(buffState.RuntimeBuffId);
             target.ActiveBuffs.RemoveAt(index);
         }
 
@@ -480,7 +513,8 @@ namespace GameShared.FrameSync.Battle
                 int priority,
                 int durationFrames,
                 BuffFlags flags,
-                BuffEffect[] effects)
+                BuffEffect[] effects,
+                DisplacementEffect? displacementEffect)
             {
                 OverlayType = overlayType;
                 MaxStack = maxStack;
@@ -488,7 +522,8 @@ namespace GameShared.FrameSync.Battle
                 Priority = priority;
                 DurationFrames = durationFrames;
                 Flags = flags;
-                Effects = effects;
+            Effects = effects;
+            DisplacementEffect = displacementEffect;
             }
 
             public BuffOverlayType OverlayType { get; }
@@ -498,6 +533,7 @@ namespace GameShared.FrameSync.Battle
             public int DurationFrames { get; }
             public BuffFlags Flags { get; }
             public BuffEffect[] Effects { get; }
+            public DisplacementEffect? DisplacementEffect { get; }
         }
     }
 }

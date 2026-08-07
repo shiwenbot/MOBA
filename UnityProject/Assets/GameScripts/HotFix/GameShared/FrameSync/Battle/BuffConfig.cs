@@ -10,7 +10,8 @@ namespace GameShared.FrameSync.Battle
             int priority,
             int durationFrames,
             BuffFlags defaultFlags,
-            BuffEffect[] effects)
+            BuffEffect[] effects,
+            DisplacementEffect? displacementEffect = null)
         {
             BuffId = buffId;
             OverlayType = overlayType;
@@ -20,6 +21,7 @@ namespace GameShared.FrameSync.Battle
             DurationFrames = durationFrames;
             DefaultFlags = defaultFlags;
             Effects = effects;
+            DisplacementEffect = displacementEffect;
         }
 
         public int BuffId { get; }
@@ -30,5 +32,6 @@ namespace GameShared.FrameSync.Battle
         public int DurationFrames { get; }
         public BuffFlags DefaultFlags { get; }
         public BuffEffect[] Effects { get; }
+        public DisplacementEffect? DisplacementEffect { get; }
     }
 }

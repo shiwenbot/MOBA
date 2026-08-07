@@ -543,6 +543,8 @@ namespace Fantasy
             BaseMaxMana = default;
             BaseAttack = default;
             Modifiers.Clear();
+            BaseStamina = default;
+            BaseMaxStamina = default;
             MessageObjectPool<NumericSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -557,6 +559,307 @@ namespace Fantasy
         public int BaseAttack { get; set; }
         [ProtoMember(6)]
         public List<NumericModifierSnapshot> Modifiers { get; set; } = new List<NumericModifierSnapshot>();
+        [ProtoMember(7)]
+        public int BaseStamina { get; set; }
+        [ProtoMember(8)]
+        public int BaseMaxStamina { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class SkillStringValueSnapshot : AMessage, IDisposable
+    {
+        public static SkillStringValueSnapshot Create(bool autoReturn = true)
+        {
+            var skillStringValueSnapshot = MessageObjectPool<SkillStringValueSnapshot>.Rent();
+            skillStringValueSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                skillStringValueSnapshot.SetIsPool(false);
+            }
+            
+            return skillStringValueSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            Key = default;
+            Value = default;
+            MessageObjectPool<SkillStringValueSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public string Key { get; set; }
+        [ProtoMember(2)]
+        public string Value { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class SkillFloatValueSnapshot : AMessage, IDisposable
+    {
+        public static SkillFloatValueSnapshot Create(bool autoReturn = true)
+        {
+            var skillFloatValueSnapshot = MessageObjectPool<SkillFloatValueSnapshot>.Rent();
+            skillFloatValueSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                skillFloatValueSnapshot.SetIsPool(false);
+            }
+            
+            return skillFloatValueSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            Key = default;
+            Value = default;
+            MessageObjectPool<SkillFloatValueSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public string Key { get; set; }
+        [ProtoMember(2)]
+        public float Value { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class SkillIntValueSnapshot : AMessage, IDisposable
+    {
+        public static SkillIntValueSnapshot Create(bool autoReturn = true)
+        {
+            var skillIntValueSnapshot = MessageObjectPool<SkillIntValueSnapshot>.Rent();
+            skillIntValueSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                skillIntValueSnapshot.SetIsPool(false);
+            }
+            
+            return skillIntValueSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            Key = default;
+            Value = default;
+            MessageObjectPool<SkillIntValueSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public string Key { get; set; }
+        [ProtoMember(2)]
+        public int Value { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class SkillBoolValueSnapshot : AMessage, IDisposable
+    {
+        public static SkillBoolValueSnapshot Create(bool autoReturn = true)
+        {
+            var skillBoolValueSnapshot = MessageObjectPool<SkillBoolValueSnapshot>.Rent();
+            skillBoolValueSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                skillBoolValueSnapshot.SetIsPool(false);
+            }
+            
+            return skillBoolValueSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            Key = default;
+            Value = default;
+            MessageObjectPool<SkillBoolValueSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public string Key { get; set; }
+        [ProtoMember(2)]
+        public bool Value { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class SkillDelaySnapshot : AMessage, IDisposable
+    {
+        public static SkillDelaySnapshot Create(bool autoReturn = true)
+        {
+            var skillDelaySnapshot = MessageObjectPool<SkillDelaySnapshot>.Rent();
+            skillDelaySnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                skillDelaySnapshot.SetIsPool(false);
+            }
+            
+            return skillDelaySnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            NodeId = default;
+            RemainingFrames = default;
+            MessageObjectPool<SkillDelaySnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public int NodeId { get; set; }
+        [ProtoMember(2)]
+        public int RemainingFrames { get; set; }
+    }
+    [Serializable]
+    [ProtoContract]
+    public partial class ActiveSkillExecutionSnapshot : AMessage, IDisposable
+    {
+        public static ActiveSkillExecutionSnapshot Create(bool autoReturn = true)
+        {
+            var activeSkillExecutionSnapshot = MessageObjectPool<ActiveSkillExecutionSnapshot>.Rent();
+            activeSkillExecutionSnapshot.AutoReturn = autoReturn;
+            
+            if (!autoReturn)
+            {
+                activeSkillExecutionSnapshot.SetIsPool(false);
+            }
+            
+            return activeSkillExecutionSnapshot;
+        }
+        
+        public void Return()
+        {
+            if (!AutoReturn)
+            {
+                SetIsPool(true);
+                AutoReturn = true;
+            }
+            else if (!IsPool())
+            {
+                return;
+            }
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            if (!IsPool()) return; 
+            CasterId = default;
+            TargetId = default;
+            SkillId = default;
+            CurrentNodeId = default;
+            Status = default;
+            ExecutedSteps = default;
+            FrameIndex = default;
+            Message = default;
+            Strings.Clear();
+            Floats.Clear();
+            Ints.Clear();
+            Bools.Clear();
+            DelayRemainingFrames.Clear();
+            DirectionXRaw = default;
+            DirectionYRaw = default;
+            MessageObjectPool<ActiveSkillExecutionSnapshot>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long CasterId { get; set; }
+        [ProtoMember(2)]
+        public long TargetId { get; set; }
+        [ProtoMember(3)]
+        public int SkillId { get; set; }
+        [ProtoMember(4)]
+        public int CurrentNodeId { get; set; }
+        [ProtoMember(5)]
+        public uint Status { get; set; }
+        [ProtoMember(6)]
+        public int ExecutedSteps { get; set; }
+        [ProtoMember(7)]
+        public int FrameIndex { get; set; }
+        [ProtoMember(8)]
+        public string Message { get; set; }
+        [ProtoMember(9)]
+        public List<SkillStringValueSnapshot> Strings { get; set; } = new List<SkillStringValueSnapshot>();
+        [ProtoMember(10)]
+        public List<SkillFloatValueSnapshot> Floats { get; set; } = new List<SkillFloatValueSnapshot>();
+        [ProtoMember(11)]
+        public List<SkillIntValueSnapshot> Ints { get; set; } = new List<SkillIntValueSnapshot>();
+        [ProtoMember(12)]
+        public List<SkillBoolValueSnapshot> Bools { get; set; } = new List<SkillBoolValueSnapshot>();
+        [ProtoMember(13)]
+        public List<SkillDelaySnapshot> DelayRemainingFrames { get; set; } = new List<SkillDelaySnapshot>();
+        [ProtoMember(14)]
+        public long DirectionXRaw { get; set; }
+        [ProtoMember(15)]
+        public long DirectionYRaw { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -620,6 +923,18 @@ namespace Fantasy
             IsBuffFullSync = default;
             RotationRadiansRaw = default;
             AttributeBaselineFrameIndex = default;
+            Stamina = default;
+            MaxStamina = default;
+            StaminaRegenCounterFrames = default;
+            DashVelocityXRaw = default;
+            DashVelocityYRaw = default;
+            DashRemainingFrames = default;
+            DashRuntimeBuffId = default;
+            KnockbackVelocityXRaw = default;
+            KnockbackVelocityYRaw = default;
+            KnockbackRemainingFrames = default;
+            KnockbackRuntimeBuffId = default;
+            SkillExecutions.Clear();
             MessageObjectPool<PlayerSnapshot>.Return(this);
         }
         [ProtoMember(1)]
@@ -670,6 +985,30 @@ namespace Fantasy
         public long RotationRadiansRaw { get; set; }
         [ProtoMember(24)]
         public uint AttributeBaselineFrameIndex { get; set; }
+        [ProtoMember(25)]
+        public int Stamina { get; set; }
+        [ProtoMember(26)]
+        public int MaxStamina { get; set; }
+        [ProtoMember(27)]
+        public int StaminaRegenCounterFrames { get; set; }
+        [ProtoMember(28)]
+        public long DashVelocityXRaw { get; set; }
+        [ProtoMember(29)]
+        public long DashVelocityYRaw { get; set; }
+        [ProtoMember(30)]
+        public int DashRemainingFrames { get; set; }
+        [ProtoMember(31)]
+        public long DashRuntimeBuffId { get; set; }
+        [ProtoMember(32)]
+        public long KnockbackVelocityXRaw { get; set; }
+        [ProtoMember(33)]
+        public long KnockbackVelocityYRaw { get; set; }
+        [ProtoMember(34)]
+        public int KnockbackRemainingFrames { get; set; }
+        [ProtoMember(35)]
+        public long KnockbackRuntimeBuffId { get; set; }
+        [ProtoMember(36)]
+        public List<ActiveSkillExecutionSnapshot> SkillExecutions { get; set; } = new List<ActiveSkillExecutionSnapshot>();
     }
     [Serializable]
     [ProtoContract]

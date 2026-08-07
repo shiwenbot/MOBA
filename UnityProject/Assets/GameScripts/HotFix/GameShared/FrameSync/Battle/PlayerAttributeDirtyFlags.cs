@@ -11,6 +11,8 @@ namespace GameShared.FrameSync.Battle
         Mana = 1 << 2,
         MaxMana = 1 << 3,
         Attack = 1 << 4,
-        All = Health | MaxHealth | Mana | MaxMana | Attack
+        Stamina = 1 << 5,
+        MaxStamina = 1 << 6,
+        All = Health | MaxHealth | Mana | MaxMana | Attack | Stamina | MaxStamina
     }
 }

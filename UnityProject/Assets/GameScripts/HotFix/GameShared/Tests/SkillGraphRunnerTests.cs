@@ -874,6 +874,11 @@ namespace GameShared.SkillGraph.Tests
                 Logs.Add(message ?? string.Empty);
             }
 
+            public bool TryConsumeStamina(long playerId, int amount)
+            {
+                return true;
+            }
+
             public FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)
             {
                 return FTask<bool>.FromResult(DelayResult);

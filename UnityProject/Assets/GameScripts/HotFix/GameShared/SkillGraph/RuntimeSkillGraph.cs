@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using Fantasy.Async;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using GameShared.FrameSync.Determinism;
 using Newtonsoft.Json;
@@ -21,6 +22,7 @@ namespace GameShared.SkillGraph
         public const string ApplyBuff = "ApplyBuff";
         public const string RemoveBuff = "RemoveBuff";
         public const string BuffCondition = "BuffCondition";
+        public const string DashStart = "DashStart";
     }
 
     public static class RuntimeActionTypes
@@ -273,9 +275,58 @@ namespace GameShared.SkillGraph
             int durationFrames = ResolveConfiguredBuffDurationFrames();
             int stackCount = ResolveConfiguredBuffStackCount();
 
-            return new Dictionary<int, RuntimeSkillGraph>
+            Dictionary<int, RuntimeSkillGraph> graphs = new Dictionary<int, RuntimeSkillGraph>
             {
-                [skillId] = CreateSelfBuffGraph(skillId, buffId, durationFrames, stackCount)
+                [skillId] = CreateSelfBuffGraph(skillId, buffId, durationFrames, stackCount),
+                [DashTuning.DashSkillId] = CreateDashGraph()
+            };
+            return graphs;
+        }
+
+        public static RuntimeSkillGraph CreateDashGraph()
+        {
+            return new RuntimeSkillGraph
+            {
+                Version = RuntimeSkillGraph.CurrentVersion,
+                SkillName = "Dash",
+                SyncMode = RuntimeSyncModes.Lockstep,
+                DeterministicFlags = CreateLockstepDeterministicFlags(),
+                Nodes = new List<RuntimeSkillNode>
+                {
+                    new RuntimeSkillNode { NodeId = 0, NodeType = RuntimeNodeTypes.Entry },
+                    new RuntimeSkillNode { NodeId = 1, NodeType = RuntimeNodeTypes.DashStart },
+                    new RuntimeSkillNode
+                    {
+                        NodeId = 2,
+                        NodeType = RuntimeNodeTypes.Delay,
+                        Properties = new List<RuntimeProperty>
+                        {
+                            new RuntimeProperty
+                            {
+                                Key = RuntimePropertyKeys.DurationFrames,
+                                Value = DashTuning.DashFrames.ToString(CultureInfo.InvariantCulture)
+                            }
+                        }
+                    },
+                    new RuntimeSkillNode
+                    {
+                        NodeId = 3,
+                        NodeType = RuntimeNodeTypes.ApplyBuff,
+                        Properties = new List<RuntimeProperty>
+                        {
+                            new RuntimeProperty { Key = RuntimePropertyKeys.TargetSelector, Value = RuntimeBuffTargetSelectors.Caster },
+                            new RuntimeProperty { Key = RuntimePropertyKeys.BuffId, Value = DashTuning.RecoverBuffId.ToString(CultureInfo.InvariantCulture) },
+                            new RuntimeProperty { Key = RuntimePropertyKeys.DurationFrames, Value = DashTuning.RecoverFrames.ToString(CultureInfo.InvariantCulture) },
+                            new RuntimeProperty { Key = RuntimePropertyKeys.StackCount, Value = "1" }
+                        }
+                    }
+                },
+                Connections = new List<RuntimeConnection>
+                {
+                    new RuntimeConnection { FromNodeId = 0, FromPort = "Next", ToNodeId = 1 },
+                    new RuntimeConnection { FromNodeId = 1, FromPort = "Out", ToNodeId = 2 },
+                    new RuntimeConnection { FromNodeId = 2, FromPort = "Out", ToNodeId = 3 }
+                }
             };
         }
 
@@ -484,12 +535,138 @@ namespace GameShared.SkillGraph
 
         public void QueueSkillRequest(long casterId, long targetId, int skillId, uint frameIndex)
         {
+            QueueSkillRequest(casterId, targetId, skillId, frameIndex, Fixed64.Zero, Fixed64.Zero);
+        }
+
+        public void QueueSkillRequest(
+            long casterId,
+            long targetId,
+            int skillId,
+            uint frameIndex,
+            Fixed64 directionX,
+            Fixed64 directionY)
+        {
             if (casterId <= 0 || skillId <= 0)
             {
                 return;
             }
 
-            _queuedRequests.Add(new QueuedSkillRequest(casterId, targetId, skillId, frameIndex));
+            _queuedRequests.Add(new QueuedSkillRequest(
+                casterId,
+                targetId,
+                skillId,
+                frameIndex,
+                directionX,
+                directionY));
+        }
+
+        public Dictionary<long, ActiveSkillExecutionSnapshot> CaptureExecutions()
+        {
+            Dictionary<long, ActiveSkillExecutionSnapshot> snapshots =
+                new Dictionary<long, ActiveSkillExecutionSnapshot>();
+            _sortedCasterIds.Clear();
+            foreach (long casterId in _activeExecutionsByCasterId.Keys)
+            {
+                _sortedCasterIds.Add(casterId);
+            }
+
+            _sortedCasterIds.Sort();
+            for (int i = 0; i < _sortedCasterIds.Count; i++)
+            {
+                long casterId = _sortedCasterIds[i];
+                if (!_activeExecutionsByCasterId.TryGetValue(casterId, out ActiveSkillExecution? execution))
+                {
+                    continue;
+                }
+
+                snapshots[casterId] = new ActiveSkillExecutionSnapshot(
+                    execution.CasterId,
+                    execution.TargetId,
+                    execution.SkillId,
+                    execution.Runner.GetSnapshot(),
+                    execution.DirectionX,
+                    execution.DirectionY);
+            }
+
+            return snapshots;
+        }
+
+        public void RestoreExecutions(
+            IReadOnlyDictionary<long, ActiveSkillExecutionSnapshot> snapshots)
+        {
+            _queuedRequests.Clear();
+            _activeExecutionsByCasterId.Clear();
+            if (snapshots == null || snapshots.Count == 0)
+            {
+                return;
+            }
+
+            _sortedCasterIds.Clear();
+            foreach (long casterId in snapshots.Keys)
+            {
+                _sortedCasterIds.Add(casterId);
+            }
+
+            _sortedCasterIds.Sort();
+            for (int i = 0; i < _sortedCasterIds.Count; i++)
+            {
+                ActiveSkillExecutionSnapshot snapshot = snapshots[_sortedCasterIds[i]];
+                if (!_graphsBySkillId.TryGetValue(snapshot.SkillId, out RuntimeSkillGraph? graph) || graph == null ||
+                    snapshot.RunnerSnapshot == null)
+                {
+                    continue;
+                }
+
+                QueuedSkillRequest request = new QueuedSkillRequest(
+                    snapshot.CasterId,
+                    snapshot.TargetId,
+                    snapshot.SkillId,
+                    unchecked((uint)Math.Max(0, snapshot.RunnerSnapshot.FrameIndex)),
+                    snapshot.DirectionX,
+                    snapshot.DirectionY);
+                SkillContext context = CreateContext(request, graph);
+                SkillGraphRunner runner = new SkillGraphRunner(_handlerRegistry);
+                SkillGraphRunResult initializeResult = runner.Initialize(
+                    graph,
+                    context,
+                    CreateRunnerOptions(graph));
+                if (!initializeResult.IsRunning)
+                {
+                    continue;
+                }
+
+                SkillGraphRunResult restoreResult = runner.Restore(snapshot.RunnerSnapshot);
+                if (restoreResult.Status == SkillExecutionStatus.Failure ||
+                    restoreResult.Status == SkillExecutionStatus.Cancelled)
+                {
+                    continue;
+                }
+
+                _activeExecutionsByCasterId[snapshot.CasterId] = new ActiveSkillExecution(
+                    snapshot.CasterId,
+                    snapshot.TargetId,
+                    snapshot.SkillId,
+                    snapshot.DirectionX,
+                    snapshot.DirectionY,
+                    runner);
+            }
+        }
+
+        public bool HasActiveExecution(long casterId, int skillId = 0)
+        {
+            return _activeExecutionsByCasterId.TryGetValue(casterId, out ActiveSkillExecution? execution) &&
+                   (skillId <= 0 || execution.SkillId == skillId);
+        }
+
+        public bool CancelExecution(long casterId, int skillId = 0)
+        {
+            if (!_activeExecutionsByCasterId.TryGetValue(casterId, out ActiveSkillExecution? execution) ||
+                (skillId > 0 && execution.SkillId != skillId))
+            {
+                return false;
+            }
+
+            return _activeExecutionsByCasterId.Remove(casterId);
         }
 
         public void Step(uint frameIndex)
@@ -573,6 +750,21 @@ namespace GameShared.SkillGraph
                     continue;
                 }
 
+                // A caster owns at most one active lockstep execution. In
+                // particular this prevents a second Dash from resetting the
+                // first runner and re-consuming stamina.
+                if (_activeExecutionsByCasterId.ContainsKey(request.CasterId))
+                {
+                    continue;
+                }
+
+                if (request.SkillId == DashTuning.DashSkillId &&
+                    (_buffCommandSink.HasBuff(request.CasterId, DashTuning.DashBuffId) ||
+                     _buffCommandSink.HasBuff(request.CasterId, DashTuning.RecoverBuffId)))
+                {
+                    continue;
+                }
+
                 SkillContext context = CreateContext(request, graph);
                 SkillGraphRunner runner = new SkillGraphRunner(_handlerRegistry);
                 SkillGraphRunResult initializeResult = runner.Initialize(
@@ -581,7 +773,13 @@ namespace GameShared.SkillGraph
                     CreateRunnerOptions(graph));
                 if (initializeResult.IsRunning)
                 {
-                    _activeExecutionsByCasterId[request.CasterId] = new ActiveSkillExecution(request.TargetId, runner);
+                    _activeExecutionsByCasterId[request.CasterId] = new ActiveSkillExecution(
+                        request.CasterId,
+                        request.TargetId,
+                        request.SkillId,
+                        request.DirectionX,
+                        request.DirectionY,
+                        runner);
                 }
             }
 
@@ -595,6 +793,8 @@ namespace GameShared.SkillGraph
                 CasterId = request.CasterId,
                 TargetId = request.TargetId,
                 SkillId = request.SkillId,
+                DirectionX = request.DirectionX,
+                DirectionY = request.DirectionY,
                 MaxExecutionSteps = ResolveExecutionStepLimit(graph),
                 Runtime = _runtimeServices,
                 BuffCommandSink = _buffCommandSink
@@ -622,25 +822,47 @@ namespace GameShared.SkillGraph
 
         private sealed class ActiveSkillExecution
         {
-            public ActiveSkillExecution(long targetId, SkillGraphRunner runner)
+            public ActiveSkillExecution(
+                long casterId,
+                long targetId,
+                int skillId,
+                Fixed64 directionX,
+                Fixed64 directionY,
+                SkillGraphRunner runner)
             {
+                CasterId = casterId;
                 TargetId = targetId;
+                SkillId = skillId;
+                DirectionX = directionX;
+                DirectionY = directionY;
                 Runner = runner ?? throw new ArgumentNullException(nameof(runner));
             }
 
+            public long CasterId { get; }
             public long TargetId { get; }
+            public int SkillId { get; }
+            public Fixed64 DirectionX { get; }
+            public Fixed64 DirectionY { get; }
 
             public SkillGraphRunner Runner { get; }
         }
 
         private readonly struct QueuedSkillRequest
         {
-            public QueuedSkillRequest(long casterId, long targetId, int skillId, uint frameIndex)
+            public QueuedSkillRequest(
+                long casterId,
+                long targetId,
+                int skillId,
+                uint frameIndex,
+                Fixed64 directionX,
+                Fixed64 directionY)
             {
                 CasterId = casterId;
                 TargetId = targetId;
                 SkillId = skillId;
                 FrameIndex = frameIndex;
+                DirectionX = directionX;
+                DirectionY = directionY;
             }
 
             public long CasterId { get; }
@@ -650,6 +872,8 @@ namespace GameShared.SkillGraph
             public int SkillId { get; }
 
             public uint FrameIndex { get; }
+            public Fixed64 DirectionX { get; }
+            public Fixed64 DirectionY { get; }
         }
 
         private sealed class QueuedSkillRequestComparer : IComparer<QueuedSkillRequest>

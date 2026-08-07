@@ -149,6 +149,11 @@ namespace GameLogic
                 TEngine.Log.Info($"[SkillGraph] {message}");
             }
 
+            public bool TryConsumeStamina(long playerId, int amount)
+            {
+                return false;
+            }
+
             public async FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)
             {
                 Scene scene = GameClient.Instance.Scene;

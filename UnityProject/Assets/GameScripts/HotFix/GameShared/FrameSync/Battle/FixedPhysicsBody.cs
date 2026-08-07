@@ -14,6 +14,7 @@ namespace GameShared.FrameSync.Battle
             AngularVelocity = Fixed64.Zero;
             IsAwake = true;
             IsEnabled = true;
+            IsKinematicObstacle = false;
         }
 
         public FixedPhysicsBody(PhysicsBodySnapshot snapshot)
@@ -26,6 +27,7 @@ namespace GameShared.FrameSync.Battle
             AngularVelocity = snapshot.AngularVelocity;
             IsAwake = snapshot.IsAwake;
             IsEnabled = snapshot.IsEnabled;
+            IsKinematicObstacle = false;
         }
 
         public Fixed64 PositionX;
@@ -36,6 +38,7 @@ namespace GameShared.FrameSync.Battle
         public Fixed64 AngularVelocity;
         public bool IsAwake;
         public bool IsEnabled;
+        public bool IsKinematicObstacle;
 
         public PhysicsBodySnapshot ToSnapshot(int bodyId)
         {

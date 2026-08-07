@@ -178,6 +178,14 @@ public static class TestRunner
                 checks.Add(RunPredictionSelfCase("rtt-probe-passes-downlink-gate"));
                 break;
 
+            case TestScenario.TwoClientKnockback:
+                // Headless stand-ins for the three machine-verifiable collision guarantees.
+                checks.Add(RunPredictionSelfCase("dash-collision-knockbacks-passive-player"));
+                checks.Add(RunPredictionSelfCase("dual-dash-collision-knockbacks-both"));
+                checks.Add(RunPredictionSelfCase("knockback-state-replays-without-new-mismatch"));
+                checks.Add(RunPredictionSelfCase("remote-body-mirror-survives-restore-self-only"));
+                break;
+
 
             case TestScenario.SkillTriggerBuff:
                 checks.Add(RunSingleCheck("BattleSkillTest", TestScenario.SkillTriggerBuff, SkillTriggerBuff));
@@ -1501,6 +1509,7 @@ public static class TestRunner
                 "two-client-weaknet-uplink-loss" => TestScenario.TwoClientWeakNetUplinkLoss,
                 "two-client-weaknet-downlink-loss" => TestScenario.TwoClientWeakNetDownlinkLoss,
                 "two-client-rtt-probe" => TestScenario.TwoClientRttProbe,
+                "two-client-knockback" => TestScenario.TwoClientKnockback,
 
                 "skill-trigger-buff" => TestScenario.SkillTriggerBuff,
                 "determinism" => TestScenario.Determinism,
@@ -1588,6 +1597,7 @@ public static class TestRunner
         public const string TwoClientWeakNetUplinkLoss = "two-client-weaknet-uplink-loss";
         public const string TwoClientWeakNetDownlinkLoss = "two-client-weaknet-downlink-loss";
         public const string TwoClientRttProbe = "two-client-rtt-probe";
+        public const string TwoClientKnockback = "two-client-knockback";
 
         public const string SkillTriggerBuff = "skill-trigger-buff";
         public const string Determinism = "determinism";

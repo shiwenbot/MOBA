@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FixedMathSharp;
 
 namespace GameShared.FrameSync.Battle
 {
@@ -11,6 +12,9 @@ namespace GameShared.FrameSync.Battle
         public const int MutexLowBuffId = 9201;
         public const int MutexHighBuffId = 9202;
         public const int MutexSamePriorityBuffId = 9203;
+        public const int DashBuffId = DashTuning.DashBuffId;
+        public const int RecoverBuffId = DashTuning.RecoverBuffId;
+        public const int KnockbackBuffId = KnockbackTuning.KnockbackBuffId;
         public const int StackMaxCount = 3;
         public const int RefreshReapplyDelayFrames = 20;
         public const int MutexGroupId = 1;
@@ -105,6 +109,47 @@ namespace GameShared.FrameSync.Battle
                 45,
                 BuffFlags.Duration | BuffFlags.Dispellable,
                 MutexSamePriorityEffects));
+            Register(new BuffConfig(
+                DashBuffId,
+                BuffOverlayType.Independent,
+                1,
+                0,
+                0,
+                DashTuning.DashFrames,
+                BuffFlags.Duration | BuffFlags.Dispellable,
+                NoEffects,
+                new DisplacementEffect(
+                    DisplacementKind.Dash,
+                    Fixed64.Zero,
+                    Fixed64.Zero,
+                    DashTuning.DashDecayNumerator,
+                    DashTuning.DashDecayDenominator,
+                    DashTuning.DashFrames)));
+            Register(new BuffConfig(
+                RecoverBuffId,
+                BuffOverlayType.Refresh,
+                1,
+                0,
+                0,
+                DashTuning.RecoverFrames,
+                BuffFlags.Duration | BuffFlags.Dispellable,
+                NoEffects));
+            Register(new BuffConfig(
+                KnockbackBuffId,
+                BuffOverlayType.Refresh,
+                1,
+                0,
+                0,
+                KnockbackTuning.KnockbackFrames,
+                BuffFlags.Duration | BuffFlags.Dispellable,
+                NoEffects,
+                new DisplacementEffect(
+                    DisplacementKind.Knockback,
+                    Fixed64.Zero,
+                    Fixed64.Zero,
+                    KnockbackTuning.DecayNumerator,
+                    KnockbackTuning.DecayDenominator,
+                    KnockbackTuning.KnockbackFrames)));
         }
 
         private void Register(BuffConfig config)

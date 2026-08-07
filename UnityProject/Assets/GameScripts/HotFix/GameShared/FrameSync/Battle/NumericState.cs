@@ -60,6 +60,8 @@ namespace GameShared.FrameSync.Battle
                 AttributeKind.Mana => _baseAttributes.Mana,
                 AttributeKind.MaxMana => _baseAttributes.MaxMana,
                 AttributeKind.Attack => _baseAttributes.Attack,
+                AttributeKind.Stamina => _baseAttributes.Stamina,
+                AttributeKind.MaxStamina => _baseAttributes.MaxStamina,
                 _ => 0
             };
         }
@@ -73,30 +75,56 @@ namespace GameShared.FrameSync.Battle
                     _baseAttributes.MaxHealth,
                     _baseAttributes.Mana,
                     _baseAttributes.MaxMana,
-                    _baseAttributes.Attack),
+                    _baseAttributes.Attack,
+                    _baseAttributes.Stamina,
+                    _baseAttributes.MaxStamina),
                 AttributeKind.MaxHealth => new PlayerAttributeSnapshot(
                     _baseAttributes.Health,
                     value,
                     _baseAttributes.Mana,
                     _baseAttributes.MaxMana,
-                    _baseAttributes.Attack),
+                    _baseAttributes.Attack,
+                    _baseAttributes.Stamina,
+                    _baseAttributes.MaxStamina),
                 AttributeKind.Mana => new PlayerAttributeSnapshot(
                     _baseAttributes.Health,
                     _baseAttributes.MaxHealth,
                     value,
                     _baseAttributes.MaxMana,
-                    _baseAttributes.Attack),
+                    _baseAttributes.Attack,
+                    _baseAttributes.Stamina,
+                    _baseAttributes.MaxStamina),
                 AttributeKind.MaxMana => new PlayerAttributeSnapshot(
                     _baseAttributes.Health,
                     _baseAttributes.MaxHealth,
                     _baseAttributes.Mana,
                     value,
-                    _baseAttributes.Attack),
+                    _baseAttributes.Attack,
+                    _baseAttributes.Stamina,
+                    _baseAttributes.MaxStamina),
                 AttributeKind.Attack => new PlayerAttributeSnapshot(
                     _baseAttributes.Health,
                     _baseAttributes.MaxHealth,
                     _baseAttributes.Mana,
                     _baseAttributes.MaxMana,
+                    value,
+                    _baseAttributes.Stamina,
+                    _baseAttributes.MaxStamina),
+                AttributeKind.Stamina => new PlayerAttributeSnapshot(
+                    _baseAttributes.Health,
+                    _baseAttributes.MaxHealth,
+                    _baseAttributes.Mana,
+                    _baseAttributes.MaxMana,
+                    _baseAttributes.Attack,
+                    value,
+                    _baseAttributes.MaxStamina),
+                AttributeKind.MaxStamina => new PlayerAttributeSnapshot(
+                    _baseAttributes.Health,
+                    _baseAttributes.MaxHealth,
+                    _baseAttributes.Mana,
+                    _baseAttributes.MaxMana,
+                    _baseAttributes.Attack,
+                    _baseAttributes.Stamina,
                     value),
                 _ => _baseAttributes
             };
@@ -138,11 +166,20 @@ namespace GameShared.FrameSync.Battle
             PlayerAttributeSnapshot before = target.CaptureAttributeSnapshot();
             int maxHealth = Math.Max(0, CalculateFinalValue(AttributeKind.MaxHealth));
             int maxMana = Math.Max(0, CalculateFinalValue(AttributeKind.MaxMana));
+            int maxStamina = Math.Max(0, CalculateFinalValue(AttributeKind.MaxStamina));
             int attack = CalculateFinalValue(AttributeKind.Attack);
             int health = Math.Clamp(CalculateFinalValue(AttributeKind.Health), 0, maxHealth);
             int mana = Math.Clamp(CalculateFinalValue(AttributeKind.Mana), 0, maxMana);
+            int stamina = Math.Clamp(CalculateFinalValue(AttributeKind.Stamina), 0, maxStamina);
 
-            target.SetComputedAttributes(new PlayerAttributeSnapshot(health, maxHealth, mana, maxMana, attack));
+            target.SetComputedAttributes(new PlayerAttributeSnapshot(
+                health,
+                maxHealth,
+                mana,
+                maxMana,
+                attack,
+                stamina,
+                maxStamina));
             DirtyFlags = PlayerAttributeSync.ComputeDirtyMask(true, before, target.CaptureAttributeSnapshot());
             return DirtyFlags;
         }

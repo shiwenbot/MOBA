@@ -63,7 +63,17 @@ namespace GameShared.FrameSync.Battle
                     playerState.CaptureAttributeSnapshot(),
                     playerState.ActiveBuffs,
                     playerState.NextRuntimeBuffId,
-                    playerState.Numeric.CaptureSnapshot());
+                    playerState.Numeric.CaptureSnapshot(),
+                    playerState.StaminaRegenCounterFrames,
+                    playerState.DashVelocityX,
+                    playerState.DashVelocityY,
+                    playerState.DashRemainingFrames,
+                    playerState.DashRuntimeBuffId,
+                    playerState.KnockbackVelocityX,
+                    playerState.KnockbackVelocityY,
+                    playerState.KnockbackRemainingFrames,
+                    playerState.KnockbackRuntimeBuffId,
+                    playerState.SkillExecutions);
             }
 
             Array.Sort(snapshots, PlayerStateSnapshotComparer.Instance);
@@ -84,7 +94,7 @@ namespace GameShared.FrameSync.Battle
             {
                 PlayerStateSnapshot player = players[i];
                 PlayerState restoredPlayer = new PlayerState(player.PlayerId, player.X, player.Y, player.Attributes);
-                restoredPlayer.RestoreRuntimeState(player.ActiveBuffs, player.NextRuntimeBuffId, player.Numeric);
+                RestoreRuntimeState(restoredPlayer, player);
                 _players[player.PlayerId] = restoredPlayer;
             }
 
@@ -136,7 +146,7 @@ namespace GameShared.FrameSync.Battle
             PlayerStateSnapshot self = selfSnapshot.Value;
             _players.Clear();
             PlayerState restoredPlayer = new PlayerState(self.PlayerId, self.X, self.Y, self.Attributes);
-            restoredPlayer.RestoreRuntimeState(self.ActiveBuffs, self.NextRuntimeBuffId, self.Numeric);
+            RestoreRuntimeState(restoredPlayer, self);
             _players[self.PlayerId] = restoredPlayer;
 
             // 忽略 PhysicsSnapshot 全量恢复：IPhysicsMovementWorld 没有按 bodyId 过滤 API，
@@ -150,6 +160,24 @@ namespace GameShared.FrameSync.Battle
         private static int ToBodyId(long playerId)
         {
             return checked((int)playerId);
+        }
+
+        private static void RestoreRuntimeState(PlayerState playerState, PlayerStateSnapshot snapshot)
+        {
+            playerState.RestoreRuntimeState(
+                snapshot.ActiveBuffs,
+                snapshot.NextRuntimeBuffId,
+                snapshot.Numeric,
+                snapshot.StaminaRegenCounterFrames,
+                snapshot.DashVelocityX,
+                snapshot.DashVelocityY,
+                snapshot.DashRemainingFrames,
+                snapshot.DashRuntimeBuffId,
+                snapshot.KnockbackVelocityX,
+                snapshot.KnockbackVelocityY,
+                snapshot.KnockbackRemainingFrames,
+                snapshot.KnockbackRuntimeBuffId,
+                snapshot.SkillExecutions);
         }
 
         private sealed class PlayerStateSnapshotComparer : IComparer<PlayerStateSnapshot>

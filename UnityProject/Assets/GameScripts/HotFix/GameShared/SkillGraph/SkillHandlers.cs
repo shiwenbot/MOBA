@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Fantasy.Async;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 
 namespace GameShared.SkillGraph
@@ -22,6 +23,7 @@ namespace GameShared.SkillGraph
             registry.Register(RuntimeNodeTypes.ApplyBuff, new ApplyBuffNodeHandler());
             registry.Register(RuntimeNodeTypes.RemoveBuff, new RemoveBuffNodeHandler());
             registry.Register(RuntimeNodeTypes.BuffCondition, new BuffConditionNodeHandler());
+            registry.Register(RuntimeNodeTypes.DashStart, new DashStartNodeHandler());
         }
     }
 
@@ -113,6 +115,55 @@ namespace GameShared.SkillGraph
                 StackCount = stackCount,
                 FrameIndex = SkillHandlerUtility.ResolveFrameIndex(context),
                 Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            });
+            return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
+        }
+    }
+
+    public sealed class DashStartNodeHandler : ISkillNodeHandler
+    {
+        public FTask<SkillExecuteResult> Execute(RuntimeSkillNode node, SkillContext context)
+        {
+            IBuffCommandSink buffCommandSink = SkillHandlerUtility.RequireBuffCommandSink(context);
+            if (buffCommandSink.HasBuff(context.CasterId, DashTuning.RecoverBuffId) ||
+                buffCommandSink.HasBuff(context.CasterId, DashTuning.DashBuffId))
+            {
+                return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Blocked"));
+            }
+
+            if (context.Runtime == null ||
+                !context.Runtime.TryConsumeStamina(context.CasterId, DashTuning.DashStaminaCost))
+            {
+                return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Blocked"));
+            }
+
+            Fixed64 directionX = context.DirectionX;
+            Fixed64 directionY = context.DirectionY;
+            Fixed64 lengthSquared = (directionX * directionX) + (directionY * directionY);
+            if (lengthSquared == Fixed64.Zero)
+            {
+                directionX = Fixed64.One;
+                directionY = Fixed64.Zero;
+            }
+            else
+            {
+                Fixed64 inverseLength = Fixed64.One / FixedMath.Sqrt(lengthSquared);
+                directionX *= inverseLength;
+                directionY *= inverseLength;
+            }
+
+            buffCommandSink.EnqueueApplyBuff(new ApplyBuffCommand
+            {
+                CasterId = context.CasterId,
+                TargetId = context.CasterId,
+                BuffId = DashTuning.DashBuffId,
+                DurationFrames = DashTuning.DashFrames,
+                StackCount = 1,
+                FrameIndex = SkillHandlerUtility.ResolveFrameIndex(context),
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable,
+                HasDisplacementVelocityOverride = true,
+                DisplacementVelocityX = directionX * DashTuning.DashSpeedFixed,
+                DisplacementVelocityY = directionY * DashTuning.DashSpeedFixed
             });
             return FTask<SkillExecuteResult>.FromResult(SkillExecuteResult.Success("Out"));
         }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using FixedMathSharp;
 using GameShared.FrameSync.Battle;
+using GameShared.SkillGraph;
 
 namespace GameLogic
 {
@@ -63,7 +64,9 @@ namespace GameLogic
                 player.MaxHealth,
                 player.Mana,
                 player.MaxMana,
-                player.Attack);
+                player.Attack,
+                player.Stamina,
+                player.MaxStamina);
             return new AttributeMergeResult(merged, frameIndex, true, true, false);
         }
 
@@ -154,11 +157,28 @@ namespace GameLogic
                     dirtyMask,
                     PlayerAttributeDirtyFlags.Attack,
                     currentAttributes.Attack),
+                Stamina = PlayerAttributeSync.SelectSerializedValue(
+                    dirtyMask,
+                    PlayerAttributeDirtyFlags.Stamina,
+                    currentAttributes.Stamina),
+                MaxStamina = PlayerAttributeSync.SelectSerializedValue(
+                    dirtyMask,
+                    PlayerAttributeDirtyFlags.MaxStamina,
+                    currentAttributes.MaxStamina),
                 NextRuntimeBuffId = nextRuntimeBuffId,
                 Numeric = WriteNumericSnapshot(player.Numeric),
                 BuffDirtyMask = buffDirtyMask,
                 BuffSnapshotFrameIndex = buffSnapshotFrameIndex,
-                IsBuffFullSync = isBuffFullSync
+                IsBuffFullSync = isBuffFullSync,
+                StaminaRegenCounterFrames = player.StaminaRegenCounterFrames,
+                DashVelocityXRaw = player.DashVelocityX.m_rawValue,
+                DashVelocityYRaw = player.DashVelocityY.m_rawValue,
+                DashRemainingFrames = player.DashRemainingFrames,
+                DashRuntimeBuffId = player.DashRuntimeBuffId,
+                KnockbackVelocityXRaw = player.KnockbackVelocityX.m_rawValue,
+                KnockbackVelocityYRaw = player.KnockbackVelocityY.m_rawValue,
+                KnockbackRemainingFrames = player.KnockbackRemainingFrames,
+                KnockbackRuntimeBuffId = player.KnockbackRuntimeBuffId
             };
 
             if (activeBuffs != null)
@@ -167,6 +187,13 @@ namespace GameLogic
                 {
                     wirePlayer.ActiveBuffs.Add(activeBuffs[i]);
                 }
+            }
+
+            List<Fantasy.ActiveSkillExecutionSnapshot> skillExecutions =
+                WriteSkillExecutions(player.SkillExecutions);
+            for (int i = 0; i < skillExecutions.Count; i++)
+            {
+                wirePlayer.SkillExecutions.Add(skillExecutions[i]);
             }
 
             WritePhysicsBody(wirePlayer, hasPhysics, body);
@@ -182,7 +209,9 @@ namespace GameLogic
                 BaseMaxHealth = numericState.BaseAttributes.MaxHealth,
                 BaseMana = numericState.BaseAttributes.Mana,
                 BaseMaxMana = numericState.BaseAttributes.MaxMana,
-                BaseAttack = numericState.BaseAttributes.Attack
+                BaseAttack = numericState.BaseAttributes.Attack,
+                BaseStamina = numericState.BaseAttributes.Stamina,
+                BaseMaxStamina = numericState.BaseAttributes.MaxStamina
             };
 
             for (int i = 0; i < numericState.Modifiers.Count; i++)
@@ -226,8 +255,103 @@ namespace GameLogic
                     numeric.BaseMaxHealth,
                     numeric.BaseMana,
                     numeric.BaseMaxMana,
-                    numeric.BaseAttack),
+                    numeric.BaseAttack,
+                    numeric.BaseStamina,
+                    numeric.BaseMaxStamina),
                 modifiers);
+        }
+
+        public static List<Fantasy.ActiveSkillExecutionSnapshot> WriteSkillExecutions(
+            IReadOnlyDictionary<long, GameShared.SkillGraph.ActiveSkillExecutionSnapshot> executions)
+        {
+            List<Fantasy.ActiveSkillExecutionSnapshot> snapshots =
+                new List<Fantasy.ActiveSkillExecutionSnapshot>();
+            if (executions == null || executions.Count == 0)
+            {
+                return snapshots;
+            }
+
+            List<long> casterIds = new List<long>(executions.Keys);
+            casterIds.Sort();
+            for (int i = 0; i < casterIds.Count; i++)
+            {
+                GameShared.SkillGraph.ActiveSkillExecutionSnapshot execution = executions[casterIds[i]];
+                SkillExecutionSnapshot runner = execution.RunnerSnapshot;
+                SkillBlackboardSnapshot blackboard = runner.Blackboard ?? new SkillBlackboardSnapshot();
+                Fantasy.ActiveSkillExecutionSnapshot wire = new Fantasy.ActiveSkillExecutionSnapshot
+                {
+                    CasterId = execution.CasterId,
+                    TargetId = execution.TargetId,
+                    SkillId = execution.SkillId,
+                    CurrentNodeId = runner.CurrentNodeId,
+                    Status = (uint)runner.Status,
+                    ExecutedSteps = runner.ExecutedSteps,
+                    FrameIndex = runner.FrameIndex,
+                    Message = runner.Message ?? string.Empty,
+                    DirectionXRaw = execution.DirectionX.m_rawValue,
+                    DirectionYRaw = execution.DirectionY.m_rawValue
+                };
+
+                WriteStringValues(blackboard.Strings, wire.Strings);
+                WriteFloatValues(blackboard.Floats, wire.Floats);
+                WriteIntValues(blackboard.Ints, wire.Ints);
+                WriteBoolValues(blackboard.Bools, wire.Bools);
+                WriteDelayValues(runner.DelayRemainingFrames, wire.DelayRemainingFrames);
+                snapshots.Add(wire);
+            }
+
+            return snapshots;
+        }
+
+        public static Dictionary<long, GameShared.SkillGraph.ActiveSkillExecutionSnapshot> ReadSkillExecutions(
+            IReadOnlyList<Fantasy.ActiveSkillExecutionSnapshot> executions)
+        {
+            Dictionary<long, GameShared.SkillGraph.ActiveSkillExecutionSnapshot> snapshots =
+                new Dictionary<long, GameShared.SkillGraph.ActiveSkillExecutionSnapshot>();
+            if (executions == null)
+            {
+                return snapshots;
+            }
+
+            for (int i = 0; i < executions.Count; i++)
+            {
+                Fantasy.ActiveSkillExecutionSnapshot wire = executions[i];
+                SkillBlackboardSnapshot blackboard = new SkillBlackboardSnapshot();
+                ReadStringValues(wire.Strings, blackboard.Strings);
+                ReadFloatValues(wire.Floats, blackboard.Floats);
+                ReadIntValues(wire.Ints, blackboard.Ints);
+                ReadBoolValues(wire.Bools, blackboard.Bools);
+
+                Dictionary<int, int> delayRemainingFrames = new Dictionary<int, int>();
+                if (wire.DelayRemainingFrames != null)
+                {
+                    for (int delayIndex = 0; delayIndex < wire.DelayRemainingFrames.Count; delayIndex++)
+                    {
+                        Fantasy.SkillDelaySnapshot delay = wire.DelayRemainingFrames[delayIndex];
+                        delayRemainingFrames[delay.NodeId] = delay.RemainingFrames;
+                    }
+                }
+
+                SkillExecutionSnapshot runner = new SkillExecutionSnapshot
+                {
+                    CurrentNodeId = wire.CurrentNodeId,
+                    Status = (SkillExecutionStatus)wire.Status,
+                    ExecutedSteps = wire.ExecutedSteps,
+                    FrameIndex = wire.FrameIndex,
+                    Message = wire.Message ?? string.Empty,
+                    Blackboard = blackboard,
+                    DelayRemainingFrames = delayRemainingFrames
+                };
+                snapshots[wire.CasterId] = new GameShared.SkillGraph.ActiveSkillExecutionSnapshot(
+                    wire.CasterId,
+                    wire.TargetId,
+                    wire.SkillId,
+                    runner,
+                    Fixed64.FromRaw(wire.DirectionXRaw),
+                    Fixed64.FromRaw(wire.DirectionYRaw));
+            }
+
+            return snapshots;
         }
 
         public static BuffState[] ReadBuffStates(IReadOnlyList<Fantasy.BuffSnapshot> buffs)
@@ -425,7 +549,17 @@ namespace GameLogic
                     attributes,
                     buffs,
                     nextRuntimeBuffId,
-                    ReadNumericSnapshot(player.Numeric, attributes));
+                    ReadNumericSnapshot(player.Numeric, attributes),
+                    player.StaminaRegenCounterFrames,
+                    Fixed64.FromRaw(player.DashVelocityXRaw),
+                    Fixed64.FromRaw(player.DashVelocityYRaw),
+                    player.DashRemainingFrames,
+                    player.DashRuntimeBuffId,
+                    Fixed64.FromRaw(player.KnockbackVelocityXRaw),
+                    Fixed64.FromRaw(player.KnockbackVelocityYRaw),
+                    player.KnockbackRemainingFrames,
+                    player.KnockbackRuntimeBuffId,
+                    ReadSkillExecutions(player.SkillExecutions));
                 bodies[i] = ReadPhysicsBody(player);
             }
 
@@ -460,6 +594,164 @@ namespace GameLogic
             }
 
             return lookup;
+        }
+
+        private static void WriteStringValues(
+            IReadOnlyDictionary<string, string> source,
+            ICollection<Fantasy.SkillStringValueSnapshot> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            List<string> keys = new List<string>(source.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                destination.Add(new Fantasy.SkillStringValueSnapshot
+                {
+                    Key = key,
+                    Value = source[key] ?? string.Empty
+                });
+            }
+        }
+
+        private static void WriteFloatValues(
+            IReadOnlyDictionary<string, float> source,
+            ICollection<Fantasy.SkillFloatValueSnapshot> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            List<string> keys = new List<string>(source.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                destination.Add(new Fantasy.SkillFloatValueSnapshot { Key = key, Value = source[key] });
+            }
+        }
+
+        private static void WriteIntValues(
+            IReadOnlyDictionary<string, int> source,
+            ICollection<Fantasy.SkillIntValueSnapshot> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            List<string> keys = new List<string>(source.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                destination.Add(new Fantasy.SkillIntValueSnapshot { Key = key, Value = source[key] });
+            }
+        }
+
+        private static void WriteBoolValues(
+            IReadOnlyDictionary<string, bool> source,
+            ICollection<Fantasy.SkillBoolValueSnapshot> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            List<string> keys = new List<string>(source.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                destination.Add(new Fantasy.SkillBoolValueSnapshot { Key = key, Value = source[key] });
+            }
+        }
+
+        private static void WriteDelayValues(
+            IReadOnlyDictionary<int, int> source,
+            ICollection<Fantasy.SkillDelaySnapshot> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            List<int> nodeIds = new List<int>(source.Keys);
+            nodeIds.Sort();
+            for (int i = 0; i < nodeIds.Count; i++)
+            {
+                int nodeId = nodeIds[i];
+                destination.Add(new Fantasy.SkillDelaySnapshot
+                {
+                    NodeId = nodeId,
+                    RemainingFrames = source[nodeId]
+                });
+            }
+        }
+
+        private static void ReadStringValues(
+            IReadOnlyList<Fantasy.SkillStringValueSnapshot> source,
+            IDictionary<string, string> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                destination[source[i].Key ?? string.Empty] = source[i].Value ?? string.Empty;
+            }
+        }
+
+        private static void ReadFloatValues(
+            IReadOnlyList<Fantasy.SkillFloatValueSnapshot> source,
+            IDictionary<string, float> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                destination[source[i].Key ?? string.Empty] = source[i].Value;
+            }
+        }
+
+        private static void ReadIntValues(
+            IReadOnlyList<Fantasy.SkillIntValueSnapshot> source,
+            IDictionary<string, int> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                destination[source[i].Key ?? string.Empty] = source[i].Value;
+            }
+        }
+
+        private static void ReadBoolValues(
+            IReadOnlyList<Fantasy.SkillBoolValueSnapshot> source,
+            IDictionary<string, bool> destination)
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                destination[source[i].Key ?? string.Empty] = source[i].Value;
+            }
         }
 
         private sealed class PlayerStateSnapshotIdComparer : IComparer<PlayerStateSnapshot>

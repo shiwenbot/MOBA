@@ -27,6 +27,7 @@
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\PredictionErrorSmoother.cs" Link="GameLogic\PredictionErrorSmoother.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattlePredictionSelfTestSuite.cs" Link="GameLogic\BattlePredictionSelfTestSuite.cs" />
     <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattlePredictionSelfTestSuite.Rtt.cs" Link="GameLogic\BattlePredictionSelfTestSuite.Rtt.cs" />
+    <Compile Include="..\..\..\UnityProject\Assets\GameScripts\HotFix\GameLogic\Battle\BattlePredictionSelfTestSuite.S8.cs" Link="GameLogic\BattlePredictionSelfTestSuite.S8.cs" />
 
   </ItemGroup>
 

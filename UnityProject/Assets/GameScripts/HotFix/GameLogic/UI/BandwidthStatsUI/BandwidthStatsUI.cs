@@ -24,6 +24,11 @@ namespace GameLogic
             m_textMeta = FindChildComponent<Text>("m_text_Meta");
             m_btnClose = FindChildComponent<Button>("m_btn_Close");
             m_btnClose.onClick.AddListener(OnClickCloseBtn);
+
+            rectTransform.sizeDelta = new Vector2(rectTransform.sizeDelta.x, 235.0f);
+            m_textMeta.rectTransform.sizeDelta = new Vector2(-60.0f, 58.0f);
+            m_textResult.rectTransform.anchoredPosition = new Vector2(15.0f, -73.0f);
+            m_textResult.rectTransform.sizeDelta = new Vector2(-30.0f, 152.0f);
         }
 
         #endregion
@@ -86,9 +91,21 @@ namespace GameLogic
                 }
             }
 
+            string gameplaySummary = "Dash 等待同步 | 体力 — | 击退 —";
+            if (_controller.HasGameplayStatus)
+            {
+                BattleClientController.GameplayStatusSnapshot gameplay = _controller.LatestGameplayStatus;
+                gameplaySummary =
+                    $"Dash {gameplay.Phase} {gameplay.DashRemainingFrames}f | " +
+                    $"体力 {gameplay.Stamina}/{gameplay.MaxStamina} | " +
+                    $"击退 {gameplay.KnockbackRemainingFrames}f";
+            }
+
+            string metaSummary = gameplaySummary + "\n" + predictionSummary + "\n" + rttSummary;
+
             if (!_controller.HasBandwidthStats)
             {
-                m_textMeta.text = predictionSummary + "\n" + rttSummary;
+                m_textMeta.text = metaSummary;
                 m_textResult.text = rollbackSummary + "\n尚未收到服务端带宽上报（每 10 秒一次）";
                 return;
             }
@@ -97,7 +114,7 @@ namespace GameLogic
 
             if (!s.MeasureFullSyncBaseline)
             {
-                m_textMeta.text = predictionSummary + "\n" + rttSummary;
+                m_textMeta.text = metaSummary;
                 m_textResult.text =
                     rollbackSummary + "\n" +
                     $"frame {s.FrameIndex} · 未开启带宽对照测量\n" +
@@ -107,12 +124,12 @@ namespace GameLogic
 
             if (!s.HasSamples || s.FullSyncPayloadBytes <= 0)
             {
-                m_textMeta.text = predictionSummary + "\n" + rttSummary;
+                m_textMeta.text = metaSummary;
                 m_textResult.text = rollbackSummary + $"\nframe {s.FrameIndex} · 带宽窗口无样本";
                 return;
             }
 
-            m_textMeta.text = predictionSummary + "\n" + rttSummary;
+            m_textMeta.text = metaSummary;
             m_textResult.text =
                 rollbackSummary + "\n" +
                 $"frame {s.FrameIndex} · 带宽节省 {s.DirtySyncSavedRatio:F1}%\n" +

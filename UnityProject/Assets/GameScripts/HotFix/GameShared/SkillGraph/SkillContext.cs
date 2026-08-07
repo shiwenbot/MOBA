@@ -1,4 +1,5 @@
 using Fantasy.Async;
+using FixedMathSharp;
 using GameShared.FrameSync.Battle;
 using System;
 using System.Collections.Generic;
@@ -9,6 +10,8 @@ namespace GameShared.SkillGraph
     public interface ISkillRuntimeServices
     {
         void Log(string message);
+
+        bool TryConsumeStamina(long playerId, int amount);
 
         FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null);
 
@@ -26,6 +29,10 @@ namespace GameShared.SkillGraph
         public long TargetId { get; set; }
 
         public int SkillId { get; set; }
+
+        public Fixed64 DirectionX { get; set; }
+
+        public Fixed64 DirectionY { get; set; }
 
         public bool IsCancelled { get; set; }
 
@@ -179,6 +186,49 @@ namespace GameShared.SkillGraph
     {
         public void Log(string message)
         {
+        }
+
+        public bool TryConsumeStamina(long playerId, int amount)
+        {
+            return false;
+        }
+
+        public FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)
+        {
+            return FTask<bool>.FromResult(true);
+        }
+
+        public FTask<bool> PlayAnimationAsync(
+            SkillContext context,
+            string prefabLocation,
+            float speed,
+            FCancellationToken? cancellationToken = null)
+        {
+            return FTask<bool>.FromResult(true);
+        }
+    }
+
+    public sealed class DelegateSkillRuntimeServices : ISkillRuntimeServices
+    {
+        private readonly Func<long, int, bool> _tryConsumeStamina;
+        private readonly Action<string> _log;
+
+        public DelegateSkillRuntimeServices(
+            Func<long, int, bool> tryConsumeStamina,
+            Action<string> log = null)
+        {
+            _tryConsumeStamina = tryConsumeStamina ?? throw new ArgumentNullException(nameof(tryConsumeStamina));
+            _log = log ?? (_ => { });
+        }
+
+        public void Log(string message)
+        {
+            _log(message);
+        }
+
+        public bool TryConsumeStamina(long playerId, int amount)
+        {
+            return _tryConsumeStamina(playerId, amount);
         }
 
         public FTask<bool> DelayAsync(int milliseconds, FCancellationToken? cancellationToken = null)

@@ -23,6 +23,13 @@ namespace GameLogic
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
         private const int SkillInputBufferFrames = 2;
+        private const float StaminaBarWidth = 1.5f;
+        private const float StaminaBarHeight = 0.12f;
+        private static readonly Color SelfColor = new Color(0.18f, 0.92f, 0.34f);
+        private static readonly Color RemoteColor = new Color(0.12f, 0.82f, 0.94f);
+        private static readonly Color DashColor = new Color(1.0f, 0.68f, 0.08f);
+        private static readonly Color RecoverColor = new Color(0.42f, 0.62f, 0.72f);
+        private static readonly Color KnockbackColor = new Color(1.0f, 0.22f, 0.16f);
 #if BATTLE_PREDICTION_SELF_TEST
         private static bool s_predictionSelfTestExecuted;
 #endif
@@ -37,6 +44,8 @@ namespace GameLogic
         private readonly List<long> _staleAuthoritativePlayers = new List<long>();
         private readonly List<long> _staleRenderTargetPlayerIds = new List<long>();
         private readonly InputBuffer<BufferedInputKind, int> _inputBuffer = new InputBuffer<BufferedInputKind, int>();
+        private readonly HashSet<long> _observedSelfDashBuffIds = new HashSet<long>();
+        private readonly HashSet<long> _observedSelfKnockbackBuffIds = new HashSet<long>();
 
         private ClientTickDriver _tickDriver;
         private BattleSimulation _simulation;
@@ -69,6 +78,13 @@ namespace GameLogic
         private bool _hasAuthoritativeGhostTarget;
         private Fixed64 _authoritativeGhostTargetX;
         private Fixed64 _authoritativeGhostTargetY;
+        private Renderer _authoritativeGhostRenderer;
+        private LineRenderer _authoritativeSeparationLine;
+        private GameObject _staminaBarRoot;
+        private Transform _staminaBarFill;
+        private Renderer _staminaBarFillRenderer;
+        private int _dashCount;
+        private int _knockbackTriggerCount;
 
         public int Priority => 0;
 
@@ -86,6 +102,8 @@ namespace GameLogic
         public bool HasPredictionError { get; private set; }
         public RttStatsSnapshot LatestRttStats { get; private set; }
         public bool HasRttStats { get; private set; }
+        public GameplayStatusSnapshot LatestGameplayStatus { get; private set; }
+        public bool HasGameplayStatus { get; private set; }
         public int RttProbeAcksSent => _rttProbeAcksSent;
 
 
@@ -174,6 +192,12 @@ namespace GameLogic
             HasPredictionError = false;
             LatestRttStats = default;
             HasRttStats = false;
+            LatestGameplayStatus = default;
+            HasGameplayStatus = false;
+            _dashCount = 0;
+            _knockbackTriggerCount = 0;
+            _observedSelfDashBuffIds.Clear();
+            _observedSelfKnockbackBuffIds.Clear();
 
             _hasAuthoritativeGhostTarget = false;
             _authoritativeGhostTargetX = Fixed64.Zero;
@@ -183,6 +207,21 @@ namespace GameLogic
             {
                 Destroy(_authoritativeGhostSphere);
                 _authoritativeGhostSphere = null;
+                _authoritativeGhostRenderer = null;
+            }
+
+            if (_authoritativeSeparationLine != null)
+            {
+                Destroy(_authoritativeSeparationLine.gameObject);
+                _authoritativeSeparationLine = null;
+            }
+
+            if (_staminaBarRoot != null)
+            {
+                Destroy(_staminaBarRoot);
+                _staminaBarRoot = null;
+                _staminaBarFill = null;
+                _staminaBarFillRenderer = null;
             }
 
             foreach (KeyValuePair<long, GameObject> pair in _playerSpheres)
@@ -212,7 +251,14 @@ namespace GameLogic
             }
 
             ReadKeyboardDirection(out _cachedDx, out _cachedDy);
-            if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.J))
+            if (Input.GetKeyDown(KeyCode.LeftShift) || Input.GetKeyDown(KeyCode.RightShift))
+            {
+                _inputBuffer.Record(
+                    BufferedInputKind.Skill,
+                    DashTuning.DashSkillId,
+                    SkillInputBufferFrames);
+            }
+            else if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.J))
             {
                 int skillId = BattleSkillGraphLibrary.ResolveConfiguredSkillId();
                 if (skillId > 0)
@@ -281,14 +327,28 @@ namespace GameLogic
             NetworkConditionConfig networkConfig = _networkGate?.Config ?? NetworkConditionConfig.Disabled;
             BattleWorldState worldState = _tickDriver?.WorldState;
             List<BattleAutomationPlayerSnapshot> players = new List<BattleAutomationPlayerSnapshot>();
+            HashSet<long> capturedPlayerIds = new HashSet<long>();
             int totalActiveBuffCount = 0;
+            int staminaAtEnd = 0;
             if (worldState != null)
             {
                 foreach (PlayerState player in worldState.Players)
                 {
+                    if (!capturedPlayerIds.Add(player.PlayerId))
+                    {
+                        continue;
+                    }
+
                     bool isSelf = _simulation != null && player.PlayerId == _simulation.SelfPlayerId;
                     BattleAutomationBuffSnapshot[] activeBuffs = BuildAutomationBuffSnapshots(player.ActiveBuffs);
                     totalActiveBuffCount += activeBuffs.Length;
+                    int recoverRemainingFrames = GetBuffRemainingFrames(player.ActiveBuffs, DashTuning.RecoverBuffId);
+                    if (isSelf)
+                    {
+                        staminaAtEnd = player.Stamina;
+                        ObserveSelfGameplayEpochs(player.DashRuntimeBuffId, player.KnockbackRuntimeBuffId);
+                    }
+
                     players.Add(new BattleAutomationPlayerSnapshot
                     {
                         playerId = player.PlayerId,
@@ -300,10 +360,56 @@ namespace GameLogic
                         mana = player.Mana,
                         maxMana = player.MaxMana,
                         attack = player.Attack,
+                        stamina = player.Stamina,
+                        maxStamina = player.MaxStamina,
+                        staminaRegenCounterFrames = player.StaminaRegenCounterFrames,
+                        dashRemainingFrames = player.DashRemainingFrames,
+                        dashRuntimeBuffId = player.DashRuntimeBuffId,
+                        recoverRemainingFrames = recoverRemainingFrames,
+                        knockbackRemainingFrames = player.KnockbackRemainingFrames,
+                        knockbackRuntimeBuffId = player.KnockbackRuntimeBuffId,
                         activeBuffCount = activeBuffs.Length,
                         activeBuffs = activeBuffs,
                         nextRuntimeBuffId = player.NextRuntimeBuffId,
                         numericModifierCount = player.Numeric.Count
+                    });
+                }
+            }
+
+            if (_simulation != null)
+            {
+                foreach (PlayerStateSnapshot remote in _simulation.RemotePlayers.Players)
+                {
+                    if (remote.PlayerId == _simulation.SelfPlayerId || !capturedPlayerIds.Add(remote.PlayerId))
+                    {
+                        continue;
+                    }
+
+                    BattleAutomationBuffSnapshot[] activeBuffs = BuildAutomationBuffSnapshots(remote.ActiveBuffs);
+                    totalActiveBuffCount += activeBuffs.Length;
+                    players.Add(new BattleAutomationPlayerSnapshot
+                    {
+                        playerId = remote.PlayerId,
+                        isSelf = false,
+                        x = (float)remote.X,
+                        y = (float)remote.Y,
+                        health = remote.Health,
+                        maxHealth = remote.MaxHealth,
+                        mana = remote.Mana,
+                        maxMana = remote.MaxMana,
+                        attack = remote.Attack,
+                        stamina = remote.Stamina,
+                        maxStamina = remote.MaxStamina,
+                        staminaRegenCounterFrames = remote.StaminaRegenCounterFrames,
+                        dashRemainingFrames = remote.DashRemainingFrames,
+                        dashRuntimeBuffId = remote.DashRuntimeBuffId,
+                        recoverRemainingFrames = GetBuffRemainingFrames(remote.ActiveBuffs, DashTuning.RecoverBuffId),
+                        knockbackRemainingFrames = remote.KnockbackRemainingFrames,
+                        knockbackRuntimeBuffId = remote.KnockbackRuntimeBuffId,
+                        activeBuffCount = activeBuffs.Length,
+                        activeBuffs = activeBuffs,
+                        nextRuntimeBuffId = remote.NextRuntimeBuffId,
+                        numericModifierCount = remote.Numeric.Count
                     });
                 }
             }
@@ -326,6 +432,9 @@ namespace GameLogic
                 hashReportsSent = _simulation?.HashReportsSent ?? 0,
                 consistencySkippedNoRecord = _simulation?.ConsistencySkippedNoRecord ?? 0,
                 consistencySkippedEvicted = _simulation?.ConsistencySkippedEvicted ?? 0,
+                stateMismatchCount = _simulation?.StateMismatchCount ?? 0,
+                positionMismatchCount = _simulation?.PositionMismatchCount ?? 0,
+                staminaMismatchCount = _simulation?.StaminaMismatchCount ?? 0,
                 rollbackCount = _simulation?.RollbackCount ?? 0,
                 lastRollbackReplayFrames = _simulation?.LastRollbackReplayFrames ?? 0,
                 lastRollbackElapsedMs = (float)(_simulation?.LastRollbackElapsedMs ?? 0.0d),
@@ -347,6 +456,10 @@ namespace GameLogic
                 serverControlRttMs = HasRttStats ? (float)LatestRttStats.ControlRttMs : 0f,
                 appliedTargetLeadFrames = (int)(_simulation?.AppliedTargetLeadFrames ?? 0u),
 
+                dashCount = _dashCount,
+                staminaAtEnd = staminaAtEnd,
+                knockbackTriggerCount = _knockbackTriggerCount,
+                contactMismatchFrames = _simulation?.ContactMismatchFrames ?? 0,
                 totalActiveBuffCount = totalActiveBuffCount,
                 players = players.ToArray()
             };
@@ -635,16 +748,54 @@ namespace GameLogic
             if (worldState.TryGetPlayer(_simulation.SelfPlayerId, out PlayerState selfPlayer))
             {
                 _activePlayers.Add(selfPlayer.PlayerId);
-                _renderTargetsByPlayerId[selfPlayer.PlayerId] = new RenderTarget(selfPlayer.X, selfPlayer.Y);
+                int recoverRemainingFrames = GetBuffRemainingFrames(
+                    selfPlayer.ActiveBuffs,
+                    DashTuning.RecoverBuffId);
+                _renderTargetsByPlayerId[selfPlayer.PlayerId] = new RenderTarget(
+                    selfPlayer.X,
+                    selfPlayer.Y,
+                    selfPlayer.Stamina,
+                    selfPlayer.MaxStamina,
+                    selfPlayer.DashRemainingFrames,
+                    recoverRemainingFrames,
+                    selfPlayer.KnockbackRemainingFrames);
+                ObserveSelfGameplayEpochs(selfPlayer.DashRuntimeBuffId, selfPlayer.KnockbackRuntimeBuffId);
+                LatestGameplayStatus = new GameplayStatusSnapshot
+                {
+                    Stamina = selfPlayer.Stamina,
+                    MaxStamina = selfPlayer.MaxStamina,
+                    DashRemainingFrames = selfPlayer.DashRemainingFrames,
+                    RecoverRemainingFrames = recoverRemainingFrames,
+                    KnockbackRemainingFrames = selfPlayer.KnockbackRemainingFrames,
+                    Phase = ResolveGameplayPhase(
+                        selfPlayer.DashRemainingFrames,
+                        recoverRemainingFrames)
+                };
+                HasGameplayStatus = true;
                 GameObject selfSphere = GetOrCreateSphere(selfPlayer.PlayerId, true);
                 selfSphere.SetActive(true);
+            }
+            else
+            {
+                HasGameplayStatus = false;
+                if (_staminaBarRoot != null)
+                {
+                    _staminaBarRoot.SetActive(false);
+                }
             }
 
             // 别人：从 RemotePlayerBuffer 直取最新权威位置（S10 再做插值）。
             foreach (PlayerStateSnapshot remote in _simulation.RemotePlayers.Players)
             {
                 _activePlayers.Add(remote.PlayerId);
-                _renderTargetsByPlayerId[remote.PlayerId] = new RenderTarget(remote.X, remote.Y);
+                _renderTargetsByPlayerId[remote.PlayerId] = new RenderTarget(
+                    remote.X,
+                    remote.Y,
+                    remote.Stamina,
+                    remote.MaxStamina,
+                    remote.DashRemainingFrames,
+                    GetBuffRemainingFrames(remote.ActiveBuffs, DashTuning.RecoverBuffId),
+                    remote.KnockbackRemainingFrames);
                 GameObject sphere = GetOrCreateSphere(remote.PlayerId, false);
                 sphere.SetActive(true);
             }
@@ -672,6 +823,12 @@ namespace GameLogic
 
                 if (pair.Value != null)
                 {
+                    TrailRenderer trail = pair.Value.GetComponent<TrailRenderer>();
+                    if (trail != null)
+                    {
+                        trail.Clear();
+                    }
+
                     pair.Value.SetActive(false);
                 }
             }
@@ -687,6 +844,9 @@ namespace GameLogic
             }
 
             _simulation.AdvancePredictionErrorSmoothing(Time.deltaTime);
+            bool hasSelfRenderState = false;
+            Vector3 selfRenderPosition = Vector3.zero;
+            RenderTarget selfRenderTarget = default;
             foreach (KeyValuePair<long, RenderTarget> pair in _renderTargetsByPlayerId)
             {
                 if (!_playerSpheres.TryGetValue(pair.Key, out GameObject sphere) ||
@@ -704,9 +864,15 @@ namespace GameLogic
                 }
 
                 sphere.transform.position = position;
+                bool isSelf = pair.Key == _simulation.SelfPlayerId;
+                UpdateSphereVisualState(sphere, isSelf, pair.Value);
                 if (pair.Key == _simulation.SelfPlayerId)
                 {
+                    hasSelfRenderState = true;
+                    selfRenderPosition = position;
+                    selfRenderTarget = pair.Value;
                     _simulation.RecordRenderedSelfPosition(position.x, position.z);
+                    UpdateStaminaBar(position, pair.Value.Stamina, pair.Value.MaxStamina);
                 }
             }
 
@@ -716,6 +882,11 @@ namespace GameLogic
                     _authoritativeGhostTargetX,
                     _authoritativeGhostTargetY);
             }
+
+            UpdateAuthoritativeSeparationVisual(
+                hasSelfRenderState,
+                selfRenderPosition,
+                selfRenderTarget);
 
             LatestPredictionError = new PredictionErrorSnapshot
             {
@@ -791,7 +962,17 @@ namespace GameLogic
                     mergedAttributes,
                     authoritativeBuffs,
                     nextRuntimeBuffId,
-                    BattleSnapshotProtocolMapper.ReadNumericSnapshot(player.Numeric, mergedAttributes));
+                    BattleSnapshotProtocolMapper.ReadNumericSnapshot(player.Numeric, mergedAttributes),
+                    player.StaminaRegenCounterFrames,
+                    Fixed64.FromRaw(player.DashVelocityXRaw),
+                    Fixed64.FromRaw(player.DashVelocityYRaw),
+                    player.DashRemainingFrames,
+                    player.DashRuntimeBuffId,
+                    Fixed64.FromRaw(player.KnockbackVelocityXRaw),
+                    Fixed64.FromRaw(player.KnockbackVelocityYRaw),
+                    player.KnockbackRemainingFrames,
+                    player.KnockbackRuntimeBuffId,
+                    BattleSnapshotProtocolMapper.ReadSkillExecutions(player.SkillExecutions));
                 bodies[i] = BattleSnapshotProtocolMapper.ReadPhysicsBody(player);
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
@@ -1036,8 +1217,10 @@ namespace GameLogic
             Renderer renderer = sphere.GetComponent<Renderer>();
             if (renderer != null)
             {
-                renderer.material.color = isSelf ? Color.green : Color.cyan;
+                renderer.material.color = isSelf ? SelfColor : RemoteColor;
             }
+
+            ConfigureDashTrail(sphere);
 
             _playerSpheres[playerId] = sphere;
             return sphere;
@@ -1061,6 +1244,7 @@ namespace GameLogic
             if (renderer != null)
             {
                 ConfigureGhostMaterial(renderer);
+                _authoritativeGhostRenderer = renderer;
             }
 
             Collider collider = ghost.GetComponent<Collider>();
@@ -1071,6 +1255,225 @@ namespace GameLogic
 
             _authoritativeGhostSphere = ghost;
             return ghost;
+        }
+
+        private static void ConfigureDashTrail(GameObject sphere)
+        {
+            TrailRenderer trail = sphere.GetComponent<TrailRenderer>();
+            if (trail == null)
+            {
+                trail = sphere.AddComponent<TrailRenderer>();
+            }
+
+            float diameter = (float)(GameplayRoomSettings.PlayerRadius * Fixed64.Two);
+            trail.time = 0.22f;
+            trail.minVertexDistance = 0.04f;
+            trail.startWidth = diameter * 0.72f;
+            trail.endWidth = 0.0f;
+            trail.alignment = LineAlignment.View;
+            trail.emitting = false;
+            trail.shadowCastingMode = ShadowCastingMode.Off;
+            trail.receiveShadows = false;
+
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader != null)
+            {
+                trail.material = new Material(shader);
+            }
+
+            Gradient gradient = new Gradient();
+            gradient.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(DashColor, 0.0f),
+                    new GradientColorKey(new Color(1.0f, 0.3f, 0.05f), 1.0f)
+                },
+                new[]
+                {
+                    new GradientAlphaKey(0.82f, 0.0f),
+                    new GradientAlphaKey(0.0f, 1.0f)
+                });
+            trail.colorGradient = gradient;
+        }
+
+        private static void UpdateSphereVisualState(GameObject sphere, bool isSelf, RenderTarget target)
+        {
+            Renderer renderer = sphere.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                Color color = isSelf ? SelfColor : RemoteColor;
+                if (target.KnockbackRemainingFrames > 0)
+                {
+                    color = KnockbackColor;
+                }
+                else if (target.DashRemainingFrames > 0)
+                {
+                    color = DashColor;
+                }
+                else if (target.RecoverRemainingFrames > 0)
+                {
+                    color = RecoverColor;
+                }
+
+                renderer.material.color = color;
+            }
+
+            TrailRenderer trail = sphere.GetComponent<TrailRenderer>();
+            if (trail != null)
+            {
+                trail.emitting = target.DashRemainingFrames > 0;
+            }
+        }
+
+        private void UpdateStaminaBar(Vector3 selfPosition, int stamina, int maxStamina)
+        {
+            EnsureStaminaBar();
+            _staminaBarRoot.SetActive(true);
+            _staminaBarRoot.transform.position = new Vector3(
+                selfPosition.x,
+                (float)GameplayRoomSettings.PlayerRadius + 0.5f,
+                selfPosition.z + 0.82f);
+
+            float ratio = maxStamina > 0
+                ? Mathf.Clamp01(stamina / (float)maxStamina)
+                : 0.0f;
+            _staminaBarFill.localScale = new Vector3(
+                StaminaBarWidth * ratio,
+                0.04f,
+                StaminaBarHeight * 0.72f);
+            _staminaBarFill.localPosition = new Vector3(
+                (-StaminaBarWidth * 0.5f) + (StaminaBarWidth * ratio * 0.5f),
+                0.04f,
+                0.0f);
+            if (_staminaBarFillRenderer != null)
+            {
+                _staminaBarFillRenderer.material.color = Color.Lerp(
+                    KnockbackColor,
+                    SelfColor,
+                    ratio);
+            }
+        }
+
+        private void EnsureStaminaBar()
+        {
+            if (_staminaBarRoot != null)
+            {
+                return;
+            }
+
+            _staminaBarRoot = new GameObject("GameplayStaminaBar");
+            _staminaBarRoot.transform.SetParent(transform, false);
+
+            GameObject background = CreateBarPart(
+                _staminaBarRoot.transform,
+                "Background",
+                new Vector3(StaminaBarWidth, 0.04f, StaminaBarHeight),
+                new Color(0.03f, 0.04f, 0.05f));
+            background.transform.localPosition = Vector3.zero;
+
+            GameObject fill = CreateBarPart(
+                _staminaBarRoot.transform,
+                "Fill",
+                new Vector3(StaminaBarWidth, 0.04f, StaminaBarHeight * 0.72f),
+                SelfColor);
+            _staminaBarFill = fill.transform;
+            _staminaBarFillRenderer = fill.GetComponent<Renderer>();
+        }
+
+        private static GameObject CreateBarPart(
+            Transform parent,
+            string name,
+            Vector3 scale,
+            Color color)
+        {
+            GameObject part = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            part.name = name;
+            part.transform.SetParent(parent, false);
+            part.transform.localScale = scale;
+            Renderer renderer = part.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                renderer.material.color = color;
+            }
+
+            Collider collider = part.GetComponent<Collider>();
+            if (collider != null)
+            {
+                Destroy(collider);
+            }
+
+            return part;
+        }
+
+        private void UpdateAuthoritativeSeparationVisual(
+            bool hasSelfRenderState,
+            Vector3 selfPosition,
+            RenderTarget selfTarget)
+        {
+            if (!hasSelfRenderState ||
+                !_hasAuthoritativeGhostTarget ||
+                _authoritativeGhostSphere == null)
+            {
+                if (_authoritativeSeparationLine != null)
+                {
+                    _authoritativeSeparationLine.enabled = false;
+                }
+
+                return;
+            }
+
+            Vector3 ghostPosition = _authoritativeGhostSphere.transform.position;
+            float separation = Vector3.Distance(selfPosition, ghostPosition);
+            bool knockbackActive = selfTarget.KnockbackRemainingFrames > 0;
+            bool showSeparation = knockbackActive || separation > 0.025f;
+            LineRenderer line = GetOrCreateAuthoritativeSeparationLine();
+            line.enabled = showSeparation;
+            if (showSeparation)
+            {
+                float lineHeight = (float)GameplayRoomSettings.PlayerRadius + 0.06f;
+                line.SetPosition(0, new Vector3(selfPosition.x, lineHeight, selfPosition.z));
+                line.SetPosition(1, new Vector3(ghostPosition.x, lineHeight, ghostPosition.z));
+            }
+
+            if (_authoritativeGhostRenderer != null)
+            {
+                _authoritativeGhostRenderer.material.color = knockbackActive
+                    ? new Color(KnockbackColor.r, KnockbackColor.g, KnockbackColor.b, 0.52f)
+                    : new Color(1.0f, 0.78f, 0.08f, 0.35f);
+            }
+
+            float diameter = (float)(GameplayRoomSettings.PlayerRadius * Fixed64.Two);
+            _authoritativeGhostSphere.transform.localScale = Vector3.one * diameter *
+                (knockbackActive ? 1.12f : 1.0f);
+        }
+
+        private LineRenderer GetOrCreateAuthoritativeSeparationLine()
+        {
+            if (_authoritativeSeparationLine != null)
+            {
+                return _authoritativeSeparationLine;
+            }
+
+            GameObject lineObject = new GameObject("GameplayAuthoritativeSeparation");
+            lineObject.transform.SetParent(transform, false);
+            LineRenderer line = lineObject.AddComponent<LineRenderer>();
+            line.positionCount = 2;
+            line.useWorldSpace = true;
+            line.startWidth = 0.07f;
+            line.endWidth = 0.025f;
+            line.startColor = new Color(1.0f, 0.28f, 0.18f, 0.95f);
+            line.endColor = new Color(1.0f, 0.78f, 0.08f, 0.55f);
+            line.shadowCastingMode = ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader != null)
+            {
+                line.material = new Material(shader);
+            }
+
+            line.enabled = false;
+            _authoritativeSeparationLine = line;
+            return line;
         }
 
         private static void ConfigureGhostMaterial(Renderer renderer)
@@ -1109,6 +1512,49 @@ namespace GameLogic
             material.renderQueue = (int)RenderQueue.Transparent;
         }
 
+        private void ObserveSelfGameplayEpochs(long dashRuntimeBuffId, long knockbackRuntimeBuffId)
+        {
+            if (dashRuntimeBuffId > 0 && _observedSelfDashBuffIds.Add(dashRuntimeBuffId))
+            {
+                _dashCount++;
+            }
+
+            if (knockbackRuntimeBuffId > 0 &&
+                _observedSelfKnockbackBuffIds.Add(knockbackRuntimeBuffId))
+            {
+                _knockbackTriggerCount++;
+            }
+        }
+
+        private static int GetBuffRemainingFrames(IReadOnlyList<BuffState> activeBuffs, int buffId)
+        {
+            if (activeBuffs == null)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < activeBuffs.Count; i++)
+            {
+                BuffState buff = activeBuffs[i];
+                if (buff.BuffId == buffId)
+                {
+                    return Math.Max(0, buff.RemainingFrames);
+                }
+            }
+
+            return 0;
+        }
+
+        private static string ResolveGameplayPhase(int dashRemainingFrames, int recoverRemainingFrames)
+        {
+            if (dashRemainingFrames > 0)
+            {
+                return "DASH";
+            }
+
+            return recoverRemainingFrames > 0 ? "RECOVER" : "READY";
+        }
+
         private static Vector3 ToWorldPosition(Fixed64 x, Fixed64 y)
         {
             return new Vector3((float)x, (float)GameplayRoomSettings.PlayerRadius, (float)y);
@@ -1143,14 +1589,31 @@ namespace GameLogic
 
         private readonly struct RenderTarget
         {
-            public RenderTarget(Fixed64 x, Fixed64 y)
+            public RenderTarget(
+                Fixed64 x,
+                Fixed64 y,
+                int stamina,
+                int maxStamina,
+                int dashRemainingFrames,
+                int recoverRemainingFrames,
+                int knockbackRemainingFrames)
             {
                 X = x;
                 Y = y;
+                Stamina = stamina;
+                MaxStamina = maxStamina;
+                DashRemainingFrames = dashRemainingFrames;
+                RecoverRemainingFrames = recoverRemainingFrames;
+                KnockbackRemainingFrames = knockbackRemainingFrames;
             }
 
             public Fixed64 X { get; }
             public Fixed64 Y { get; }
+            public int Stamina { get; }
+            public int MaxStamina { get; }
+            public int DashRemainingFrames { get; }
+            public int RecoverRemainingFrames { get; }
+            public int KnockbackRemainingFrames { get; }
         }
 
         private sealed class PlayerSnapshotComparer : IComparer<PlayerStateSnapshot>
@@ -1220,6 +1683,16 @@ namespace GameLogic
             public float SmoothingRemainingSeconds { get; set; }
             public int RollbackCount { get; set; }
             public uint LastRollbackFrame { get; set; }
+        }
+
+        public struct GameplayStatusSnapshot
+        {
+            public int Stamina { get; set; }
+            public int MaxStamina { get; set; }
+            public int DashRemainingFrames { get; set; }
+            public int RecoverRemainingFrames { get; set; }
+            public int KnockbackRemainingFrames { get; set; }
+            public string Phase { get; set; }
         }
 
         /// <summary>

@@ -19,6 +19,8 @@ namespace GameShared.FrameSync.Battle
 
         void SetBodyTransform(int bodyId, Fixed64 x, Fixed64 y, bool resetVelocity);
 
+        void SetBodyKinematicObstacle(int bodyId, bool isKinematicObstacle);
+
         void SetBodyMovementInput(int bodyId, Fixed64 dx, Fixed64 dy);
 
         void ApplyBodyImpulse(int bodyId, Fixed64 impulseX, Fixed64 impulseY);

@@ -673,8 +673,16 @@ namespace GameShared.SkillGraph
 
             if (!_delayRemainingFrames.TryGetValue(node.NodeId, out int remainingFrames))
             {
-                float durationSeconds = node.GetFloatPropertyValue(RuntimePropertyKeys.Duration, 0f);
-                remainingFrames = ConvertSecondsToFrames(durationSeconds);
+                int explicitDurationFrames = node.GetIntPropertyValue(RuntimePropertyKeys.DurationFrames, 0);
+                if (explicitDurationFrames > 0)
+                {
+                    remainingFrames = explicitDurationFrames;
+                }
+                else
+                {
+                    float durationSeconds = node.GetFloatPropertyValue(RuntimePropertyKeys.Duration, 0f);
+                    remainingFrames = ConvertSecondsToFrames(durationSeconds);
+                }
                 _delayRemainingFrames[node.NodeId] = remainingFrames;
             }
 

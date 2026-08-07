@@ -571,6 +571,9 @@ namespace GameLogic
         private bool _observedExpectedBuffRefreshExtension;
         private bool _observedInitialBuffAppearance;
         private bool _emittedSkillRequest;
+        private readonly HashSet<int> _emittedGlobalSkillOffsets = new HashSet<int>();
+        private uint _scenarioStartFrame;
+        private bool _hasScenarioStartFrame;
 
         public string BridgeName => "builtin";
 
@@ -591,14 +594,41 @@ namespace GameLogic
                 return false;
             }
 
-            uint relativeFrame = frameIndex - _joinedFrame;
+            uint referenceFrame = _plan.kind == BattleAutomationScenarioKind.Knockback &&
+                                  _hasScenarioStartFrame
+                ? _scenarioStartFrame
+                : _joinedFrame;
+            uint relativeFrame = frameIndex - referenceFrame;
             return _plan.TryGetInput(relativeFrame, out dx, out dy);
         }
 
         public bool TryGetSkillRequest(uint frameIndex, out int skillId)
         {
             skillId = 0;
-            if (!_hasJoinedFrame || !_plan.emitSkillRequest || _emittedSkillRequest)
+            if (!_hasJoinedFrame)
+            {
+                return false;
+            }
+
+            if (_plan.kind == BattleAutomationScenarioKind.Knockback)
+            {
+                if (!_hasScenarioStartFrame ||
+                    !_plan.TryGetGlobalSkillRequest(
+                        frameIndex,
+                        _emittedGlobalSkillOffsets,
+                        out int globalSkillId,
+                        out int globalOffset))
+                {
+                    return false;
+                }
+
+                skillId = globalSkillId;
+                _eventSink?.Invoke(
+                    $"[Automation] Emit synchronized Dash skillId={skillId} globalFrame={frameIndex} phase={globalOffset}");
+                return skillId > 0;
+            }
+
+            if (!_plan.emitSkillRequest || _emittedSkillRequest)
             {
                 return false;
             }
@@ -638,6 +668,15 @@ namespace GameLogic
 
             if (snapshot.activePlayerCount >= _plan.minimumPlayerCount)
             {
+                if (!_observedTargetPlayerCount &&
+                    _plan.kind == BattleAutomationScenarioKind.Knockback)
+                {
+                    _scenarioStartFrame = (uint)Math.Max(snapshot.localFrame, 0);
+                    _hasScenarioStartFrame = true;
+                    _eventSink?.Invoke(
+                        $"[Automation] Knockback schedule armed at globalFrame={_scenarioStartFrame}");
+                }
+
                 _observedTargetPlayerCount = true;
             }
 
@@ -651,7 +690,11 @@ namespace GameLogic
                 return default;
             }
 
-            int elapsedFrames = snapshot.localFrame - (int)_joinedFrame;
+            uint elapsedReferenceFrame = _plan.kind == BattleAutomationScenarioKind.Knockback &&
+                                         _hasScenarioStartFrame
+                ? _scenarioStartFrame
+                : _joinedFrame;
+            int elapsedFrames = snapshot.localFrame - (int)elapsedReferenceFrame;
             switch (_plan.kind)
             {
                 case BattleAutomationScenarioKind.JoinOnly:
@@ -694,6 +737,9 @@ namespace GameLogic
 
                 case BattleAutomationScenarioKind.WeakNetwork:
                     return EvaluateWeakNetwork(snapshot, elapsedFrames);
+
+                case BattleAutomationScenarioKind.Knockback:
+                    return EvaluateKnockback(snapshot, elapsedFrames);
 
                 case BattleAutomationScenarioKind.DisconnectActor:
                     if (elapsedFrames >= _plan.disconnectFrame)
@@ -739,6 +785,37 @@ namespace GameLogic
             }
 
             return default;
+        }
+
+        private BattleAutomationEvaluation EvaluateKnockback(
+            BattleAutomationClientSnapshot snapshot,
+            int elapsedFrames)
+        {
+            if (elapsedFrames < _plan.completionFrame)
+            {
+                return default;
+            }
+
+            bool networkConfigMatches = snapshot.networkSimulationEnabled &&
+                                        snapshot.networkUplinkDelayMs == 100 &&
+                                        snapshot.networkDownlinkDelayMs == 100 &&
+                                        snapshot.networkUplinkJitterMs == 0 &&
+                                        snapshot.networkDownlinkJitterMs == 0 &&
+                                        snapshot.networkUplinkLossPercent == 0 &&
+                                        snapshot.networkDownlinkLossPercent == 0;
+            bool passed = _observedTargetPlayerCount &&
+                          snapshot.snapshotMessageCount > 0 &&
+                          networkConfigMatches &&
+                          snapshot.dashCount >= 2 &&
+                          snapshot.knockbackTriggerCount > 0 &&
+                          snapshot.stateMismatchCount <= 3 &&
+                          snapshot.contactMismatchFrames <= 6;
+            string reason =
+                $"knockback players={snapshot.activePlayerCount}/{_plan.minimumPlayerCount} " +
+                $"dash={snapshot.dashCount} stamina={snapshot.staminaAtEnd} knockback={snapshot.knockbackTriggerCount} " +
+                $"stateMismatch={snapshot.stateMismatchCount} positionMismatch={snapshot.positionMismatchCount} " +
+                $"contactMismatch={snapshot.contactMismatchFrames} net={networkConfigMatches}";
+            return new BattleAutomationEvaluation(true, passed, reason);
         }
 
         public void Dispose()
@@ -1390,7 +1467,8 @@ namespace GameLogic
         BuffStack,
         BuffRefresh,
         BuffMutex,
-        WeakNetwork
+        WeakNetwork,
+        Knockback
     }
 
     internal sealed class BattleAutomationScenarioPlan
@@ -1410,6 +1488,8 @@ namespace GameLogic
         public int buffApplyDelayFrames;
         public int refreshReapplyDelayFrames;
         public int buffDurationFrames;
+        public int globalSkillCycleFrames;
+        public int[] globalSkillFrameOffsets;
         public BattleAutomationInputSegment[] inputSegments;
 
         public static BattleAutomationScenarioPlan Create(BattleAutomationConfig config)
@@ -1451,6 +1531,31 @@ namespace GameLogic
                             {
                                 new BattleAutomationInputSegment(0, (uint)Math.Max(0, config.MovementFrames - 1), 1.0f, 0.0f)
                             }
+                    };
+
+                case "two-client-knockback":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "two-client-knockback",
+                        kind = BattleAutomationScenarioKind.Knockback,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = 240,
+                        disconnectFrame = config.DisconnectFrame,
+                        expectedSkillId = DashTuning.DashSkillId,
+                        emitSkillRequest = true,
+                        globalSkillCycleFrames = 180,
+                        globalSkillFrameOffsets = isClientB
+                            ? new[] { 90, 150 }
+                            : new[] { 30, 150 },
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = new[]
+                        {
+                            new BattleAutomationInputSegment(
+                                0,
+                                240,
+                                isClientB ? -1.0f : 1.0f,
+                                0.0f)
+                        }
                     };
 
                 case "two-client-weaknet-delay":
@@ -1635,6 +1740,40 @@ namespace GameLogic
             return false;
         }
 
+        public bool TryGetGlobalSkillRequest(
+            uint globalFrame,
+            HashSet<int> emittedOffsets,
+            out int skillId,
+            out int matchedOffset)
+        {
+            skillId = 0;
+            matchedOffset = -1;
+            if (!emitSkillRequest ||
+                expectedSkillId <= 0 ||
+                globalSkillCycleFrames <= 0 ||
+                globalSkillFrameOffsets == null ||
+                emittedOffsets == null)
+            {
+                return false;
+            }
+
+            int phase = (int)(globalFrame % (uint)globalSkillCycleFrames);
+            for (int i = 0; i < globalSkillFrameOffsets.Length; i++)
+            {
+                int candidate = globalSkillFrameOffsets[i];
+                if (phase != candidate || !emittedOffsets.Add(candidate))
+                {
+                    continue;
+                }
+
+                skillId = expectedSkillId;
+                matchedOffset = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
         private static BattleAutomationInputSegment[] LoadInputScript(string scriptPath)
         {
             List<BattleAutomationInputSegment> segments = new List<BattleAutomationInputSegment>();
@@ -1744,6 +1883,9 @@ namespace GameLogic
         public int hashReportsSent;
         public int consistencySkippedNoRecord;
         public int consistencySkippedEvicted;
+        public int stateMismatchCount;
+        public int positionMismatchCount;
+        public int staminaMismatchCount;
         public int rollbackCount;
         public int lastRollbackReplayFrames;
         public float lastRollbackElapsedMs;
@@ -1765,6 +1907,10 @@ namespace GameLogic
         public float serverControlRttMs;
         public int appliedTargetLeadFrames;
 
+        public int dashCount;
+        public int staminaAtEnd;
+        public int knockbackTriggerCount;
+        public int contactMismatchFrames;
         public int totalActiveBuffCount;
         public BattleAutomationPlayerSnapshot[] players;
 
@@ -1799,6 +1945,14 @@ namespace GameLogic
         public int mana;
         public int maxMana;
         public int attack;
+        public int stamina;
+        public int maxStamina;
+        public int staminaRegenCounterFrames;
+        public int dashRemainingFrames;
+        public long dashRuntimeBuffId;
+        public int recoverRemainingFrames;
+        public int knockbackRemainingFrames;
+        public long knockbackRuntimeBuffId;
         public int activeBuffCount;
         public BattleAutomationBuffSnapshot[] activeBuffs;
         public long nextRuntimeBuffId;

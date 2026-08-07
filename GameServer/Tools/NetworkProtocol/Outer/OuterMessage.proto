@@ -96,6 +96,57 @@ message NumericSnapshot
 	int32 BaseMaxMana = 4;
 	int32 BaseAttack = 5;
 	repeated NumericModifierSnapshot Modifiers = 6;
+	int32 BaseStamina = 7;
+	int32 BaseMaxStamina = 8;
+}
+
+message SkillStringValueSnapshot
+{
+	string Key = 1;
+	string Value = 2;
+}
+
+message SkillFloatValueSnapshot
+{
+	string Key = 1;
+	float Value = 2;
+}
+
+message SkillIntValueSnapshot
+{
+	string Key = 1;
+	int32 Value = 2;
+}
+
+message SkillBoolValueSnapshot
+{
+	string Key = 1;
+	bool Value = 2;
+}
+
+message SkillDelaySnapshot
+{
+	int32 NodeId = 1;
+	int32 RemainingFrames = 2;
+}
+
+message ActiveSkillExecutionSnapshot
+{
+	int64 CasterId = 1;
+	int64 TargetId = 2;
+	int32 SkillId = 3;
+	int32 CurrentNodeId = 4;
+	uint32 Status = 5;
+	int32 ExecutedSteps = 6;
+	int32 FrameIndex = 7;
+	string Message = 8;
+	repeated SkillStringValueSnapshot Strings = 9;
+	repeated SkillFloatValueSnapshot Floats = 10;
+	repeated SkillIntValueSnapshot Ints = 11;
+	repeated SkillBoolValueSnapshot Bools = 12;
+	repeated SkillDelaySnapshot DelayRemainingFrames = 13;
+	int64 DirectionXRaw = 14;
+	int64 DirectionYRaw = 15;
 }
 
 message PlayerSnapshot
@@ -125,6 +176,18 @@ message PlayerSnapshot
 	bool IsBuffFullSync = 22;
 	int64 RotationRadiansRaw = 23;
 	uint32 AttributeBaselineFrameIndex = 24;
+	int32 Stamina = 25;
+	int32 MaxStamina = 26;
+	int32 StaminaRegenCounterFrames = 27;
+	int64 DashVelocityXRaw = 28;
+	int64 DashVelocityYRaw = 29;
+	int32 DashRemainingFrames = 30;
+	int64 DashRuntimeBuffId = 31;
+	int64 KnockbackVelocityXRaw = 32;
+	int64 KnockbackVelocityYRaw = 33;
+	int32 KnockbackRemainingFrames = 34;
+	int64 KnockbackRuntimeBuffId = 35;
+	repeated ActiveSkillExecutionSnapshot SkillExecutions = 36;
 }
 
 message FrameContactSnapshot

@@ -20,7 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = 'D:\unity\Tencent\TEngine'
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $unityProjectPath = Join-Path $repoRoot 'UnityProject'
 $serverProjectPath = Join-Path $repoRoot 'GameServer\Server\Main\Main.csproj'
 $editorExecuteMethod = 'RealClientAutomationEditor.RunAutomationClient'
@@ -220,6 +220,12 @@ function Get-ScenarioCustomArgs {
         }
         'two-client-rtt-probe' {
             # Server-authoritative RTT measurement under mild bidirectional delay.
+            $netsimEnabled = $true
+            $uplinkDelayMs = 100
+            $downlinkDelayMs = 100
+        }
+        'two-client-knockback' {
+            # Fixed S8 calibration: symmetric delay, no jitter, no packet loss.
             $netsimEnabled = $true
             $uplinkDelayMs = 100
             $downlinkDelayMs = 100
@@ -537,7 +543,9 @@ function Get-NetworkSimulationEvidence {
         [string]$ServerLogPath
     )
 
-    if (-not $ScenarioName.StartsWith('two-client-weaknet-', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $isWeakNetworkScenario = $ScenarioName.StartsWith('two-client-weaknet-', [System.StringComparison]::OrdinalIgnoreCase)
+    $isKnockbackScenario = $ScenarioName.Equals('two-client-knockback', [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $isWeakNetworkScenario -and -not $isKnockbackScenario) {
         return @{ Passed = $true; Details = 'not-a-weaknet-scenario' }
     }
 
@@ -566,6 +574,25 @@ function Get-NetworkSimulationEvidence {
         'two-client-weaknet-downlink-loss' {
             $passed = ($snapshots | Where-Object { [long]$_.networkDownlinkDropped -le 0 }).Count -eq 0
             $details = "downlinkDropped=$($snapshots[0].networkDownlinkDropped)/$($snapshots[1].networkDownlinkDropped)"
+        }
+        'two-client-knockback' {
+            $passed = ($snapshots | Where-Object {
+                [int]$_.networkUplinkDelayMs -ne 100 -or
+                [int]$_.networkDownlinkDelayMs -ne 100 -or
+                [int]$_.networkUplinkJitterMs -ne 0 -or
+                [int]$_.networkDownlinkJitterMs -ne 0 -or
+                [int]$_.networkUplinkLossPercent -ne 0 -or
+                [int]$_.networkDownlinkLossPercent -ne 0 -or
+                [int]$_.dashCount -lt 2 -or
+                [int]$_.knockbackTriggerCount -le 0 -or
+                [int]$_.stateMismatchCount -gt 3 -or
+                [int]$_.contactMismatchFrames -gt 6
+            }).Count -eq 0
+            $details = "dash=$($snapshots[0].dashCount)/$($snapshots[1].dashCount) " +
+                "knockback=$($snapshots[0].knockbackTriggerCount)/$($snapshots[1].knockbackTriggerCount) " +
+                "stateMismatch=$($snapshots[0].stateMismatchCount)/$($snapshots[1].stateMismatchCount) " +
+                "positionMismatch=$($snapshots[0].positionMismatchCount)/$($snapshots[1].positionMismatchCount) " +
+                "contactMismatch=$($snapshots[0].contactMismatchFrames)/$($snapshots[1].contactMismatchFrames)"
         }
         default {
             $passed = $false

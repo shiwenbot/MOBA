@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using GameShared.FrameSync.Battle;
+using GameShared.SkillGraph;
 
 namespace GameShared.FrameSync.Snapshot
 {
@@ -28,6 +30,17 @@ namespace GameShared.FrameSync.Snapshot
                 MixInt(ref hash, player.Mana);
                 MixInt(ref hash, player.MaxMana);
                 MixInt(ref hash, player.Attack);
+                MixInt(ref hash, player.Stamina);
+                MixInt(ref hash, player.MaxStamina);
+                MixInt(ref hash, player.StaminaRegenCounterFrames);
+                MixLong(ref hash, player.DashVelocityX.m_rawValue);
+                MixLong(ref hash, player.DashVelocityY.m_rawValue);
+                MixInt(ref hash, player.DashRemainingFrames);
+                MixLong(ref hash, player.DashRuntimeBuffId);
+                MixLong(ref hash, player.KnockbackVelocityX.m_rawValue);
+                MixLong(ref hash, player.KnockbackVelocityY.m_rawValue);
+                MixInt(ref hash, player.KnockbackRemainingFrames);
+                MixLong(ref hash, player.KnockbackRuntimeBuffId);
                 MixInt(ref hash, player.ActiveBuffs.Count);
                 for (int buffIndex = 0; buffIndex < player.ActiveBuffs.Count; buffIndex++)
                 {
@@ -52,6 +65,8 @@ namespace GameShared.FrameSync.Snapshot
                 MixInt(ref hash, player.Numeric.BaseAttributes.Mana);
                 MixInt(ref hash, player.Numeric.BaseAttributes.MaxMana);
                 MixInt(ref hash, player.Numeric.BaseAttributes.Attack);
+                MixInt(ref hash, player.Numeric.BaseAttributes.Stamina);
+                MixInt(ref hash, player.Numeric.BaseAttributes.MaxStamina);
                 MixInt(ref hash, player.Numeric.Count);
                 for (int modifierIndex = 0; modifierIndex < player.Numeric.Modifiers.Count; modifierIndex++)
                 {
@@ -62,6 +77,8 @@ namespace GameShared.FrameSync.Snapshot
                     MixInt(ref hash, (int)modifier.AttributeKind);
                     MixInt(ref hash, modifier.Value);
                 }
+
+                MixSkillExecutions(ref hash, player.SkillExecutions);
             }
 
             if (snapshot.PhysicsSnapshot != null)
@@ -112,6 +129,139 @@ namespace GameShared.FrameSync.Snapshot
         private static void MixBool(ref ulong hash, bool value)
         {
             MixInt(ref hash, value ? 1 : 0);
+        }
+
+        private static void MixSkillExecutions(
+            ref ulong hash,
+            IReadOnlyDictionary<long, ActiveSkillExecutionSnapshot> executions)
+        {
+            int count = executions?.Count ?? 0;
+            MixInt(ref hash, count);
+            if (count == 0)
+            {
+                return;
+            }
+
+            List<long> casterIds = new List<long>(executions.Keys);
+            casterIds.Sort();
+            for (int i = 0; i < casterIds.Count; i++)
+            {
+                ActiveSkillExecutionSnapshot execution = executions[casterIds[i]];
+                MixLong(ref hash, execution.CasterId);
+                MixLong(ref hash, execution.TargetId);
+                MixInt(ref hash, execution.SkillId);
+                MixLong(ref hash, execution.DirectionX.m_rawValue);
+                MixLong(ref hash, execution.DirectionY.m_rawValue);
+
+                SkillExecutionSnapshot runner = execution.RunnerSnapshot;
+                MixInt(ref hash, runner.CurrentNodeId);
+                MixInt(ref hash, (int)runner.Status);
+                MixInt(ref hash, runner.ExecutedSteps);
+                MixInt(ref hash, runner.FrameIndex);
+                MixString(ref hash, runner.Message);
+
+                SkillBlackboardSnapshot blackboard = runner.Blackboard;
+                MixStringDictionary(ref hash, blackboard?.Strings);
+                MixFloatDictionary(ref hash, blackboard?.Floats);
+                MixIntDictionary(ref hash, blackboard?.Ints);
+                MixBoolDictionary(ref hash, blackboard?.Bools);
+                MixDelayDictionary(ref hash, runner.DelayRemainingFrames);
+            }
+        }
+
+        private static void MixStringDictionary(
+            ref ulong hash,
+            IReadOnlyDictionary<string, string> values)
+        {
+            List<string> keys = GetSortedKeys(values);
+            MixInt(ref hash, keys.Count);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                MixString(ref hash, key);
+                MixString(ref hash, values[key]);
+            }
+        }
+
+        private static void MixFloatDictionary(
+            ref ulong hash,
+            IReadOnlyDictionary<string, float> values)
+        {
+            List<string> keys = GetSortedKeys(values);
+            MixInt(ref hash, keys.Count);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                MixString(ref hash, key);
+                MixInt(ref hash, BitConverter.SingleToInt32Bits(values[key]));
+            }
+        }
+
+        private static void MixIntDictionary(
+            ref ulong hash,
+            IReadOnlyDictionary<string, int> values)
+        {
+            List<string> keys = GetSortedKeys(values);
+            MixInt(ref hash, keys.Count);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                MixString(ref hash, key);
+                MixInt(ref hash, values[key]);
+            }
+        }
+
+        private static void MixBoolDictionary(
+            ref ulong hash,
+            IReadOnlyDictionary<string, bool> values)
+        {
+            List<string> keys = GetSortedKeys(values);
+            MixInt(ref hash, keys.Count);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string key = keys[i];
+                MixString(ref hash, key);
+                MixBool(ref hash, values[key]);
+            }
+        }
+
+        private static void MixDelayDictionary(
+            ref ulong hash,
+            IReadOnlyDictionary<int, int> values)
+        {
+            int count = values?.Count ?? 0;
+            MixInt(ref hash, count);
+            if (count == 0)
+            {
+                return;
+            }
+
+            List<int> keys = new List<int>(values.Keys);
+            keys.Sort();
+            for (int i = 0; i < keys.Count; i++)
+            {
+                MixInt(ref hash, keys[i]);
+                MixInt(ref hash, values[keys[i]]);
+            }
+        }
+
+        private static List<string> GetSortedKeys<TValue>(IReadOnlyDictionary<string, TValue> values)
+        {
+            List<string> keys = values == null
+                ? new List<string>()
+                : new List<string>(values.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            return keys;
+        }
+
+        private static void MixString(ref ulong hash, string value)
+        {
+            string normalized = value ?? string.Empty;
+            MixInt(ref hash, normalized.Length);
+            for (int i = 0; i < normalized.Length; i++)
+            {
+                MixInt(ref hash, normalized[i]);
+            }
         }
     }
 }

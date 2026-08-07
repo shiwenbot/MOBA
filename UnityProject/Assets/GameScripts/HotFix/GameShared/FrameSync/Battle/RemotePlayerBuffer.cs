@@ -19,6 +19,14 @@ namespace GameShared.FrameSync.Battle
 
         public void ApplyAuthoritative(BattleWorldSnapshot snapshot, long selfPlayerId)
         {
+            ApplyAuthoritative(snapshot, selfPlayerId, null);
+        }
+
+        public void ApplyAuthoritative(
+            BattleWorldSnapshot snapshot,
+            long selfPlayerId,
+            ICollection<long> removedPlayerIds)
+        {
             if (snapshot == null)
             {
                 throw new ArgumentNullException(nameof(snapshot));
@@ -49,6 +57,7 @@ namespace GameShared.FrameSync.Battle
 
             for (int i = 0; i < _stalePlayerIds.Count; i++)
             {
+                removedPlayerIds?.Add(_stalePlayerIds[i]);
                 _players.Remove(_stalePlayerIds[i]);
             }
 

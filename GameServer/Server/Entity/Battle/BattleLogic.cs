@@ -34,6 +34,9 @@ public sealed class BattleLogic : IBuffCommandSink
     private readonly Action<string>? _logDebug;
     private readonly Action<string>? _logWarning;
     private readonly SnapshotBuffer<ulong> _authoritativeHashHistory = new(64);
+    private readonly HashSet<ContactPair> _currentContactPairs = new();
+    private readonly HashSet<DashContactEpochKey> _triggeredDashContactEpochs = new();
+    private readonly List<DashContactEpochKey> _staleDashContactEpochs = new();
     private bool _hasProcessedFrame;
 
     public BattleLogic(
@@ -44,7 +47,10 @@ public sealed class BattleLogic : IBuffCommandSink
         _logDebug = logDebug;
         _logWarning = logWarning;
         _buffConfigProvider = new DefaultBuffConfigProvider();
-        _skillGraphRuntime = new BattleSkillGraphRuntime(this, skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs());
+        _skillGraphRuntime = new BattleSkillGraphRuntime(
+            this,
+            skillGraphs ?? BattleSkillGraphLibrary.LoadDefaultGraphs(),
+            new DelegateSkillRuntimeServices(TryConsumeStamina, message => _logDebug?.Invoke(message)));
     }
 
     public uint LastFrameIndex { get; private set; }
@@ -57,6 +63,8 @@ public sealed class BattleLogic : IBuffCommandSink
     public int HashReportsMatched { get; private set; }
     public int HashMismatchCount { get; private set; }
     public int HashNoRecordCount { get; private set; }
+    public int ActiveSkillExecutionCount => _skillGraphRuntime.ActiveExecutionCount;
+    public int KnockbackTriggerCount { get; private set; }
 
     public PlayerState JoinPlayer(long playerId, Fixed64 x, Fixed64 y)
     {
@@ -239,10 +247,14 @@ public sealed class BattleLogic : IBuffCommandSink
             }
         }
 
+        ApplyDisplacements();
         _physicsWorld.Step(fixedDt);
         SyncPlayerStatesFromPhysics();
-        RecalculateNumericStates();
         ApplyBuffTicks(frameIndex);
+        DetectContactsAndTriggerKnockback(frameIndex);
+        TickStamina();
+        RecalculateNumericStates();
+        SyncSkillExecutionsToStates();
 
         TestSnapshot snapshot = BuildTestSnapshot(frameIndex);
         _authoritativeHashHistory.Save(frameIndex, StateHasher.Hash(snapshot.ToBattleWorldSnapshot()));
@@ -305,7 +317,17 @@ public sealed class BattleLogic : IBuffCommandSink
                 state.CaptureAttributeSnapshot(),
                 state.ActiveBuffs,
                 state.NextRuntimeBuffId,
-                state.Numeric.CaptureSnapshot());
+                state.Numeric.CaptureSnapshot(),
+                state.StaminaRegenCounterFrames,
+                state.DashVelocityX,
+                state.DashVelocityY,
+                state.DashRemainingFrames,
+                state.DashRuntimeBuffId,
+                state.KnockbackVelocityX,
+                state.KnockbackVelocityY,
+                state.KnockbackRemainingFrames,
+                state.KnockbackRuntimeBuffId,
+                state.SkillExecutions);
         }
 
         return players;
@@ -326,6 +348,9 @@ public sealed class BattleLogic : IBuffCommandSink
         queuedCommand.StackCount = command.StackCount;
         queuedCommand.FrameIndex = command.FrameIndex;
         queuedCommand.Flags = command.Flags;
+        queuedCommand.HasDisplacementVelocityOverride = command.HasDisplacementVelocityOverride;
+        queuedCommand.DisplacementVelocityX = command.DisplacementVelocityX;
+        queuedCommand.DisplacementVelocityY = command.DisplacementVelocityY;
         InsertApplyCommand(queuedCommand);
     }
 
@@ -402,8 +427,236 @@ public sealed class BattleLogic : IBuffCommandSink
                 continue;
             }
 
-            _skillGraphRuntime.QueueSkillRequest(playerId, playerId, input.SkillId, frameIndex);
+            _skillGraphRuntime.QueueSkillRequest(
+                playerId,
+                playerId,
+                input.SkillId,
+                frameIndex,
+                input.Dx,
+                input.Dy);
         }
+    }
+
+    private void ApplyDisplacements()
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            if (_statesByPlayerId.TryGetValue(_playerIdBuffer[i], out PlayerState? state))
+            {
+                DisplacementSystem.Apply(state, _physicsWorld);
+            }
+        }
+
+        // Decay is intentionally adjacent to Apply. Buffs created by the
+        // post-physics contact pass retain their full initial velocity until
+        // the next frame.
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            if (_statesByPlayerId.TryGetValue(_playerIdBuffer[i], out PlayerState? state))
+            {
+                DisplacementSystem.Decay(state);
+            }
+        }
+    }
+
+    private void TickStamina()
+    {
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            if (_statesByPlayerId.TryGetValue(_playerIdBuffer[i], out PlayerState? state))
+            {
+                StaminaSystem.Tick(state);
+            }
+        }
+    }
+
+    private bool TryConsumeStamina(long playerId, int amount)
+    {
+        return _statesByPlayerId.TryGetValue(playerId, out PlayerState? state) &&
+               StaminaSystem.TryConsume(state, amount);
+    }
+
+    private void SyncSkillExecutionsToStates()
+    {
+        Dictionary<long, GameShared.SkillGraph.ActiveSkillExecutionSnapshot> executions =
+            _skillGraphRuntime.CaptureExecutions();
+        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        {
+            long playerId = _playerIdBuffer[i];
+            if (!_statesByPlayerId.TryGetValue(playerId, out PlayerState? state))
+            {
+                continue;
+            }
+
+            state.SkillExecutions.Clear();
+            if (executions.TryGetValue(
+                    playerId,
+                    out GameShared.SkillGraph.ActiveSkillExecutionSnapshot? execution))
+            {
+                state.SkillExecutions[playerId] = execution;
+            }
+        }
+    }
+
+    private void DetectContactsAndTriggerKnockback(uint frameIndex)
+    {
+        PhysicsWorldSnapshot physicsSnapshot = _physicsWorld.TakeSnapshot();
+        _currentContactPairs.Clear();
+        for (int i = 0; i < physicsSnapshot.Contacts.Count; i++)
+        {
+            PhysicsContactSnapshot contact = physicsSnapshot.Contacts[i];
+            if (contact.IsTouching)
+            {
+                _currentContactPairs.Add(new ContactPair(contact.BodyAId, contact.BodyBId));
+            }
+        }
+
+        _staleDashContactEpochs.Clear();
+        foreach (DashContactEpochKey key in _triggeredDashContactEpochs)
+        {
+            if (!_currentContactPairs.Contains(key.Pair))
+            {
+                _staleDashContactEpochs.Add(key);
+            }
+        }
+
+        for (int i = 0; i < _staleDashContactEpochs.Count; i++)
+        {
+            _triggeredDashContactEpochs.Remove(_staleDashContactEpochs[i]);
+        }
+
+        _staleDashContactEpochs.Clear();
+        for (int i = 0; i < physicsSnapshot.Contacts.Count; i++)
+        {
+            PhysicsContactSnapshot contact = physicsSnapshot.Contacts[i];
+            if (!contact.IsTouching ||
+                !_statesByPlayerId.TryGetValue(contact.BodyAId, out PlayerState? stateA) ||
+                !_statesByPlayerId.TryGetValue(contact.BodyBId, out PlayerState? stateB))
+            {
+                continue;
+            }
+
+            long dashEpochA = GetActiveDashEpoch(stateA);
+            long dashEpochB = GetActiveDashEpoch(stateB);
+            if (dashEpochA <= 0 && dashEpochB <= 0)
+            {
+                continue;
+            }
+
+            ContactPair pair = new ContactPair(contact.BodyAId, contact.BodyBId);
+            DashContactEpochKey keyA = new DashContactEpochKey(pair, stateA.PlayerId, dashEpochA);
+            DashContactEpochKey keyB = new DashContactEpochKey(pair, stateB.PlayerId, dashEpochB);
+            bool shouldTrigger =
+                (dashEpochA > 0 && !_triggeredDashContactEpochs.Contains(keyA)) ||
+                (dashEpochB > 0 && !_triggeredDashContactEpochs.Contains(keyB));
+            if (!shouldTrigger)
+            {
+                continue;
+            }
+
+            if (dashEpochA > 0)
+            {
+                _triggeredDashContactEpochs.Add(keyA);
+            }
+
+            if (dashEpochB > 0)
+            {
+                _triggeredDashContactEpochs.Add(keyB);
+            }
+
+            TriggerKnockback(stateA, stateB, dashEpochA > 0, dashEpochB > 0, frameIndex);
+            KnockbackTriggerCount++;
+        }
+    }
+
+    private static long GetActiveDashEpoch(PlayerState state)
+    {
+        return state.DashRuntimeBuffId > 0 &&
+               state.DashRemainingFrames > 0 &&
+               BuffSystem.HasBuff(state, DashTuning.DashBuffId)
+            ? state.DashRuntimeBuffId
+            : 0L;
+    }
+
+    private void TriggerKnockback(
+        PlayerState stateA,
+        PlayerState stateB,
+        bool stateADashing,
+        bool stateBDashing,
+        uint frameIndex)
+    {
+        Fixed64 deltaX = stateB.X - stateA.X;
+        Fixed64 deltaY = stateB.Y - stateA.Y;
+        SeparationNormalResolver.ResolveWithoutVelocity(
+            checked((int)stateA.PlayerId),
+            checked((int)stateB.PlayerId),
+            deltaX,
+            deltaY,
+            out Fixed64 normalX,
+            out Fixed64 normalY);
+
+        if (stateADashing && stateBDashing)
+        {
+            ApplyKnockback(stateA, stateB.PlayerId, -normalX, -normalY, frameIndex);
+            ApplyKnockback(stateB, stateA.PlayerId, normalX, normalY, frameIndex);
+            StopDashAndEnterRecover(stateA, frameIndex);
+            StopDashAndEnterRecover(stateB, frameIndex);
+            return;
+        }
+
+        if (stateADashing)
+        {
+            ApplyKnockback(stateB, stateA.PlayerId, normalX, normalY, frameIndex);
+            StopDashAndEnterRecover(stateA, frameIndex);
+            return;
+        }
+
+        ApplyKnockback(stateA, stateB.PlayerId, -normalX, -normalY, frameIndex);
+        StopDashAndEnterRecover(stateB, frameIndex);
+    }
+
+    private void ApplyKnockback(
+        PlayerState target,
+        long casterId,
+        Fixed64 directionX,
+        Fixed64 directionY,
+        uint frameIndex)
+    {
+        BuffSystem.AddBuff(
+            target,
+            new ApplyBuffCommand
+            {
+                CasterId = casterId,
+                TargetId = target.PlayerId,
+                BuffId = KnockbackTuning.KnockbackBuffId,
+                DurationFrames = KnockbackTuning.KnockbackFrames,
+                StackCount = 1,
+                FrameIndex = frameIndex,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable,
+                HasDisplacementVelocityOverride = true,
+                DisplacementVelocityX = directionX * KnockbackTuning.KnockbackSpeedFixed,
+                DisplacementVelocityY = directionY * KnockbackTuning.KnockbackSpeedFixed
+            },
+            _buffConfigProvider);
+    }
+
+    private void StopDashAndEnterRecover(PlayerState state, uint frameIndex)
+    {
+        BuffSystem.RemoveBuff(state, 0, DashTuning.DashBuffId);
+        _skillGraphRuntime.CancelExecution(state.PlayerId, DashTuning.DashSkillId);
+        BuffSystem.AddBuff(
+            state,
+            new ApplyBuffCommand
+            {
+                CasterId = state.PlayerId,
+                TargetId = state.PlayerId,
+                BuffId = DashTuning.RecoverBuffId,
+                DurationFrames = DashTuning.RecoverFrames,
+                StackCount = 1,
+                FrameIndex = frameIndex,
+                Flags = BuffFlags.Duration | BuffFlags.Dispellable
+            },
+            _buffConfigProvider);
     }
 
     private void ProcessBuffCommands(uint frameIndex)
@@ -576,6 +829,77 @@ public sealed class BattleLogic : IBuffCommandSink
     private static string FormatInput(Fixed64 dx, Fixed64 dy)
     {
         return $"({(float)dx:F3},{(float)dy:F3})";
+    }
+
+    private readonly struct ContactPair : IEquatable<ContactPair>
+    {
+        public ContactPair(int bodyAId, int bodyBId)
+        {
+            if (bodyAId <= bodyBId)
+            {
+                BodyAId = bodyAId;
+                BodyBId = bodyBId;
+            }
+            else
+            {
+                BodyAId = bodyBId;
+                BodyBId = bodyAId;
+            }
+        }
+
+        public int BodyAId { get; }
+        public int BodyBId { get; }
+
+        public bool Equals(ContactPair other)
+        {
+            return BodyAId == other.BodyAId && BodyBId == other.BodyBId;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is ContactPair other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return unchecked((BodyAId * 397) ^ BodyBId);
+        }
+    }
+
+    private readonly struct DashContactEpochKey : IEquatable<DashContactEpochKey>
+    {
+        public DashContactEpochKey(ContactPair pair, long dashPlayerId, long dashRuntimeBuffId)
+        {
+            Pair = pair;
+            DashPlayerId = dashPlayerId;
+            DashRuntimeBuffId = dashRuntimeBuffId;
+        }
+
+        public ContactPair Pair { get; }
+        public long DashPlayerId { get; }
+        public long DashRuntimeBuffId { get; }
+
+        public bool Equals(DashContactEpochKey other)
+        {
+            return Pair.Equals(other.Pair) &&
+                   DashPlayerId == other.DashPlayerId &&
+                   DashRuntimeBuffId == other.DashRuntimeBuffId;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is DashContactEpochKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = Pair.GetHashCode();
+                hash = (hash * 397) ^ DashPlayerId.GetHashCode();
+                return (hash * 397) ^ DashRuntimeBuffId.GetHashCode();
+            }
+        }
     }
 
     private readonly struct PendingInput

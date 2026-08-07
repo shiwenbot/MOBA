@@ -14,7 +14,7 @@ namespace GameLogic
     public static partial class BattlePredictionSelfTestSuite
     {
 
-        private const ulong FixedPhysicsExpectedHash = 0xD2120B5F0F5A5FE5UL;
+        private const ulong FixedPhysicsExpectedHash = 0x4DBF74147B723F41UL;
         private const ulong NetworkTestSeed = 0x534E455453494D34UL;
 
         private static readonly string[] AllCaseNames =
@@ -92,7 +92,41 @@ namespace GameLogic
             "target-lead-decrease-does-not-drop-actual-lead-immediately",
             "snapshot-target-lead-is-applied-after-downlink-gate",
             "authoritative-lead-switch-off-clears-stale-target",
-            "target-lead-formula-maps-rtt-to-frames"
+            "target-lead-formula-maps-rtt-to-frames",
+            // S8 Dash / stamina / displacement / knockback
+            "displacement-effect-applies-and-decays",
+            "displacement-cleared-on-buff-expiry",
+            "skillgraph-execution-replays-after-rollback",
+            "skillgraph-restore-resumes-correct-graph",
+            "dash-buff-latches-direction-at-start",
+            "dash-consumes-stamina-and-enters-recover",
+            "dash-blocked-during-recover",
+            "dash-blocked-while-dashing",
+            "dash-blocked-when-stamina-insufficient",
+            "dash-zero-input-uses-default-direction",
+            "dash-input-survives-replay",
+            "stamina-regen-counter-restores-on-rollback",
+            "dash-input-buffered-across-render-frames",
+            "dash-hold-does-not-autofire",
+            "knockback-triggers-only-on-new-contact",
+            "dash-starts-while-already-in-contact",
+            "dash-collision-knockbacks-passive-player",
+            "dual-dash-collision-knockbacks-both",
+            "non-dash-collision-no-knockback",
+            "knockback-decay-timeline-is-frame-exact",
+            "knockback-total-displacement-matches-series",
+            "separation-normal-resolver-agrees-across-callers",
+            "knockback-state-replays-without-new-mismatch",
+            "knockback-worst-case-deviation-under-smoothing-threshold",
+            "client-prediction-never-self-triggers-knockback",
+            "remote-body-blocks-self-movement",
+            "remote-body-not-displaced-by-occupancy",
+            "remote-body-mirror-survives-restore-self-only",
+            "remote-body-removed-with-buffer-entry",
+            "dash-displacement-state-proto-roundtrip",
+            "knockback-state-proto-roundtrip",
+            "numeric-stamina-base-proto-roundtrip",
+            "stamina-mismatch-triggers-rollback"
         };
 
         public static bool Run(out string failedCase)
@@ -189,6 +223,39 @@ namespace GameLogic
                     "snapshot-target-lead-is-applied-after-downlink-gate" => SnapshotTargetLeadIsAppliedAfterDownlinkGate(),
                     "authoritative-lead-switch-off-clears-stale-target" => AuthoritativeLeadSwitchOffClearsStaleTarget(),
                     "target-lead-formula-maps-rtt-to-frames" => TargetLeadFormulaMapsRttToFrames(),
+                    "displacement-effect-applies-and-decays" => DisplacementEffectAppliesAndDecays(),
+                    "displacement-cleared-on-buff-expiry" => DisplacementClearedOnBuffExpiry(),
+                    "skillgraph-execution-replays-after-rollback" => SkillGraphExecutionReplaysAfterRollback(),
+                    "skillgraph-restore-resumes-correct-graph" => SkillGraphRestoreResumesCorrectGraph(),
+                    "dash-buff-latches-direction-at-start" => DashBuffLatchesDirectionAtStart(),
+                    "dash-consumes-stamina-and-enters-recover" => DashConsumesStaminaAndEntersRecover(),
+                    "dash-blocked-during-recover" => DashBlockedDuringRecover(),
+                    "dash-blocked-while-dashing" => DashBlockedWhileDashing(),
+                    "dash-blocked-when-stamina-insufficient" => DashBlockedWhenStaminaInsufficient(),
+                    "dash-zero-input-uses-default-direction" => DashZeroInputUsesDefaultDirection(),
+                    "dash-input-survives-replay" => DashInputSurvivesReplay(),
+                    "stamina-regen-counter-restores-on-rollback" => StaminaRegenCounterRestoresOnRollback(),
+                    "dash-input-buffered-across-render-frames" => DashInputBufferedAcrossRenderFrames(),
+                    "dash-hold-does-not-autofire" => DashHoldDoesNotAutofire(),
+                    "knockback-triggers-only-on-new-contact" => KnockbackTriggersOnlyOnNewContact(),
+                    "dash-starts-while-already-in-contact" => DashStartsWhileAlreadyInContact(),
+                    "dash-collision-knockbacks-passive-player" => DashCollisionKnocksBackPassivePlayer(),
+                    "dual-dash-collision-knockbacks-both" => DualDashCollisionKnocksBackBoth(),
+                    "non-dash-collision-no-knockback" => NonDashCollisionNoKnockback(),
+                    "knockback-decay-timeline-is-frame-exact" => KnockbackDecayTimelineIsFrameExact(),
+                    "knockback-total-displacement-matches-series" => KnockbackTotalDisplacementMatchesSeries(),
+                    "separation-normal-resolver-agrees-across-callers" => SeparationNormalResolverAgreesAcrossCallers(),
+                    "knockback-state-replays-without-new-mismatch" => KnockbackStateReplaysWithoutNewMismatch(),
+                    "knockback-worst-case-deviation-under-smoothing-threshold" => KnockbackWorstCaseDeviationUnderSmoothingThreshold(),
+                    "client-prediction-never-self-triggers-knockback" => ClientPredictionNeverSelfTriggersKnockback(),
+                    "remote-body-blocks-self-movement" => RemoteBodyBlocksSelfMovement(),
+                    "remote-body-not-displaced-by-occupancy" => RemoteBodyNotDisplacedByOccupancy(),
+                    "remote-body-mirror-survives-restore-self-only" => RemoteBodyMirrorSurvivesRestoreSelfOnly(),
+                    "remote-body-removed-with-buffer-entry" => RemoteBodyRemovedWithBufferEntry(),
+                    "dash-displacement-state-proto-roundtrip" => DashDisplacementStateProtoRoundTrip(),
+                    "knockback-state-proto-roundtrip" => KnockbackStateProtoRoundTrip(),
+                    "numeric-stamina-base-proto-roundtrip" => NumericStaminaBaseProtoRoundTrip(),
+                    "stamina-mismatch-triggers-rollback" => StaminaMismatchTriggersRollback(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -514,7 +581,7 @@ namespace GameLogic
                 return false;
             }
 
-            PlayerAttributeSnapshot authoritativeAttributes = new PlayerAttributeSnapshot(80, 120, 35, 60, 22);
+            PlayerAttributeSnapshot authoritativeAttributes = new PlayerAttributeSnapshot(80, 120, 35, 60, 22, 90, 120);
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
                     11,
@@ -544,7 +611,7 @@ namespace GameLogic
             BattleSimulation simulation = CreateSimulation(worldState, out _, out _);
 
             simulation.SetJoined(1, 10, 0.0f, 0.0f);
-            PlayerAttributeSnapshot baseAttributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10);
+            PlayerAttributeSnapshot baseAttributes = new PlayerAttributeSnapshot(100, 100, 40, 100, 10, 100, 100);
             NumericModifierSnapshot numeric = new NumericModifierSnapshot(
                 baseAttributes,
                 new[]
@@ -560,7 +627,7 @@ namespace GameLogic
                             1,
                             0.0f,
                             0.0f,
-                            new PlayerAttributeSnapshot(100, 100, 40, 100, 15),
+                            new PlayerAttributeSnapshot(100, 100, 40, 100, 15, 100, 100),
                             new[]
                             {
                                 new BuffState(1, 5001, 7, 1, 1, 3, 11, BuffFlags.Duration)
@@ -1476,7 +1543,9 @@ namespace GameLogic
                 frame1Attributes.MaxHealth,
                 frame1Attributes.Mana,
                 frame1Attributes.MaxMana,
-                frame1Attributes.Attack);
+                frame1Attributes.Attack,
+                frame1Attributes.Stamina,
+                frame1Attributes.MaxStamina);
 
             gate.Configure(CreateNetworkConfig(downlinkLossPercent: 100));
             clock.SetFrame(2u);
@@ -1505,7 +1574,9 @@ namespace GameLogic
                 frame3Attributes.MaxHealth,
                 frame3Attributes.Mana,
                 frame3Attributes.MaxMana,
-                frame3Attributes.Attack);
+                frame3Attributes.Attack,
+                frame3Attributes.Stamina,
+                frame3Attributes.MaxStamina);
             BattleWorldSnapshot convertedFrame3 = ReplacePlayerAttributes(snapshots[3u], 1, clientBaseline);
             gate.EnqueueConvertedSnapshot(clock.NowMs, convertedFrame3, value => rebuiltFrame3 = value);
             gate.PumpDownlink(clock.NowMs);
@@ -1537,9 +1608,9 @@ namespace GameLogic
         private static bool AttributeDeltaRecoversAfterPeriodicFull()
         {
             const long playerId = 1L;
-            PlayerAttributeSnapshot frame1Attributes = new PlayerAttributeSnapshot(100, 100, 80, 100, 10);
-            PlayerAttributeSnapshot frame2Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 10);
-            PlayerAttributeSnapshot frame3Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 17);
+            PlayerAttributeSnapshot frame1Attributes = new PlayerAttributeSnapshot(100, 100, 80, 100, 10, 100, 100);
+            PlayerAttributeSnapshot frame2Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 10, 100, 100);
+            PlayerAttributeSnapshot frame3Attributes = new PlayerAttributeSnapshot(55, 100, 80, 100, 17, 100, 100);
 
             AttributeMergeResult initial = BattleSnapshotProtocolMapper.MergeAttributes(
                 1u,
@@ -1595,7 +1666,7 @@ namespace GameLogic
                     $"attribute recovery full sync failed frame={recoveryFrame} localBase={recovered.FrameIndex}");
             }
 
-            PlayerAttributeSnapshot frameAfterRecovery = new PlayerAttributeSnapshot(50, 100, 80, 100, 17);
+            PlayerAttributeSnapshot frameAfterRecovery = new PlayerAttributeSnapshot(50, 100, 80, 100, 17, 100, 100);
             AttributeMergeResult postRecoveryDelta = BattleSnapshotProtocolMapper.MergeAttributes(
                 recoveryFrame + 1u,
                 CreateAttributePacket(
@@ -1725,7 +1796,7 @@ namespace GameLogic
 
         private static bool AttributeNoChangePacketDoesNotDiverge()
         {
-            PlayerAttributeSnapshot baseline = new PlayerAttributeSnapshot(90, 100, 70, 100, 12);
+            PlayerAttributeSnapshot baseline = new PlayerAttributeSnapshot(90, 100, 70, 100, 12, 100, 100);
             Fantasy.PlayerSnapshot noChangePacket = CreateAttributePacket(
                 11u,
                 1L,
@@ -1882,7 +1953,7 @@ namespace GameLogic
                     1000L + i,
                     Fixed64.FromRaw(rawX),
                     Fixed64.FromRaw(rawY),
-                    new PlayerAttributeSnapshot(77, 120, 33, 90, 19));
+                    new PlayerAttributeSnapshot(77, 120, 33, 90, 19, 100, 100));
                 PhysicsBodySnapshot body = new PhysicsBodySnapshot(
                     checked((int)player.PlayerId),
                     player.X,
@@ -2320,19 +2391,13 @@ namespace GameLogic
             }
 
             int activeBefore = simulation.ActiveSkillExecutionCount;
+            PlayerStateSnapshot authoritativeSelf = worldState.TakeSnapshot().Players[0];
             simulation.EnqueueServerSnapshot(
                 new BattleWorldSnapshot(
                     11,
                     new[]
                     {
-                        new PlayerStateSnapshot(
-                            1,
-                            selfPlayer.X,
-                            selfPlayer.Y,
-                            selfPlayer.CaptureAttributeSnapshot(),
-                            selfPlayer.ActiveBuffs,
-                            selfPlayer.NextRuntimeBuffId,
-                            selfPlayer.Numeric.CaptureSnapshot())
+                        authoritativeSelf
                     }),
                 11);
 

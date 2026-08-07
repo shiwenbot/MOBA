@@ -12,7 +12,9 @@ namespace GameShared.FrameSync.Battle
         MaxHealth = 2,
         Mana = 3,
         MaxMana = 4,
-        Attack = 5
+        Attack = 5,
+        Stamina = 6,
+        MaxStamina = 7
     }
 
     public readonly struct NumericModifier

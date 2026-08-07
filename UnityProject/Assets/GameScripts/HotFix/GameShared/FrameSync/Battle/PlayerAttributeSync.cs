@@ -38,6 +38,16 @@ namespace GameShared.FrameSync.Battle
                 dirtyMask |= PlayerAttributeDirtyFlags.Attack;
             }
 
+            if (previous.Stamina != current.Stamina)
+            {
+                dirtyMask |= PlayerAttributeDirtyFlags.Stamina;
+            }
+
+            if (previous.MaxStamina != current.MaxStamina)
+            {
+                dirtyMask |= PlayerAttributeDirtyFlags.MaxStamina;
+            }
+
             return dirtyMask;
         }
 
@@ -48,14 +58,18 @@ namespace GameShared.FrameSync.Battle
             int maxHealth,
             int mana,
             int maxMana,
-            int attack)
+            int attack,
+            int stamina,
+            int maxStamina)
         {
             return new PlayerAttributeSnapshot(
                 HasFlag(dirtyMask, PlayerAttributeDirtyFlags.Health) ? health : baseline.Health,
                 HasFlag(dirtyMask, PlayerAttributeDirtyFlags.MaxHealth) ? maxHealth : baseline.MaxHealth,
                 HasFlag(dirtyMask, PlayerAttributeDirtyFlags.Mana) ? mana : baseline.Mana,
                 HasFlag(dirtyMask, PlayerAttributeDirtyFlags.MaxMana) ? maxMana : baseline.MaxMana,
-                HasFlag(dirtyMask, PlayerAttributeDirtyFlags.Attack) ? attack : baseline.Attack);
+                HasFlag(dirtyMask, PlayerAttributeDirtyFlags.Attack) ? attack : baseline.Attack,
+                HasFlag(dirtyMask, PlayerAttributeDirtyFlags.Stamina) ? stamina : baseline.Stamina,
+                HasFlag(dirtyMask, PlayerAttributeDirtyFlags.MaxStamina) ? maxStamina : baseline.MaxStamina);
         }
 
         public static int SelectSerializedValue(

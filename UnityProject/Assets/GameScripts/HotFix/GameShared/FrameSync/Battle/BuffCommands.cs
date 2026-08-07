@@ -1,4 +1,5 @@
 using GameShared.FrameSync.Command;
+using FixedMathSharp;
 
 namespace GameShared.FrameSync.Battle
 {
@@ -19,6 +20,9 @@ namespace GameShared.FrameSync.Battle
         public int StackCount { get; set; }
         public uint FrameIndex { get; set; }
         public BuffFlags Flags { get; set; }
+        public bool HasDisplacementVelocityOverride { get; set; }
+        public Fixed64 DisplacementVelocityX { get; set; }
+        public Fixed64 DisplacementVelocityY { get; set; }
 
         public void Reset()
         {
@@ -29,6 +33,9 @@ namespace GameShared.FrameSync.Battle
             StackCount = default;
             FrameIndex = default;
             Flags = BuffFlags.None;
+            HasDisplacementVelocityOverride = false;
+            DisplacementVelocityX = Fixed64.Zero;
+            DisplacementVelocityY = Fixed64.Zero;
         }
     }
 
