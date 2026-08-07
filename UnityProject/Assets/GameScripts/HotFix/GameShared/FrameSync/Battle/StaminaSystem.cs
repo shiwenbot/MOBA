@@ -11,7 +11,12 @@ namespace GameShared.FrameSync.Battle
                 throw new ArgumentNullException(nameof(state));
             }
 
-            if (amount <= 0)
+            if (amount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(amount));
+            }
+
+            if (amount == 0)
             {
                 return true;
             }

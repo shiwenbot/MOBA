@@ -1,4 +1,5 @@
 using System;
+using GameShared.FrameSync.Battle;
 
 namespace GameLogic
 {
@@ -9,8 +10,8 @@ namespace GameLogic
     {
         public const float SmoothingDurationSeconds = 0.12f;
 
-        // Revisit after S6 knockback distance is finalized. This must exceed a single knockback distance.
-        public const float MaxSmoothingDistance = 6.0f;
+        // KnockbackTuning owns this cross-layer bound so its fail-fast check and rendering use one value.
+        public const float MaxSmoothingDistance = KnockbackTuning.MaxSmoothingDistance;
 
         private float _offsetX;
         private float _offsetY;

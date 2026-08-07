@@ -14,6 +14,30 @@ namespace GameLogic
         private static bool DisplacementEffectAppliesAndDecays()
         {
             PlayerState state = new PlayerState(1, Fixed64.Zero, Fixed64.Zero);
+            try
+            {
+                BuffSystem.AddBuff(
+                    state,
+                    new ApplyBuffCommand
+                    {
+                        CasterId = 1,
+                        TargetId = 1,
+                        BuffId = DashTuning.DashBuffId,
+                        DurationFrames = DashTuning.DashFrames,
+                        StackCount = 1,
+                        Flags = BuffFlags.Duration | BuffFlags.Dispellable
+                    },
+                    new DefaultBuffConfigProvider());
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                if (state.ActiveBuffs.Count != 0 || !S8DashDisplacementIsClear(state))
+                {
+                    return false;
+                }
+            }
+
             FrameSyncPhysicsWorld physicsWorld = new FrameSyncPhysicsWorld();
             physicsWorld.EnsureBody(1, Fixed64.Zero, Fixed64.Zero);
             long runtimeBuffId = S8AddDisplacementBuff(
@@ -217,19 +241,37 @@ namespace GameLogic
             }
 
             bool enteredRecover = false;
+            uint recoverStartFrame = 0u;
             for (uint frame = 12u; frame < 12u + DashTuning.DashFrames + 3u; frame++)
             {
                 simulation.Tick(frame, DeterminismRules.FixedDeltaTimeFixed64, Fixed64.Zero, Fixed64.Zero);
                 if (BuffSystem.HasBuff(state, DashTuning.RecoverBuffId))
                 {
                     enteredRecover = true;
+                    recoverStartFrame = frame;
                     break;
                 }
             }
 
-            return enteredRecover &&
-                   !BuffSystem.HasBuff(state, DashTuning.DashBuffId) &&
-                   S8DashDisplacementIsClear(state);
+            if (!enteredRecover ||
+                BuffSystem.HasBuff(state, DashTuning.DashBuffId) ||
+                !S8DashDisplacementIsClear(state))
+            {
+                return false;
+            }
+
+            int staminaAtRecoverStart = state.Stamina;
+            for (uint offset = 1u; offset <= DashTuning.StaminaRegenIntervalFrames; offset++)
+            {
+                simulation.Tick(
+                    recoverStartFrame + offset,
+                    DeterminismRules.FixedDeltaTimeFixed64,
+                    Fixed64.Zero,
+                    Fixed64.Zero);
+            }
+
+            return BuffSystem.HasBuff(state, DashTuning.RecoverBuffId) &&
+                   state.Stamina == staminaAtRecoverStart + DashTuning.StaminaRegenAmount;
         }
 
         private static bool DashBlockedDuringRecover()
@@ -294,6 +336,15 @@ namespace GameLogic
             if (!worldState.TryGetPlayer(1, out PlayerState state))
             {
                 return false;
+            }
+
+            try
+            {
+                StaminaSystem.TryConsume(state, -1);
+                return false;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
             }
 
             state.Stamina = DashTuning.DashStaminaCost - 1;
@@ -715,7 +766,8 @@ namespace GameLogic
         private static bool KnockbackWorstCaseDeviationUnderSmoothingThreshold()
         {
             KnockbackTuning.Validate();
-            return KnockbackTuning.EstimatedWorstCaseDeviation < (Fixed64)KnockbackTuning.MaxSmoothingDistance &&
+            return PredictionErrorSmoother.MaxSmoothingDistance == KnockbackTuning.MaxSmoothingDistance &&
+                   KnockbackTuning.EstimatedWorstCaseDeviation < (Fixed64)PredictionErrorSmoother.MaxSmoothingDistance &&
                    KnockbackTuning.EstimatedTotalDisplacement > Fixed64.Zero;
         }
 

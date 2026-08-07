@@ -29,6 +29,7 @@ namespace GameShared.FrameSync.Battle
             }
 
             ResolvedBuffRule rule = ResolveRule(command.BuffId, command.DurationFrames, command.Flags, configProvider);
+            ValidateDisplacementCommand(command, rule);
             if (!TryRemoveMutexConflicts(target, command.BuffId, rule, configProvider))
             {
                 return 0;
@@ -332,6 +333,22 @@ namespace GameShared.FrameSync.Battle
             target.SetDisplacement(effect, runtimeBuffId, velocityX, velocityY);
         }
 
+        private static void ValidateDisplacementCommand(ApplyBuffCommand command, ResolvedBuffRule rule)
+        {
+            if (!rule.DisplacementEffect.HasValue)
+            {
+                return;
+            }
+
+            DisplacementKind kind = rule.DisplacementEffect.Value.Kind;
+            if ((kind == DisplacementKind.Dash || kind == DisplacementKind.Knockback) &&
+                !command.HasDisplacementVelocityOverride)
+            {
+                throw new InvalidOperationException(
+                    $"{kind} buff {command.BuffId} requires an explicit displacement velocity override.");
+            }
+        }
+
         private static void InsertSorted(List<BuffState> activeBuffs, BuffState buffState)
         {
             int insertIndex = activeBuffs.Count;
@@ -522,8 +539,8 @@ namespace GameShared.FrameSync.Battle
                 Priority = priority;
                 DurationFrames = durationFrames;
                 Flags = flags;
-            Effects = effects;
-            DisplacementEffect = displacementEffect;
+                Effects = effects;
+                DisplacementEffect = displacementEffect;
             }
 
             public BuffOverlayType OverlayType { get; }
