@@ -129,6 +129,10 @@ namespace GameLogic
             string inputScriptPath,
             string controllerScriptPath,
             BattleAutomationBridgeMode bridgeMode,
+            string authServerAddress,
+            int authServerPort,
+            string authUserName,
+            string authPassword,
             string battleServerAddress,
             int battleServerPort,
             int timeoutSeconds,
@@ -153,6 +157,10 @@ namespace GameLogic
             InputScriptPath = inputScriptPath;
             ControllerScriptPath = controllerScriptPath;
             BridgeMode = bridgeMode;
+            AuthServerAddress = authServerAddress;
+            AuthServerPort = authServerPort;
+            AuthUserName = authUserName;
+            AuthPassword = authPassword;
             BattleServerAddress = battleServerAddress;
             BattleServerPort = battleServerPort;
             TimeoutSeconds = timeoutSeconds;
@@ -178,6 +186,10 @@ namespace GameLogic
         public string InputScriptPath { get; }
         public string ControllerScriptPath { get; }
         public BattleAutomationBridgeMode BridgeMode { get; }
+        public string AuthServerAddress { get; }
+        public int AuthServerPort { get; }
+        public string AuthUserName { get; }
+        public string AuthPassword { get; }
         public string BattleServerAddress { get; }
         public int BattleServerPort { get; }
         public int TimeoutSeconds { get; }
@@ -227,6 +239,10 @@ namespace GameLogic
                 NormalizeAbsolutePath(inputScriptPath),
                 NormalizeAbsolutePath(controllerScriptPath),
                 bridgeMode,
+                GetString(args, "authServerAddress", "127.0.0.1"),
+                GetInt(args, "authServerPort", 20001),
+                GetString(args, "authUserName", $"battle-auto-{clientId}"),
+                GetString(args, "authPassword", "BattleAutomation-20260809!"),
                 GetString(args, "battleServerAddress", "127.0.0.1"),
                 GetInt(args, "battleServerPort", 20101),
                 GetInt(args, "timeoutSeconds", 120),
@@ -420,7 +436,12 @@ namespace GameLogic
             }
 
             BattleAutomationClientSnapshot snapshot = _controller.CaptureAutomationSnapshot(_config.ClientId);
-            if (!snapshot.joined && !string.IsNullOrWhiteSpace(snapshot.joinFailureReason))
+            if (!snapshot.joined &&
+                !string.IsNullOrWhiteSpace(snapshot.joinFailureReason) &&
+                string.Equals(
+                    snapshot.reconnectPhase,
+                    BattleClientController.ReconnectPhase.Failed.ToString(),
+                    StringComparison.Ordinal))
             {
                 Finish(false, $"join-failed:{snapshot.joinFailureReason}", snapshot);
                 return;
@@ -557,6 +578,11 @@ namespace GameLogic
 
     internal sealed class BuiltinBattleAutomationBridge : IBattleAutomationBridge
     {
+        private const int MaxReconnectConvergenceFrames = 30;
+        private const int MaxReconnectMismatchGrowth = 3;
+        private const int MaxReconnectRollbackGrowth = 3;
+
+        private BattleClientController _controller;
         private BattleAutomationScenarioPlan _plan;
         private Action<string> _eventSink;
         private uint _joinedFrame;
@@ -574,11 +600,14 @@ namespace GameLogic
         private readonly HashSet<int> _emittedGlobalSkillOffsets = new HashSet<int>();
         private uint _scenarioStartFrame;
         private bool _hasScenarioStartFrame;
+        private bool _controlledDisconnectRequested;
+        private long _initialSelfPlayerId;
 
         public string BridgeName => "builtin";
 
         public void Initialize(BattleClientController controller, BattleAutomationConfig config, Action<string> eventSink)
         {
+            _controller = controller;
             _eventSink = eventSink;
             _plan = BattleAutomationScenarioPlan.Create(config);
             _eventSink?.Invoke(
@@ -656,6 +685,7 @@ namespace GameLogic
             {
                 _joinedFrame = (uint)Math.Max(snapshot.localFrame, 0);
                 _hasJoinedFrame = true;
+                _initialSelfPlayerId = snapshot.selfPlayerId;
                 _eventSink?.Invoke($"[Automation] Joined at localFrame={snapshot.localFrame} selfPlayer={snapshot.selfPlayerId}");
             }
 
@@ -762,6 +792,12 @@ namespace GameLogic
 
                     break;
 
+                case BattleAutomationScenarioKind.ReconnectActor:
+                    return EvaluateReconnectActor(snapshot, elapsedFrames);
+
+                case BattleAutomationScenarioKind.ReconnectObserver:
+                    return EvaluateReconnectObserver(snapshot, elapsedFrames);
+
                 case BattleAutomationScenarioKind.Scripted:
                     if (_observedTargetPlayerCount && elapsedFrames >= _plan.completionFrame)
                     {
@@ -820,6 +856,129 @@ namespace GameLogic
 
         public void Dispose()
         {
+            _controller = null;
+        }
+
+        private BattleAutomationEvaluation EvaluateReconnectActor(
+            BattleAutomationClientSnapshot snapshot,
+            int elapsedFrames)
+        {
+            if (!_controlledDisconnectRequested &&
+                _observedTargetPlayerCount &&
+                elapsedFrames >= _plan.disconnectFrame)
+            {
+                if (_controller?.RequestAutomationDisconnect() == true)
+                {
+                    _controlledDisconnectRequested = true;
+                    _eventSink?.Invoke(
+                        $"[Automation] Controlled disconnect requested at frame={snapshot.localFrame} " +
+                        $"player={_initialSelfPlayerId}");
+                }
+            }
+
+            if (!_controlledDisconnectRequested)
+            {
+                if (elapsedFrames >= _plan.disconnectFrame + 60)
+                {
+                    return new BattleAutomationEvaluation(
+                        true,
+                        false,
+                        "reconnect-controlled-disconnect-not-accepted");
+                }
+
+                return default;
+            }
+
+            if (snapshot.automationControlledDisconnectCount != 1)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"reconnect-disconnect-count={snapshot.automationControlledDisconnectCount}");
+            }
+
+            if (snapshot.selfPlayerId > 0L && snapshot.selfPlayerId != _initialSelfPlayerId)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"reconnect-player-id-changed before={_initialSelfPlayerId} after={snapshot.selfPlayerId}");
+            }
+
+            if (snapshot.reconnectCount > 1)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"reconnect-count-exceeded actual={snapshot.reconnectCount}");
+            }
+
+            bool recoveryCompleted = snapshot.joined &&
+                                     snapshot.reconnectCount == 1 &&
+                                     !snapshot.awaitingFullSnapshot &&
+                                     string.Equals(
+                                         snapshot.reconnectPhase,
+                                         BattleClientController.ReconnectPhase.Reconnected.ToString(),
+                                         StringComparison.Ordinal);
+            if (recoveryCompleted)
+            {
+                int mismatchGrowth = Math.Max(
+                    0,
+                    snapshot.stateMismatchCount - snapshot.stateMismatchCountAtReconnect);
+                int rollbackGrowth = Math.Max(
+                    0,
+                    snapshot.rollbackCount - snapshot.rollbackCountAtReconnect);
+                bool passed = snapshot.playerIdBeforeAutomationDisconnect == _initialSelfPlayerId &&
+                              snapshot.framesToConvergeAfterReconnect >= 0 &&
+                              snapshot.framesToConvergeAfterReconnect <= MaxReconnectConvergenceFrames &&
+                              mismatchGrowth <= MaxReconnectMismatchGrowth &&
+                              rollbackGrowth <= MaxReconnectRollbackGrowth &&
+                              snapshot.gameplayInputMessagesSentWhileAwaitingFullSnapshot == 0;
+                string reason =
+                    $"reconnect-actor player={snapshot.selfPlayerId}/{_initialSelfPlayerId} " +
+                    $"count={snapshot.reconnectCount} converge={snapshot.framesToConvergeAfterReconnect}/" +
+                    $"{MaxReconnectConvergenceFrames} mismatchGrowth={mismatchGrowth}/" +
+                    $"{MaxReconnectMismatchGrowth} rollbackGrowth={rollbackGrowth}/" +
+                    $"{MaxReconnectRollbackGrowth} recoveryInputs=" +
+                    $"{snapshot.gameplayInputMessagesSentWhileAwaitingFullSnapshot}";
+                return new BattleAutomationEvaluation(true, passed, reason);
+            }
+
+            if (elapsedFrames >= _plan.completionFrame + 120)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    $"reconnect-actor-timeout phase={snapshot.reconnectPhase} " +
+                    $"count={snapshot.reconnectCount} awaiting={snapshot.awaitingFullSnapshot}");
+            }
+
+            return default;
+        }
+
+        private BattleAutomationEvaluation EvaluateReconnectObserver(
+            BattleAutomationClientSnapshot snapshot,
+            int elapsedFrames)
+        {
+            if (_observedPlayerDrop)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    false,
+                    "reconnect-observer-saw-player-drop-during-grace");
+            }
+
+            if (_observedTargetPlayerCount &&
+                snapshot.snapshotMessageCount > 0 &&
+                elapsedFrames >= _plan.completionFrame)
+            {
+                return new BattleAutomationEvaluation(
+                    true,
+                    true,
+                    $"reconnect-observer-continuity players={snapshot.activePlayerCount}");
+            }
+
+            return default;
         }
 
         private BattleAutomationEvaluation EvaluateWeakNetwork(
@@ -1141,6 +1300,8 @@ namespace GameLogic
     internal sealed class PuertsBattleAutomationBridge : IBattleAutomationBridge
     {
         private readonly BuiltinBattleAutomationBridge _fallback = new BuiltinBattleAutomationBridge();
+        private BattleClientController _controller;
+        private bool _controlledDisconnectRequested;
         private object _jsEnv;
         private object _controllerObject;
         private Type _scriptObjectType;
@@ -1155,6 +1316,7 @@ namespace GameLogic
 
         public void Initialize(BattleClientController controller, BattleAutomationConfig config, Action<string> eventSink)
         {
+            _controller = controller;
             _eventSink = eventSink;
             if (TryInitializeRuntime(config))
             {
@@ -1243,6 +1405,16 @@ namespace GameLogic
                         BattleAutomationEvaluationPayload parsed = JsonUtility.FromJson<BattleAutomationEvaluationPayload>(result);
                         if (parsed != null)
                         {
+                            if (parsed.requestDisconnect && !_controlledDisconnectRequested)
+                            {
+                                _controlledDisconnectRequested =
+                                    _controller?.RequestAutomationDisconnect() == true;
+                                _eventSink?.Invoke(
+                                    _controlledDisconnectRequested
+                                        ? "[Automation] Puerts requested a controlled disconnect."
+                                        : "[Automation] Puerts controlled disconnect request was not accepted.");
+                            }
+
                             return new BattleAutomationEvaluation(parsed.completed, parsed.passed, parsed.reason);
                         }
                     }
@@ -1271,6 +1443,7 @@ namespace GameLogic
             }
 
             _fallback.Dispose();
+            _controller = null;
         }
 
         private bool TryInitializeRuntime(BattleAutomationConfig config)
@@ -1461,6 +1634,8 @@ namespace GameLogic
         Movement,
         DisconnectActor,
         DisconnectObserver,
+        ReconnectActor,
+        ReconnectObserver,
         Scripted,
         BuffLifecycle,
         SkillBuffLifecycle,
@@ -1602,6 +1777,29 @@ namespace GameLogic
                             {
                                 new BattleAutomationInputSegment(0, (uint)Math.Min(30, Math.Max(0, config.DisconnectFrame - 1)), 1.0f, 0.0f)
                             }
+                    };
+
+                case "two-client-reconnect":
+                    return new BattleAutomationScenarioPlan
+                    {
+                        name = "two-client-reconnect",
+                        kind = isClientB
+                            ? BattleAutomationScenarioKind.ReconnectActor
+                            : BattleAutomationScenarioKind.ReconnectObserver,
+                        minimumPlayerCount = config.MinimumPlayerCount,
+                        completionFrame = config.DisconnectFrame + config.SettleFrames + 60,
+                        disconnectFrame = config.DisconnectFrame,
+                        movementDistanceThreshold = config.MovementDistanceThreshold,
+                        inputSegments = isClientB
+                            ? new[]
+                            {
+                                new BattleAutomationInputSegment(
+                                    0,
+                                    (uint)Math.Max(0, config.DisconnectFrame - 1),
+                                    -1.0f,
+                                    0.0f)
+                            }
+                            : Array.Empty<BattleAutomationInputSegment>()
                     };
 
                 case "two-client-buff-lifecycle":
@@ -1889,6 +2087,13 @@ namespace GameLogic
         public int rollbackCount;
         public int lastRollbackReplayFrames;
         public float lastRollbackElapsedMs;
+        public int reconnectCount;
+        public int lastReconnectFrame;
+        public int rollbackCountAtReconnect;
+        public int stateMismatchCountAtReconnect;
+        public int framesToConvergeAfterReconnect;
+        public bool awaitingFullSnapshot;
+        public string reconnectPhase;
         public bool networkSimulationEnabled;
         public int networkUplinkDelayMs;
         public int networkDownlinkDelayMs;
@@ -1906,6 +2111,10 @@ namespace GameLogic
         public int rttProbeAcksSent;
         public float serverControlRttMs;
         public int appliedTargetLeadFrames;
+        public int gameplayInputMessagesSent;
+        public int gameplayInputMessagesSentWhileAwaitingFullSnapshot;
+        public int automationControlledDisconnectCount;
+        public long playerIdBeforeAutomationDisconnect;
 
         public int dashCount;
         public int staminaAtEnd;
@@ -2031,6 +2240,7 @@ namespace GameLogic
         public bool completed;
         public bool passed;
         public string reason;
+        public bool requestDisconnect;
     }
 
     [Serializable]

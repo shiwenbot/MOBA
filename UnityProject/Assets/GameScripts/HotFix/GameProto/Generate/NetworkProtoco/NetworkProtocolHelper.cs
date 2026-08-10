@@ -53,9 +53,10 @@ namespace Fantasy
 			return (C2B_JoinBattleResponse)await session.Call(C2B_JoinBattle_request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static async FTask<C2B_JoinBattleResponse> C2B_JoinBattle(this Session session)
+		public static async FTask<C2B_JoinBattleResponse> C2B_JoinBattle(this Session session, string token)
 		{
 			using var C2B_JoinBattle_request = Fantasy.C2B_JoinBattle.Create();
+			C2B_JoinBattle_request.Token = token;
 			return (C2B_JoinBattleResponse)await session.Call(C2B_JoinBattle_request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]

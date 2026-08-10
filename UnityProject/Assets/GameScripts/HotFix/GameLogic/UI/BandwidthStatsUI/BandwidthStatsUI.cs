@@ -25,10 +25,10 @@ namespace GameLogic
             m_btnClose = FindChildComponent<Button>("m_btn_Close");
             m_btnClose.onClick.AddListener(OnClickCloseBtn);
 
-            rectTransform.sizeDelta = new Vector2(rectTransform.sizeDelta.x, 235.0f);
-            m_textMeta.rectTransform.sizeDelta = new Vector2(-60.0f, 58.0f);
-            m_textResult.rectTransform.anchoredPosition = new Vector2(15.0f, -73.0f);
-            m_textResult.rectTransform.sizeDelta = new Vector2(-30.0f, 152.0f);
+            rectTransform.sizeDelta = new Vector2(rectTransform.sizeDelta.x, 275.0f);
+            m_textMeta.rectTransform.sizeDelta = new Vector2(-60.0f, 82.0f);
+            m_textResult.rectTransform.anchoredPosition = new Vector2(15.0f, -97.0f);
+            m_textResult.rectTransform.sizeDelta = new Vector2(-30.0f, 164.0f);
         }
 
         #endregion
@@ -42,6 +42,7 @@ namespace GameLogic
             AddUIEvent(IBattleUI_Event.OnBandwidthStatsUpdated, Refresh);
             AddUIEvent(IBattleUI_Event.OnPredictionErrorUpdated, Refresh);
             AddUIEvent(IBattleUI_Event.OnRttStatsUpdated, Refresh);
+            AddUIEvent(IBattleUI_Event.OnReconnectStatusUpdated, Refresh);
         }
 
         protected override void OnRefresh()
@@ -101,7 +102,8 @@ namespace GameLogic
                     $"击退 {gameplay.KnockbackRemainingFrames}f";
             }
 
-            string metaSummary = gameplaySummary + "\n" + predictionSummary + "\n" + rttSummary;
+            string reconnectSummary = BuildReconnectSummary();
+            string metaSummary = reconnectSummary + "\n" + gameplaySummary + "\n" + predictionSummary + "\n" + rttSummary;
 
             if (!_controller.HasBandwidthStats)
             {
@@ -140,6 +142,35 @@ namespace GameLogic
         private void OnClickCloseBtn()
         {
             Close();
+        }
+
+        private string BuildReconnectSummary()
+        {
+            if (!_controller.HasReconnectStatus)
+            {
+                return "连接状态等待中";
+            }
+
+            BattleClientController.ReconnectStatusSnapshot status = _controller.LatestReconnectStatus;
+            switch (status.Phase)
+            {
+                case BattleClientController.ReconnectPhase.Connecting:
+                    return $"正在连接 {status.Attempt}/{status.MaxAttempts}";
+                case BattleClientController.ReconnectPhase.Connected:
+                    return "连接正常";
+                case BattleClientController.ReconnectPhase.Reconnecting:
+                    return $"断线重连 {status.Attempt}/{status.MaxAttempts} | 宽限约 {status.EstimatedGraceFramesRemaining / 30.0f:F1}s";
+                case BattleClientController.ReconnectPhase.AwaitingFullSnapshot:
+                    return $"已认领，等待全量状态 | 宽限约 {status.EstimatedGraceFramesRemaining / 30.0f:F1}s";
+                case BattleClientController.ReconnectPhase.Reconnected:
+                    return $"重连完成 x{status.ReconnectCount} | 收敛 {status.FramesToConverge}f";
+                case BattleClientController.ReconnectPhase.AuthenticationRequired:
+                    return "登录凭据已失效";
+                case BattleClientController.ReconnectPhase.Failed:
+                    return $"重连失败 | {status.Reason}";
+                default:
+                    return "连接状态未知";
+            }
         }
 
         #endregion

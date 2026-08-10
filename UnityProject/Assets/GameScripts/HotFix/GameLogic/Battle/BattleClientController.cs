@@ -23,6 +23,11 @@ namespace GameLogic
         private const string BattleServerAddress = "127.0.0.1";
         private const int BattleServerPort = 20101;
         private const int SkillInputBufferFrames = 2;
+        private const int MaxJoinAttempts = 5;
+        private const int MaxFullSnapshotRetries = 2;
+        private const int ReconnectRetryBaseDelayMs = 250;
+        private const int ReconnectRetryMaxDelayMs = 2000;
+        private const int EstimatedGraceFrames = 150;
         private const float StaminaBarWidth = 1.5f;
         private const float StaminaBarHeight = 0.12f;
         private static readonly Color SelfColor = new Color(0.18f, 0.92f, 0.34f);
@@ -65,10 +70,20 @@ namespace GameLogic
 
         private bool _isInitialized;
         private bool _joinSucceeded;
+        private bool _joinOperationRunning;
+        private bool _reconnectInProgress;
+        private bool _awaitingAuthentication;
+        private bool _reconnectRetryExhausted;
+        private int _fullSnapshotRetryCount;
+        private uint _disconnectObservedFrame;
         private string _joinFailureReason = string.Empty;
         private int _snapshotMessageCount;
         private int _pongMessageCount;
         private int _rttProbeAcksSent;
+        private int _gameplayInputMessagesSent;
+        private int _gameplayInputMessagesSentWhileAwaitingFullSnapshot;
+        private int _automationControlledDisconnectCount;
+        private long _playerIdBeforeAutomationDisconnect;
 
         private float _cachedDx;
         private float _cachedDy;
@@ -105,6 +120,9 @@ namespace GameLogic
         public GameplayStatusSnapshot LatestGameplayStatus { get; private set; }
         public bool HasGameplayStatus { get; private set; }
         public int RttProbeAcksSent => _rttProbeAcksSent;
+        public ReconnectStatusSnapshot LatestReconnectStatus { get; private set; }
+        public bool HasReconnectStatus { get; private set; }
+        public bool IsReconnecting => _reconnectInProgress;
 
 
         private enum BufferedInputKind
@@ -123,7 +141,8 @@ namespace GameLogic
             EnsureTickDriver();
             EnsureSimulation();
             RegisterSnapshotHandler();
-            JoinBattleAsync().Coroutine();
+            SetReconnectStatus(ReconnectPhase.Connecting, "initial-join", 0);
+            JoinBattleAsync(false).Coroutine();
         }
 
         public void DisposeController()
@@ -176,10 +195,20 @@ namespace GameLogic
             _simulation = null;
             _isInitialized = false;
             _joinSucceeded = false;
+            _joinOperationRunning = false;
+            _reconnectInProgress = false;
+            _awaitingAuthentication = false;
+            _reconnectRetryExhausted = false;
+            _fullSnapshotRetryCount = 0;
+            _disconnectObservedFrame = 0u;
             _joinFailureReason = string.Empty;
             _snapshotMessageCount = 0;
             _pongMessageCount = 0;
             _rttProbeAcksSent = 0;
+            _gameplayInputMessagesSent = 0;
+            _gameplayInputMessagesSentWhileAwaitingFullSnapshot = 0;
+            _automationControlledDisconnectCount = 0;
+            _playerIdBeforeAutomationDisconnect = 0L;
 
             _cachedDx = 0.0f;
             _cachedDy = 0.0f;
@@ -194,6 +223,8 @@ namespace GameLogic
             HasRttStats = false;
             LatestGameplayStatus = default;
             HasGameplayStatus = false;
+            LatestReconnectStatus = default;
+            HasReconnectStatus = false;
             _dashCount = 0;
             _knockbackTriggerCount = 0;
             _observedSelfDashBuffIds.Clear();
@@ -250,6 +281,15 @@ namespace GameLogic
                 return;
             }
 
+            if (_awaitingAuthentication &&
+                DataCenterSys.Instance.HasLoginToken &&
+                !_joinOperationRunning)
+            {
+                _awaitingAuthentication = false;
+                SetReconnectStatus(ReconnectPhase.Connecting, "reauthenticated", 0);
+                JoinBattleAsync(false).Coroutine();
+            }
+
             ReadKeyboardDirection(out _cachedDx, out _cachedDy);
             if (Input.GetKeyDown(KeyCode.LeftShift) || Input.GetKeyDown(KeyCode.RightShift))
             {
@@ -275,8 +315,54 @@ namespace GameLogic
             long nowMs = _battleClock?.NowMs ?? 0L;
             _networkGate?.PumpDownlink(nowMs);
 
+            if (GameClient.Instance.Status == GameClientStatus.StatusClose &&
+                _joinSucceeded &&
+                !_reconnectInProgress &&
+                !_joinOperationRunning)
+            {
+                BeginReconnect("connection-closed", frameIndex, resetRetryBudget: true);
+            }
+
             if (_simulation == null || !_simulation.IsJoined)
             {
+                RefreshReconnectStatusFrame(frameIndex);
+                return;
+            }
+
+            if (_simulation.AwaitingFullSnapshot)
+            {
+                bool wasAwaiting = true;
+                TickResult recoveryTick = _simulation.Tick(
+                    frameIndex,
+                    fixedDt,
+                    Fixed64.Zero,
+                    Fixed64.Zero);
+                _networkGate?.PumpUplink(_battleClock?.NowMs ?? nowMs);
+                SyncRendering();
+
+                if (wasAwaiting && !_simulation.AwaitingFullSnapshot)
+                {
+                    ApplyHardReconnectVisualCorrection();
+                    _reconnectInProgress = false;
+                    _joinSucceeded = true;
+                    _reconnectRetryExhausted = false;
+                    _fullSnapshotRetryCount = 0;
+                    SetReconnectStatus(ReconnectPhase.Reconnected, "full-snapshot-applied", 0);
+                }
+                else if (_simulation.FullSnapshotTimedOut &&
+                         !_joinOperationRunning &&
+                         !_reconnectInProgress &&
+                         !_reconnectRetryExhausted)
+                {
+                    HandleFullSnapshotTimeout(frameIndex);
+                }
+
+                if (recoveryTick.TargetFrameExclusive > 0u && _tickDriver != null)
+                {
+                    _tickDriver.SetTargetFrame(recoveryTick.TargetFrameExclusive);
+                }
+
+                RefreshReconnectStatusFrame(frameIndex);
                 return;
             }
 
@@ -310,6 +396,8 @@ namespace GameLogic
             {
                 _tickDriver.SetTargetFrame(tickResult.TargetFrameExclusive);
             }
+
+            RefreshReconnectStatusFrame(frameIndex);
         }
 
         public void RollBack(uint targetFrame)
@@ -320,6 +408,27 @@ namespace GameLogic
         public void SetAutomationInputSource(IBattleAutomationInputSource inputSource)
         {
             _automationInputSource = inputSource;
+        }
+
+        public bool RequestAutomationDisconnect()
+        {
+            if (!BattleAutomationConfig.Current.Enabled ||
+                !_isInitialized ||
+                !_joinSucceeded ||
+                _joinOperationRunning ||
+                _reconnectInProgress ||
+                _simulation == null ||
+                !_simulation.IsJoined)
+            {
+                return false;
+            }
+
+            _playerIdBeforeAutomationDisconnect = _simulation.SelfPlayerId;
+            _automationControlledDisconnectCount++;
+            uint frameIndex = _simulation.LocalFrame;
+            GameClient.Instance.Disconnect();
+            BeginReconnect("automation-controlled-disconnect", frameIndex, resetRetryBudget: true);
+            return true;
         }
 
         public BattleAutomationClientSnapshot CaptureAutomationSnapshot(string clientId)
@@ -438,6 +547,15 @@ namespace GameLogic
                 rollbackCount = _simulation?.RollbackCount ?? 0,
                 lastRollbackReplayFrames = _simulation?.LastRollbackReplayFrames ?? 0,
                 lastRollbackElapsedMs = (float)(_simulation?.LastRollbackElapsedMs ?? 0.0d),
+                reconnectCount = _simulation?.ReconnectCount ?? 0,
+                lastReconnectFrame = (int)(_simulation?.LastReconnectFrame ?? 0u),
+                rollbackCountAtReconnect = _simulation?.RollbackCountAtReconnect ?? 0,
+                stateMismatchCountAtReconnect = _simulation?.StateMismatchCountAtReconnect ?? 0,
+                framesToConvergeAfterReconnect = _simulation?.FramesToConvergeAfterReconnect ?? -1,
+                awaitingFullSnapshot = _simulation?.AwaitingFullSnapshot ?? false,
+                reconnectPhase = HasReconnectStatus
+                    ? LatestReconnectStatus.Phase.ToString()
+                    : string.Empty,
                 networkSimulationEnabled = networkConfig.IsEnabled,
                 networkUplinkDelayMs = networkConfig.UplinkDelayMs,
                 networkDownlinkDelayMs = networkConfig.DownlinkDelayMs,
@@ -455,6 +573,11 @@ namespace GameLogic
                 rttProbeAcksSent = _rttProbeAcksSent,
                 serverControlRttMs = HasRttStats ? (float)LatestRttStats.ControlRttMs : 0f,
                 appliedTargetLeadFrames = (int)(_simulation?.AppliedTargetLeadFrames ?? 0u),
+                gameplayInputMessagesSent = _gameplayInputMessagesSent,
+                gameplayInputMessagesSentWhileAwaitingFullSnapshot =
+                    _gameplayInputMessagesSentWhileAwaitingFullSnapshot,
+                automationControlledDisconnectCount = _automationControlledDisconnectCount,
+                playerIdBeforeAutomationDisconnect = _playerIdBeforeAutomationDisconnect,
 
                 dashCount = _dashCount,
                 staminaAtEnd = staminaAtEnd,
@@ -522,53 +645,284 @@ namespace GameLogic
 #endif
         }
 
-        private async FTask JoinBattleAsync()
+        private async FTask JoinBattleAsync(bool reconnectRequested)
         {
+            if (_joinOperationRunning)
+            {
+                return;
+            }
+
+            _joinOperationRunning = true;
+            _reconnectInProgress = reconnectRequested;
             string battleServerAddress = BattleAutomationConfig.Current.Enabled
                 ? BattleAutomationConfig.Current.BattleServerAddress
                 : BattleServerAddress;
             int battleServerPort = BattleAutomationConfig.Current.Enabled
                 ? BattleAutomationConfig.Current.BattleServerPort
                 : BattleServerPort;
-            bool connected = await DataCenterSys.Instance.ConnectBattle(battleServerAddress, battleServerPort);
-            if (!connected)
+
+            try
             {
-                _joinFailureReason = $"connect-battle-failed:{battleServerAddress}:{battleServerPort}";
+                for (int attempt = 1; attempt <= MaxJoinAttempts; attempt++)
+                {
+                    if (!_isInitialized)
+                    {
+                        return;
+                    }
+
+                    string token = DataCenterSys.Instance.LoginToken;
+                    if (string.IsNullOrWhiteSpace(token))
+                    {
+                        HandleAuthenticationRequired("missing-login-token");
+                        return;
+                    }
+
+                    if (attempt > 1)
+                    {
+                        int delayMs = Math.Min(
+                            ReconnectRetryBaseDelayMs << Math.Min(attempt - 2, 3),
+                            ReconnectRetryMaxDelayMs);
+                        await FTask.UnityWait(GameClient.Instance.Scene, delayMs);
+                    }
+
+                    SetReconnectStatus(
+                        reconnectRequested ? ReconnectPhase.Reconnecting : ReconnectPhase.Connecting,
+                        reconnectRequested ? "reconnect-attempt" : "join-attempt",
+                        attempt);
+
+                    try
+                    {
+                        bool connected = await DataCenterSys.Instance.ConnectBattle(
+                            battleServerAddress,
+                            battleServerPort);
+                        if (!connected)
+                        {
+                            _joinFailureReason = $"connect-battle-failed:{battleServerAddress}:{battleServerPort}";
+                            continue;
+                        }
+
+                        C2B_JoinBattleResponse response = (C2B_JoinBattleResponse)await GameClient.Instance.Call(
+                            new C2B_JoinBattle { Token = token });
+                        if (response == null)
+                        {
+                            _joinFailureReason = "join-battle-response-null";
+                            Log.Warning("[Battle] JoinBattle response is null.");
+                            continue;
+                        }
+
+                        if (response.ErrorCode == BattleJoinErrorCodes.AuthenticationFailed)
+                        {
+                            HandleAuthenticationRequired($"join-authentication-failed:{response.ErrorCode}");
+                            return;
+                        }
+
+                        if (response.ErrorCode == BattleJoinErrorCodes.AccountAlreadyOnline)
+                        {
+                            _joinFailureReason = $"join-account-online:{response.ErrorCode}";
+                            Log.Warning(
+                                $"[Battle] Account is still online; retrying. attempt={attempt}/{MaxJoinAttempts}");
+                            continue;
+                        }
+
+                        if (response.ErrorCode != BattleJoinErrorCodes.Success)
+                        {
+                            _joinFailureReason = $"join-battle-error:{response.ErrorCode}";
+                            Log.Warning(
+                                $"[Battle] JoinBattle failed. ErrorCode={response.ErrorCode} attempt={attempt}/{MaxJoinAttempts}");
+                            continue;
+                        }
+
+                        ResetAuthoritativeRecoveryBaselines();
+                        _simulation?.SetJoined(
+                            response.PlayerId,
+                            response.ServerFrameIndex,
+                            Fixed64.FromRaw(response.XRaw),
+                            Fixed64.FromRaw(response.YRaw),
+                            response.IsReconnect);
+                        if (_tickDriver != null && _simulation != null)
+                        {
+                            uint alignedFrame = _simulation.InitialAlignedFrame;
+                            _simulation.AlignLocalFrame(alignedFrame);
+                            _tickDriver.AlignToFrame(alignedFrame);
+                            Log.Info(
+                                $"[Battle] Join aligned. player={response.PlayerId} reconnect={response.IsReconnect} " +
+                                $"serverFrame={response.ServerFrameIndex} localFrame={alignedFrame} lead={_simulation.LeadFrames}");
+                        }
+
+                        _joinSucceeded = true;
+                        _joinFailureReason = string.Empty;
+                        _reconnectInProgress = false;
+                        _reconnectRetryExhausted = false;
+                        if (!response.IsReconnect)
+                        {
+                            _fullSnapshotRetryCount = 0;
+                        }
+                        SetReconnectStatus(
+                            response.IsReconnect
+                                ? ReconnectPhase.AwaitingFullSnapshot
+                                : ReconnectPhase.Connected,
+                            response.IsReconnect ? "join-reclaimed" : "join-created",
+                            attempt);
+                        SyncRendering();
+                        return;
+                    }
+                    catch (Exception exception)
+                    {
+                        _joinFailureReason = $"join-exception:{exception.GetType().Name}";
+                        Log.Warning(
+                            $"[Battle] Join attempt failed. attempt={attempt}/{MaxJoinAttempts} error={exception.Message}");
+                    }
+                }
+
+                _joinSucceeded = false;
+                _reconnectInProgress = false;
+                _reconnectRetryExhausted = reconnectRequested;
+                SetReconnectStatus(ReconnectPhase.Failed, _joinFailureReason, MaxJoinAttempts);
+            }
+            finally
+            {
+                _joinOperationRunning = false;
+            }
+        }
+
+        private void BeginReconnect(string reason, uint frameIndex, bool resetRetryBudget = false)
+        {
+            if (_joinOperationRunning ||
+                _reconnectInProgress ||
+                !_isInitialized ||
+                (_reconnectRetryExhausted && !resetRetryBudget))
+            {
                 return;
             }
 
-            C2B_JoinBattleResponse response = (C2B_JoinBattleResponse)await GameClient.Instance.Call(new C2B_JoinBattle());
-            if (response == null)
+            if (resetRetryBudget)
             {
-                _joinFailureReason = "join-battle-response-null";
-                Log.Warning("[Battle] JoinBattle response is null.");
+                _reconnectRetryExhausted = false;
+                _fullSnapshotRetryCount = 0;
+            }
+
+            _disconnectObservedFrame = frameIndex;
+            _joinSucceeded = false;
+            _reconnectInProgress = true;
+            _networkGate?.ClearPending();
+            _simulation?.SuspendForReconnect();
+            SetReconnectStatus(ReconnectPhase.Reconnecting, reason, 0);
+            JoinBattleAsync(true).Coroutine();
+        }
+
+        private void HandleFullSnapshotTimeout(uint frameIndex)
+        {
+            if (_fullSnapshotRetryCount >= MaxFullSnapshotRetries)
+            {
+                _reconnectRetryExhausted = true;
+                _joinSucceeded = false;
+                _joinFailureReason = "full-snapshot-timeout-exhausted";
+                SetReconnectStatus(ReconnectPhase.Failed, _joinFailureReason, _fullSnapshotRetryCount);
                 return;
             }
 
-            if (response.ErrorCode != 0)
+            _fullSnapshotRetryCount++;
+            BeginReconnect("full-snapshot-timeout", frameIndex);
+        }
+
+        private void HandleAuthenticationRequired(string reason)
+        {
+            _joinSucceeded = false;
+            _reconnectInProgress = false;
+            _awaitingAuthentication = true;
+            _joinFailureReason = reason;
+            DataCenterSys.Instance.ClearLoginToken();
+            GameClient.Instance.Disconnect();
+            SetReconnectStatus(ReconnectPhase.AuthenticationRequired, reason, 0);
+            if (BattleAutomationConfig.Current.Enabled)
             {
-                _joinFailureReason = $"join-battle-error:{response.ErrorCode}";
-                Log.Warning($"[Battle] JoinBattle failed, ErrorCode={response.ErrorCode}");
+                ReauthenticateAutomation().Coroutine();
                 return;
             }
 
-            _joinSucceeded = true;
-            _joinFailureReason = string.Empty;
-            _simulation?.SetJoined(
-                response.PlayerId,
-                response.ServerFrameIndex,
-                Fixed64.FromRaw(response.XRaw),
-                Fixed64.FromRaw(response.YRaw));
-            if (_tickDriver != null && _simulation != null)
+            GameEvent.Get<ILoginUI>().ShowLoginUI();
+        }
+
+        private async FTask ReauthenticateAutomation()
+        {
+            BattleAutomationConfig config = BattleAutomationConfig.Current;
+            bool authenticated = await DataCenterSys.Instance.EnsureAutomationLogin(
+                config.AuthServerAddress,
+                config.AuthServerPort,
+                config.AuthUserName,
+                config.AuthPassword);
+            if (!authenticated)
             {
-                uint alignedFrame = _simulation.InitialAlignedFrame;
-                _simulation.AlignLocalFrame(alignedFrame);
-                _tickDriver.AlignToFrame(alignedFrame);
-                Log.Info(
-                    $"[Battle] Join aligned. player={response.PlayerId} serverFrame={response.ServerFrameIndex} localFrame={alignedFrame} lead={_simulation.LeadFrames}");
+                _awaitingAuthentication = false;
+                _reconnectRetryExhausted = true;
+                _joinFailureReason = "automation-reauthentication-failed";
+                SetReconnectStatus(ReconnectPhase.Failed, _joinFailureReason, 0);
+            }
+        }
+
+        private void ResetAuthoritativeRecoveryBaselines()
+        {
+            _networkGate?.ClearPending();
+            _authoritativeAttributesByPlayerId.Clear();
+            _authoritativeBuffsByPlayerId.Clear();
+            _authoritativePlayersInSnapshot.Clear();
+            _playersAwaitingBuffFullSync.Clear();
+            _staleAuthoritativePlayers.Clear();
+        }
+
+        private void SetReconnectStatus(ReconnectPhase phase, string reason, int attempt)
+        {
+            LatestReconnectStatus = new ReconnectStatusSnapshot
+            {
+                Phase = phase,
+                Reason = reason ?? string.Empty,
+                Attempt = attempt,
+                MaxAttempts = MaxJoinAttempts,
+                EstimatedGraceFramesRemaining = phase == ReconnectPhase.Reconnecting
+                    ? EstimatedGraceFrames
+                    : 0,
+                ReconnectCount = _simulation?.ReconnectCount ?? 0,
+                LastReconnectFrame = _simulation?.LastReconnectFrame ?? 0u,
+                FramesToConverge = _simulation?.FramesToConvergeAfterReconnect ?? -1
+            };
+            HasReconnectStatus = true;
+            GameEvent.Get<IBattleUI>().OnReconnectStatusUpdated();
+        }
+
+        private void RefreshReconnectStatusFrame(uint frameIndex)
+        {
+            if (!HasReconnectStatus)
+            {
+                return;
             }
 
-            SyncRendering();
+            ReconnectStatusSnapshot status = LatestReconnectStatus;
+            if (status.Phase == ReconnectPhase.Reconnecting ||
+                status.Phase == ReconnectPhase.AwaitingFullSnapshot)
+            {
+                int elapsed = unchecked((int)(frameIndex - _disconnectObservedFrame));
+                status.EstimatedGraceFramesRemaining = Math.Max(0, EstimatedGraceFrames - Math.Max(0, elapsed));
+            }
+
+            status.ReconnectCount = _simulation?.ReconnectCount ?? status.ReconnectCount;
+            status.LastReconnectFrame = _simulation?.LastReconnectFrame ?? status.LastReconnectFrame;
+            status.FramesToConverge = _simulation?.FramesToConvergeAfterReconnect ?? status.FramesToConverge;
+            LatestReconnectStatus = status;
+        }
+
+        private void ApplyHardReconnectVisualCorrection()
+        {
+            if (_simulation == null ||
+                !_renderTargetsByPlayerId.TryGetValue(_simulation.SelfPlayerId, out RenderTarget target) ||
+                !_playerSpheres.TryGetValue(_simulation.SelfPlayerId, out GameObject sphere) ||
+                sphere == null)
+            {
+                return;
+            }
+
+            sphere.transform.position = ToWorldPosition(target.X, target.Y);
+            TrailRenderer trail = sphere.GetComponent<TrailRenderer>();
+            trail?.Clear();
         }
 
         private void RegisterSnapshotHandler()
@@ -610,11 +964,17 @@ namespace GameLogic
 
             _snapshotMessageCount++;
             uint targetLeadFrames = snapshot.TargetLeadFrames;
-            BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(snapshot, out uint selfLatestAcceptedInputFrame);
+            BattleWorldSnapshot authoritativeSnapshot = ConvertSnapshot(
+                snapshot,
+                out uint selfLatestAcceptedInputFrame,
+                out bool recoveryFullSnapshotReady);
             if (_networkGate == null)
             {
                 _simulation?.ApplyAuthoritativeTargetLead(targetLeadFrames);
-                _simulation?.EnqueueServerSnapshot(authoritativeSnapshot, selfLatestAcceptedInputFrame);
+                _simulation?.EnqueueServerSnapshot(
+                    authoritativeSnapshot,
+                    selfLatestAcceptedInputFrame,
+                    recoveryFullSnapshotReady);
                 return;
             }
 
@@ -624,7 +984,10 @@ namespace GameLogic
                 value =>
                 {
                     _simulation?.ApplyAuthoritativeTargetLead(targetLeadFrames);
-                    _simulation?.EnqueueServerSnapshot(value, selfLatestAcceptedInputFrame);
+                    _simulation?.EnqueueServerSnapshot(
+                        value,
+                        selfLatestAcceptedInputFrame,
+                        recoveryFullSnapshotReady);
                 });
         }
 
@@ -920,9 +1283,13 @@ namespace GameLogic
             GetOrCreateAuthoritativeGhostSphere().SetActive(true);
         }
 
-        private BattleWorldSnapshot ConvertSnapshot(S2C_FrameSnapshot snapshot, out uint selfLatestAcceptedInputFrame)
+        private BattleWorldSnapshot ConvertSnapshot(
+            S2C_FrameSnapshot snapshot,
+            out uint selfLatestAcceptedInputFrame,
+            out bool recoveryFullSnapshotReady)
         {
             selfLatestAcceptedInputFrame = 0;
+            recoveryFullSnapshotReady = false;
             PlayerStateSnapshot[] players = new PlayerStateSnapshot[snapshot.Players.Count];
             PhysicsBodySnapshot[] bodies = new PhysicsBodySnapshot[snapshot.Players.Count];
             for (int i = 0; i < snapshot.Players.Count; i++)
@@ -977,6 +1344,13 @@ namespace GameLogic
                 if (_simulation != null && player.PlayerId == _simulation.SelfPlayerId)
                 {
                     selfLatestAcceptedInputFrame = player.LatestAcceptedInputFrame;
+                    PlayerAttributeDirtyFlags attributeDirtyMask =
+                        (PlayerAttributeDirtyFlags)player.AttributeDirtyMask;
+                    recoveryFullSnapshotReady =
+                        BattleSnapshotProtocolMapper.IsFullAttributeSnapshot(attributeDirtyMask) &&
+                        attributeMerge.HasBaseline &&
+                        !attributeMerge.Diverged &&
+                        player.IsBuffFullSync;
                 }
             }
 
@@ -1140,8 +1514,14 @@ namespace GameLogic
             }
         }
 
-        private static void SendInputCommand(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
+        private void SendInputCommand(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
         {
+            _gameplayInputMessagesSent++;
+            if (_simulation?.AwaitingFullSnapshot == true)
+            {
+                _gameplayInputMessagesSentWhileAwaitingFullSnapshot++;
+            }
+
             GameClient.Instance.Send(new C2B_PlayerInput
             {
                 FrameIndex = frameIndex,
@@ -1710,6 +2090,29 @@ namespace GameLogic
             public int LeadOutOfBoundsCount { get; set; }
             public uint AppliedTargetLeadFrames { get; set; }
             public uint LeadFrames { get; set; }
+        }
+
+        public enum ReconnectPhase
+        {
+            Connecting,
+            Connected,
+            Reconnecting,
+            AwaitingFullSnapshot,
+            Reconnected,
+            AuthenticationRequired,
+            Failed
+        }
+
+        public struct ReconnectStatusSnapshot
+        {
+            public ReconnectPhase Phase { get; set; }
+            public string Reason { get; set; }
+            public int Attempt { get; set; }
+            public int MaxAttempts { get; set; }
+            public int EstimatedGraceFramesRemaining { get; set; }
+            public int ReconnectCount { get; set; }
+            public uint LastReconnectFrame { get; set; }
+            public int FramesToConverge { get; set; }
         }
 
     }

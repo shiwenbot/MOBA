@@ -4,6 +4,14 @@ using FixedMathSharp.Utility;
 
 namespace GameShared.FrameSync.Network
 {
+    public static class BattleJoinErrorCodes
+    {
+        public const uint Success = 0u;
+        public const uint BattleUnavailable = 2001u;
+        public const uint AuthenticationFailed = 2002u;
+        public const uint AccountAlreadyOnline = 2003u;
+    }
+
     /// <summary>
     /// Source of unguessable probe nonces for server-initiated RTT measurement.
     /// Production uses crypto RNG; headless tests inject a seeded source.

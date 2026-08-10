@@ -4,6 +4,7 @@ using Fantasy.Entitas;
 using Fantasy.Entitas.Interface;
 using Fantasy.Helper;
 using Fantasy.Platform.Net;
+using GameShared.FrameSync.Network;
 
 #pragma warning disable CS8602 // 解引用可能出现空引用。
 #pragma warning disable CS8600 // 将 null 字面量或可能为 null 的值转换为非 null 类型。
@@ -12,14 +13,17 @@ namespace System;
 
 internal static class AuthenticationComponentSystem
 {
-    internal static async FTask<(uint errorCode, long accountId)> Login(this AuthenticationComponent self, string userName, string password)
+    internal static async FTask<(uint errorCode, long accountId, string token)> Login(
+        this AuthenticationComponent self,
+        string userName,
+        string password)
     {
         Log.Debug("登录请求");
         // 1、检查传递的参数是否完整以及合法
         if (string.IsNullOrEmpty(userName) || string.IsNullOrEmpty(password))
         {
             // 代表账号参数不完整或不合法
-            return (1001, 0);
+            return (1001, 0, string.Empty);
         }
 
         var scene = self.Scene;
@@ -52,10 +56,11 @@ internal static class AuthenticationComponentSystem
 
             if (result != 0)
             {
-                return (result, 0);
+                return (result, 0, string.Empty);
             }
 
-            return (result, account.Id);
+            string token = await LoginSessionStore.Issue(scene, account.Id, CryptoProbeNonceSource.Instance);
+            return (result, account.Id, token);
         }
     }
 

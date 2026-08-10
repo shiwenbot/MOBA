@@ -19,16 +19,19 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     private readonly BattleLogic _battleLogic = new(null, Log.Warning);
     private readonly Dictionary<long, PlayerSession> _sessionsByPlayerId = new();
     private readonly Dictionary<long, long> _playerIdBySessionId = new();
-    private readonly Dictionary<long, AttributeBroadcastBaseline> _lastBroadcastAttributesByPlayerId = new();
-    private readonly Dictionary<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> _buffBaselinesByObserverTarget = new();
+    private readonly Dictionary<long, long> _playerIdByAccountId = new();
+    private readonly ObserverTargetBaselineMap<AttributeBroadcastBaseline> _attributeBaselinesByObserverTarget = new();
+    private readonly ObserverTargetBaselineMap<BuffBroadcastBaseline> _buffBaselinesByObserverTarget = new();
     private readonly Dictionary<long, ServerRttTracker> _rttTrackersBySessionId = new();
+    private readonly Dictionary<long, DisconnectedPlayerEntry> _disconnectedPlayersByAccountId = new();
     private readonly List<long> _playerIdBuffer = new();
-    private readonly List<(long ObserverSessionId, long TargetPlayerId)> _staleBuffBaselineKeys = new();
+    private readonly List<long> _accountIdBuffer = new();
 
     private readonly BattleBandwidthConfig _bandwidthConfig = BattleBandwidthConfig.Current;
     private readonly BattleBandwidthStats _bandwidthStats = new(BattleBandwidthConfig.Current.ReportIntervalFrames);
     private readonly MemoryStreamBuffer _bandwidthMeasureBuffer = new();
     private readonly BattleRttConfig _rttConfig = BattleRttConfig.FromEnvironment();
+    private readonly BattleReconnectConfig _reconnectConfig;
     private readonly IProbeNonceSource _probeNonceSource = CryptoProbeNonceSource.Instance;
     private readonly IBattleClock _rttClock = SystemBattleClock.Instance;
     private readonly LeadBoundsParams _leadBoundsParams;
@@ -56,8 +59,43 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     public int Priority => 0;
     public uint LastFrameIndex => _battleLogic.LastFrameIndex;
 
-    public BattleComponent()
+    internal int ActivePlayerCountForTests => _sessionsByPlayerId.Count;
+    internal int AttributeBaselineCountForTests => _attributeBaselinesByObserverTarget.Count;
+    internal int BuffBaselineCountForTests => _buffBaselinesByObserverTarget.Count;
+
+    internal bool HasSessionMappingForTests(long sessionId)
     {
+        return _playerIdBySessionId.ContainsKey(sessionId);
+    }
+
+    internal bool HasRttTrackerForTests(long sessionId)
+    {
+        return _rttTrackersBySessionId.ContainsKey(sessionId);
+    }
+
+    internal bool HasAttributeBaselineForTests(long observerSessionId, long targetPlayerId)
+    {
+        return _attributeBaselinesByObserverTarget.TryGet(observerSessionId, targetPlayerId, out _);
+    }
+
+    internal bool HasBuffBaselineForTests(long observerSessionId, long targetPlayerId)
+    {
+        return _buffBaselinesByObserverTarget.TryGet(observerSessionId, targetPlayerId, out _);
+    }
+
+    internal bool IsInputSuppressedForTests(long playerId)
+    {
+        return _battleLogic.IsInputSuppressed(playerId);
+    }
+
+    public BattleComponent()
+        : this(BattleReconnectConfig.FromEnvironment())
+    {
+    }
+
+    internal BattleComponent(BattleReconnectConfig reconnectConfig)
+    {
+        _reconnectConfig = reconnectConfig ?? throw new ArgumentNullException(nameof(reconnectConfig));
         _battleLogic.OnBroadcast = BroadcastSnapshot;
         _leadBoundsParams = new LeadBoundsParams(
             windowMs: _rttConfig.WindowMs,
@@ -66,36 +104,81 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             maxFutureInputFrames: InputBufferTuning.MaxFutureInputFrames);
     }
 
-    public PlayerState Join(Session session)
+    public BattleJoinResult Join(Session session, long accountId)
     {
         if (session == null)
         {
             throw new ArgumentNullException(nameof(session));
         }
 
-        CleanupDisconnectedPlayers();
-
-        if (_playerIdBySessionId.TryGetValue(session.Id, out long existingPlayerId) &&
-            _battleLogic.TryGetPlayer(existingPlayerId, out PlayerState existingState))
+        if (accountId <= 0L)
         {
-            if (_sessionsByPlayerId.TryGetValue(existingPlayerId, out PlayerSession? existingPlayerSession))
+            return BattleJoinResult.Failure(BattleJoinErrorCodes.AuthenticationFailed);
+        }
+
+        DetectDisconnectedPlayers();
+        CleanupExpiredDisconnectedPlayers();
+
+        if (_playerIdBySessionId.TryGetValue(session.Id, out long existingPlayerId))
+        {
+            if (!_sessionsByPlayerId.TryGetValue(existingPlayerId, out PlayerSession? sessionOwner) ||
+                sessionOwner == null ||
+                sessionOwner.AccountId != accountId ||
+                !_battleLogic.TryGetPlayer(existingPlayerId, out PlayerState existingState))
             {
-                existingPlayerSession!.Session = session;
+                return BattleJoinResult.Failure(BattleJoinErrorCodes.AccountAlreadyOnline);
             }
 
+            sessionOwner.Session = session;
             EnsureRttTracker(session.Id);
-            return existingState;
+            return BattleJoinResult.Success(existingState, sessionOwner.IsReconnectSession);
+        }
+
+        if (_playerIdByAccountId.TryGetValue(accountId, out long accountPlayerId) &&
+            _sessionsByPlayerId.TryGetValue(accountPlayerId, out PlayerSession? accountPlayerSession) &&
+            accountPlayerSession != null &&
+            _battleLogic.TryGetPlayer(accountPlayerId, out PlayerState accountPlayerState))
+        {
+            if (!_disconnectedPlayersByAccountId.TryGetValue(accountId, out DisconnectedPlayerEntry? disconnected) ||
+                disconnected == null ||
+                disconnected.PlayerId != accountPlayerId ||
+                disconnected.IsExpired)
+            {
+                return BattleJoinResult.Failure(BattleJoinErrorCodes.AccountAlreadyOnline);
+            }
+
+            long oldSessionId = disconnected.DisconnectedSessionId;
+            if (!disconnected.TryMarkClaimed())
+            {
+                return BattleJoinResult.Failure(BattleJoinErrorCodes.AccountAlreadyOnline);
+            }
+
+            // Claimed is terminal before any old-session mapping is removed. This closes the
+            // late-packet revocation window while the account-scoped join lock is held.
+            _playerIdBySessionId.Remove(oldSessionId);
+            _rttTrackersBySessionId.Remove(oldSessionId);
+            RemoveAttributeBroadcastBaselines(oldSessionId, 0L);
+            RemoveBuffBroadcastBaselines(oldSessionId, 0L);
+
+            accountPlayerSession.Session = session;
+            accountPlayerSession.IsReconnectSession = true;
+            _playerIdBySessionId[session.Id] = accountPlayerId;
+            EnsureRttTracker(session.Id);
+            _battleLogic.SetInputSuppressed(accountPlayerId, false);
+            _disconnectedPlayersByAccountId.Remove(accountId);
+            return BattleJoinResult.Success(accountPlayerState, true);
         }
 
         long playerId = _nextPlayerId++;
         (Fixed64 spawnX, Fixed64 spawnY) = GetSpawnPosition(_sessionsByPlayerId.Count);
         PlayerState newState = _battleLogic.JoinPlayer(playerId, spawnX, spawnY);
 
-        _sessionsByPlayerId[playerId] = new PlayerSession(playerId, session);
+        _sessionsByPlayerId[playerId] = new PlayerSession(accountId, playerId, session);
         _playerIdBySessionId[session.Id] = playerId;
+        _playerIdByAccountId[accountId] = playerId;
         EnsureRttTracker(session.Id);
 
-        return newState;
+        return BattleJoinResult.Success(newState, false);
     }
 
     public void SubmitInput(Session session, C2B_PlayerInput input)
@@ -105,7 +188,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId))
+        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId) ||
+            !TryAcceptBusinessActivity(session.Id, playerId))
         {
             return;
         }
@@ -121,14 +205,18 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        if (!_playerIdBySessionId.ContainsKey(session.Id))
+        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId))
         {
             return;
         }
 
         ServerRttTracker tracker = EnsureRttTracker(session.Id);
         long nowMs = _rttClock.NowMs;
-        tracker.TryRecordAck(ack.ProbeNonce, nowMs, out _);
+        if (!tracker.TryRecordAck(ack.ProbeNonce, nowMs, out _) ||
+            !TryAcceptBusinessActivity(session.Id, playerId))
+        {
+            return;
+        }
     }
 
     public void SubmitStateHashReport(Session session, C2B_StateHashReport report)
@@ -138,7 +226,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             return;
         }
 
-        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId))
+        if (!_playerIdBySessionId.TryGetValue(session.Id, out long playerId) ||
+            !TryAcceptBusinessActivity(session.Id, playerId))
         {
             return;
         }
@@ -148,7 +237,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     public void Tick(uint frameIndex, Fixed64 fixedDt)
     {
-        CleanupDisconnectedPlayers();
+        DetectDisconnectedPlayers();
+        CleanupExpiredDisconnectedPlayers();
         RunAutomationScenario(frameIndex);
         if (_rttConfig.ProbeEnabled)
         {
@@ -159,24 +249,95 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         _battleLogic.Tick(frameIndex, fixedDt);
+        AdvanceDisconnectedPlayerGracePeriods();
     }
 
-    private void CleanupDisconnectedPlayers()
+    public bool MarkDisconnected(long sessionId, DisconnectCause cause)
     {
-        _playerIdBuffer.Clear();
+        if (sessionId == 0 ||
+            !_playerIdBySessionId.TryGetValue(sessionId, out long playerId) ||
+            !_sessionsByPlayerId.TryGetValue(playerId, out PlayerSession? playerSession) ||
+            playerSession == null)
+        {
+            return false;
+        }
 
+        long accountId = playerSession.AccountId;
+        if (_disconnectedPlayersByAccountId.TryGetValue(accountId, out DisconnectedPlayerEntry? existing))
+        {
+            if (existing == null ||
+                existing.PlayerId != playerId ||
+                existing.DisconnectedSessionId != sessionId ||
+                existing.State == DisconnectedPlayerState.Claimed)
+            {
+                return false;
+            }
+
+            bool promoted = existing.Promote(cause);
+            _battleLogic.SetInputSuppressed(playerId, true);
+            return promoted;
+        }
+
+        _disconnectedPlayersByAccountId.Add(
+            accountId,
+            new DisconnectedPlayerEntry(
+                accountId,
+                playerId,
+                sessionId,
+                _reconnectConfig.GracePeriodFrames,
+                cause));
+        _battleLogic.SetInputSuppressed(playerId, true);
+        return true;
+    }
+
+    internal bool TryGetDisconnectedPlayer(long accountId, out DisconnectedPlayerEntry entry)
+    {
+        bool found = _disconnectedPlayersByAccountId.TryGetValue(accountId, out DisconnectedPlayerEntry? resolved);
+        entry = resolved!;
+        return found;
+    }
+
+    private void DetectDisconnectedPlayers()
+    {
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
         {
-            Session session = pair.Value.Session;
+            Session? session = pair.Value.Session;
             if (session == null || session.IsDisposed)
             {
-                _playerIdBuffer.Add(pair.Key);
+                MarkDisconnected(pair.Value.SessionId, DisconnectCause.SessionDisposed);
+            }
+        }
+    }
+
+    private void AdvanceDisconnectedPlayerGracePeriods()
+    {
+        foreach (KeyValuePair<long, DisconnectedPlayerEntry> pair in _disconnectedPlayersByAccountId)
+        {
+            pair.Value.AdvanceOneFrame();
+        }
+    }
+
+    private void CleanupExpiredDisconnectedPlayers()
+    {
+        _accountIdBuffer.Clear();
+        foreach (KeyValuePair<long, DisconnectedPlayerEntry> pair in _disconnectedPlayersByAccountId)
+        {
+            if (pair.Value.IsExpired)
+            {
+                _accountIdBuffer.Add(pair.Key);
             }
         }
 
-        for (int i = 0; i < _playerIdBuffer.Count; i++)
+        for (int i = 0; i < _accountIdBuffer.Count; i++)
         {
-            long playerId = _playerIdBuffer[i];
+            long accountId = _accountIdBuffer[i];
+            if (!_disconnectedPlayersByAccountId.TryGetValue(accountId, out DisconnectedPlayerEntry? entry) ||
+                entry == null)
+            {
+                continue;
+            }
+
+            long playerId = entry.PlayerId;
 
             if (_sessionsByPlayerId.TryGetValue(playerId, out PlayerSession? playerSession))
             {
@@ -185,15 +346,20 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
                 {
                     _playerIdBySessionId.Remove(sessionId);
                     _rttTrackersBySessionId.Remove(sessionId);
+                    RemoveAttributeBroadcastBaselines(sessionId, 0);
                     RemoveBuffBroadcastBaselines(sessionId, 0);
                 }
             }
 
             _sessionsByPlayerId.Remove(playerId);
-            _lastBroadcastAttributesByPlayerId.Remove(playerId);
+            _playerIdByAccountId.Remove(accountId);
+            RemoveAttributeBroadcastBaselines(0, playerId);
             RemoveBuffBroadcastBaselines(0, playerId);
             _battleLogic.RemovePlayer(playerId);
+            _disconnectedPlayersByAccountId.Remove(accountId);
         }
+
+        _accountIdBuffer.Clear();
     }
 
 
@@ -205,7 +371,6 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         }
 
         Dictionary<int, PhysicsBodySnapshot> physicsByBodyId = BuildPhysicsBodyLookup(snapshot.PhysicsSnapshot);
-        AttributeSyncPlan[] attributeSyncPlans = BuildAttributeSyncPlans(snapshot);
         bool measureBandwidth = _bandwidthConfig.Enabled;
         if (measureBandwidth)
         {
@@ -214,7 +379,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
         {
-            Session session = pair.Value.Session;
+            Session? session = pair.Value.Session;
             if (session == null || session.IsDisposed)
             {
                 continue;
@@ -228,6 +393,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
             int dirtyAttributeEntries = 0;
             int buffFullSyncEntries = 0;
+            AttributeSyncPlan[] attributeSyncPlans = BuildAttributeSyncPlans(session.Id, snapshot);
 
             for (int i = 0; i < snapshot.Players.Length; i++)
             {
@@ -294,7 +460,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
                 if (_bandwidthConfig.MeasureFullSyncBaseline)
                 {
-                    _bandwidthStats.RecordFullSyncCounterfactual(MeasureFullSyncBytes(frameSnapshot));
+                    _bandwidthStats.RecordFullSyncCounterfactual(MeasureFullSyncBytes(session.Id, frameSnapshot));
                 }
             }
 
@@ -302,6 +468,8 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
             // Always push per-session RTT stats (switch-off still reports Enabled=false).
             session.Send(BuildRttStatsMessage(session.Id, snapshot.FrameIndex));
+
+            UpdateAttributeBroadcastBaselines(session.Id, snapshot, attributeSyncPlans);
         }
 
 
@@ -312,7 +480,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             S2C_BandwidthStats statsMessage = BuildBandwidthStatsMessage(snapshot.FrameIndex);
             foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
             {
-                Session session = pair.Value.Session;
+                Session? session = pair.Value.Session;
                 if (session != null && !session.IsDisposed)
                 {
                     session.Send(statsMessage);
@@ -327,24 +495,6 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
             _bandwidthStats.ResetWindow();
         }
 
-        for (int i = 0; i < snapshot.Players.Length; i++)
-        {
-            PlayerStateSnapshot player = snapshot.Players[i];
-            if (attributeSyncPlans[i].DirtyMask == PlayerAttributeDirtyFlags.None)
-            {
-                continue;
-            }
-
-            if (_lastBroadcastAttributesByPlayerId.TryGetValue(player.PlayerId, out AttributeBroadcastBaseline? baseline))
-            {
-                baseline.Update(player.Attributes, snapshot.FrameIndex);
-            }
-            else
-            {
-                _lastBroadcastAttributesByPlayerId[player.PlayerId] =
-                    new AttributeBroadcastBaseline(player.Attributes, snapshot.FrameIndex);
-            }
-        }
     }
 
     /// <summary>
@@ -362,7 +512,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
     /// 对照测量：把属性掩码强制为全量、Buff 强制为全量后再量一次，用来算脏同步省了多少。
     /// 只改用于测量的临时对象，不影响真正发出去的那条消息。
     /// </summary>
-    private int MeasureFullSyncBytes(S2C_FrameSnapshot frameSnapshot)
+    private int MeasureFullSyncBytes(long observerSessionId, S2C_FrameSnapshot frameSnapshot)
     {
         S2C_FrameSnapshot fullSync = new S2C_FrameSnapshot
         {
@@ -373,7 +523,10 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         {
             PlayerSnapshot source = frameSnapshot.Players[i];
             long playerId = source.PlayerId;
-            bool hasAttributes = _lastBroadcastAttributesByPlayerId.TryGetValue(playerId, out AttributeBroadcastBaseline? attributes);
+            bool hasAttributes = _attributeBaselinesByObserverTarget.TryGet(
+                observerSessionId,
+                playerId,
+                out AttributeBroadcastBaseline? attributes);
 
             fullSync.Players.Add(new PlayerSnapshot
             {
@@ -457,19 +610,19 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         return BattleSnapshotProtocolMapper.BuildPhysicsBodyLookup(physicsSnapshot);
     }
 
-    private AttributeSyncPlan[] BuildAttributeSyncPlans(TestSnapshot snapshot)
+    private AttributeSyncPlan[] BuildAttributeSyncPlans(long observerSessionId, TestSnapshot snapshot)
     {
         AttributeSyncPlan[] plans = new AttributeSyncPlan[snapshot.Players.Length];
         for (int i = 0; i < snapshot.Players.Length; i++)
         {
             PlayerStateSnapshot player = snapshot.Players[i];
-            bool hasBaseline = _lastBroadcastAttributesByPlayerId.TryGetValue(
+            bool hasBaseline = _attributeBaselinesByObserverTarget.TryGet(
+                observerSessionId,
                 player.PlayerId,
                 out AttributeBroadcastBaseline? baseline);
             bool forceFullSync = SnapshotSyncRecoveryPolicy.IsPeriodicFullSyncFrame(
-                                     snapshot.FrameIndex,
-                                     player.PlayerId) ||
-                                 HasObserverWithoutBuffBaseline(player.PlayerId);
+                snapshot.FrameIndex,
+                player.PlayerId);
             PlayerAttributeDirtyFlags dirtyMask = forceFullSync || !hasBaseline
                 ? PlayerAttributeDirtyFlags.All
                 : PlayerAttributeSync.ComputeDirtyMask(true, baseline!.Attributes, player.Attributes);
@@ -481,23 +634,39 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         return plans;
     }
 
-    private bool HasObserverWithoutBuffBaseline(long targetPlayerId)
+    private void UpdateAttributeBroadcastBaselines(
+        long observerSessionId,
+        TestSnapshot snapshot,
+        AttributeSyncPlan[] plans)
     {
-        foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
+        for (int i = 0; i < snapshot.Players.Length; i++)
         {
-            Session session = pair.Value.Session;
-            if (session == null || session.IsDisposed)
+            if (plans[i].DirtyMask == PlayerAttributeDirtyFlags.None)
             {
                 continue;
             }
 
-            if (!_buffBaselinesByObserverTarget.ContainsKey((session.Id, targetPlayerId)))
+            PlayerStateSnapshot player = snapshot.Players[i];
+            if (_attributeBaselinesByObserverTarget.TryGet(
+                    observerSessionId,
+                    player.PlayerId,
+                    out AttributeBroadcastBaseline? baseline))
             {
-                return true;
+                baseline!.Update(player.Attributes, snapshot.FrameIndex);
+            }
+            else
+            {
+                _attributeBaselinesByObserverTarget.Set(
+                    observerSessionId,
+                    player.PlayerId,
+                    new AttributeBroadcastBaseline(player.Attributes, snapshot.FrameIndex));
             }
         }
+    }
 
-        return false;
+    private void RemoveAttributeBroadcastBaselines(long observerSessionId, long targetPlayerId)
+    {
+        _attributeBaselinesByObserverTarget.RemoveMatching(observerSessionId, targetPlayerId);
     }
 
     private static NumericSnapshot BuildNumericSnapshot(GameShared.FrameSync.Battle.NumericModifierSnapshot numericState)
@@ -507,11 +676,13 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private BuffSyncPayload BuildBuffSyncPayload(long observerSessionId, PlayerStateSnapshot player, uint frameIndex)
     {
-        (long ObserverSessionId, long TargetPlayerId) key = (observerSessionId, player.PlayerId);
-        if (!_buffBaselinesByObserverTarget.TryGetValue(key, out BuffBroadcastBaseline? baseline))
+        if (!_buffBaselinesByObserverTarget.TryGet(
+                observerSessionId,
+                player.PlayerId,
+                out BuffBroadcastBaseline? baseline))
         {
             BuffBroadcastBaseline fullSyncBaseline = new BuffBroadcastBaseline(player.ActiveBuffs, player.NextRuntimeBuffId, frameIndex);
-            _buffBaselinesByObserverTarget[key] = fullSyncBaseline;
+            _buffBaselinesByObserverTarget.Set(observerSessionId, player.PlayerId, fullSyncBaseline);
             return BuffBroadcastPayloadBuilder.CreateInitialFullSync(player);
         }
 
@@ -524,28 +695,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
 
     private void RemoveBuffBroadcastBaselines(long observerSessionId, long targetPlayerId)
     {
-        if (_buffBaselinesByObserverTarget.Count == 0)
-        {
-            return;
-        }
-
-        _staleBuffBaselineKeys.Clear();
-        foreach (KeyValuePair<(long ObserverSessionId, long TargetPlayerId), BuffBroadcastBaseline> pair in _buffBaselinesByObserverTarget)
-        {
-            bool matchesObserver = observerSessionId == 0 || pair.Key.ObserverSessionId == observerSessionId;
-            bool matchesTarget = targetPlayerId == 0 || pair.Key.TargetPlayerId == targetPlayerId;
-            if (matchesObserver && matchesTarget)
-            {
-                _staleBuffBaselineKeys.Add(pair.Key);
-            }
-        }
-
-        for (int i = 0; i < _staleBuffBaselineKeys.Count; i++)
-        {
-            _buffBaselinesByObserverTarget.Remove(_staleBuffBaselineKeys[i]);
-        }
-
-        _staleBuffBaselineKeys.Clear();
+        _buffBaselinesByObserverTarget.RemoveMatching(observerSessionId, targetPlayerId);
     }
 
     private void RunAutomationScenario(uint frameIndex)
@@ -705,7 +855,7 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         _rttProbeFrameCounter = 0;
         foreach (KeyValuePair<long, PlayerSession> pair in _sessionsByPlayerId)
         {
-            Session session = pair.Value.Session;
+            Session? session = pair.Value.Session;
             if (session == null || session.IsDisposed)
             {
                 continue;
@@ -724,7 +874,43 @@ public sealed class BattleComponent : Entitas.Entity, ITickable
         foreach (KeyValuePair<long, ServerRttTracker> pair in _rttTrackersBySessionId)
         {
             pair.Value.CleanupStale(nowMs, timeoutMs);
+            if ((uint)pair.Value.ConsecutiveTimedOutProbeCount >= _rttConfig.DisconnectTimeoutCount)
+            {
+                MarkDisconnected(pair.Key, DisconnectCause.ProbeTimeout);
+            }
         }
+    }
+
+    private bool TryAcceptBusinessActivity(long sessionId, long playerId)
+    {
+        if (!_sessionsByPlayerId.TryGetValue(playerId, out PlayerSession? playerSession) ||
+            playerSession == null ||
+            playerSession.SessionId != sessionId)
+        {
+            return false;
+        }
+
+        long accountId = playerSession.AccountId;
+        if (_disconnectedPlayersByAccountId.TryGetValue(accountId, out DisconnectedPlayerEntry? entry) &&
+            entry != null)
+        {
+            if (entry.PlayerId != playerId ||
+                entry.DisconnectedSessionId != sessionId ||
+                entry.State != DisconnectedPlayerState.SuspectedDisconnected)
+            {
+                return false;
+            }
+
+            _disconnectedPlayersByAccountId.Remove(accountId);
+            _battleLogic.SetInputSuppressed(playerId, false);
+        }
+
+        if (_rttTrackersBySessionId.TryGetValue(sessionId, out ServerRttTracker? tracker) && tracker != null)
+        {
+            tracker.ResetConsecutiveProbeTimeouts();
+        }
+
+        return true;
     }
 
     private void TickRttEnvelopes(long nowMs)

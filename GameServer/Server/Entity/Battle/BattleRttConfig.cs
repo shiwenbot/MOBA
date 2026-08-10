@@ -14,6 +14,7 @@ namespace Fantasy;
 /// BATTLE_RTT_WINDOW_MS=200                   告警容差窗口 ms
 /// BATTLE_RTT_PROBE_FRAMES=10                 探测间隔（帧）
 /// BATTLE_RTT_PROBE_TIMEOUT_MS=5000           探测条目超时
+/// BATTLE_RTT_DISCONNECT_TIMEOUT_COUNT=3      连续超时多少次后推定断线
 /// BATTLE_RTT_TIGHTEN_RATE_MS_PER_SEC=20      envelope 收紧速率
 /// BATTLE_RTT_AUTHORITATIVE_LEAD=1            下发 targetLead（默认开）
 /// BATTLE_RTT_ENVELOPE_SAMPLE_CAP=1           单样本 envelope 上限（默认开）
@@ -23,12 +24,14 @@ public sealed class BattleRttConfig
     public const uint DefaultProbeIntervalFrames = 10u;
     public const uint DefaultWindowMs = 200u;
     public const uint DefaultProbeTimeoutMs = 5000u;
+    public const uint DefaultDisconnectTimeoutCount = 3u;
     public const uint DefaultTightenRateMsPerSec = 20u;
 
     public bool ProbeEnabled { get; set; }
     public uint WindowMs { get; set; }
     public uint ProbeIntervalFrames { get; set; }
     public uint ProbeTimeoutMs { get; set; }
+    public uint DisconnectTimeoutCount { get; set; }
     public float TightenRateMsPerSec { get; set; }
     public bool AuthoritativeLeadEnabled { get; set; }
     public bool EnvelopeSampleCapEnabled { get; set; }
@@ -38,6 +41,7 @@ public sealed class BattleRttConfig
         uint windowMs = DefaultWindowMs,
         uint probeIntervalFrames = DefaultProbeIntervalFrames,
         uint probeTimeoutMs = DefaultProbeTimeoutMs,
+        uint disconnectTimeoutCount = DefaultDisconnectTimeoutCount,
         float tightenRateMsPerSec = DefaultTightenRateMsPerSec,
         bool authoritativeLeadEnabled = true,
         bool envelopeSampleCapEnabled = true)
@@ -57,6 +61,14 @@ public sealed class BattleRttConfig
             throw new ArgumentOutOfRangeException(nameof(probeTimeoutMs), probeTimeoutMs, "ProbeTimeoutMs must be > 0.");
         }
 
+        if (disconnectTimeoutCount == 0u)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(disconnectTimeoutCount),
+                disconnectTimeoutCount,
+                "DisconnectTimeoutCount must be > 0.");
+        }
+
         if (tightenRateMsPerSec <= 0f || float.IsNaN(tightenRateMsPerSec) || float.IsInfinity(tightenRateMsPerSec))
         {
             throw new ArgumentOutOfRangeException(
@@ -69,6 +81,7 @@ public sealed class BattleRttConfig
         WindowMs = windowMs;
         ProbeIntervalFrames = probeIntervalFrames;
         ProbeTimeoutMs = probeTimeoutMs;
+        DisconnectTimeoutCount = disconnectTimeoutCount;
         TightenRateMsPerSec = tightenRateMsPerSec;
         AuthoritativeLeadEnabled = authoritativeLeadEnabled;
         EnvelopeSampleCapEnabled = envelopeSampleCapEnabled;
@@ -80,6 +93,9 @@ public sealed class BattleRttConfig
         uint windowMs = GetEnvUInt("BATTLE_RTT_WINDOW_MS", DefaultWindowMs);
         uint probeFrames = GetEnvUInt("BATTLE_RTT_PROBE_FRAMES", DefaultProbeIntervalFrames);
         uint probeTimeout = GetEnvUInt("BATTLE_RTT_PROBE_TIMEOUT_MS", DefaultProbeTimeoutMs);
+        uint disconnectTimeoutCount = GetEnvUInt(
+            "BATTLE_RTT_DISCONNECT_TIMEOUT_COUNT",
+            DefaultDisconnectTimeoutCount);
         float tightenRate = GetEnvFloat("BATTLE_RTT_TIGHTEN_RATE_MS_PER_SEC", DefaultTightenRateMsPerSec);
         bool authoritativeLead = GetEnvBool("BATTLE_RTT_AUTHORITATIVE_LEAD", defaultValue: true);
         bool envelopeCap = GetEnvBool("BATTLE_RTT_ENVELOPE_SAMPLE_CAP", defaultValue: true);
@@ -88,6 +104,7 @@ public sealed class BattleRttConfig
             windowMs,
             probeFrames,
             probeTimeout,
+            disconnectTimeoutCount,
             tightenRate,
             authoritativeLead,
             envelopeCap);

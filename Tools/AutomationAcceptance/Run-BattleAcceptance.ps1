@@ -1,7 +1,15 @@
 param(
-    [string[]]$Scenario = @('two-client-join', 'two-client-basic-move', 'two-client-disconnect'),
+    [string[]]$Scenario = @('two-client-join', 'two-client-basic-move', 'two-client-disconnect', 'two-client-reconnect'),
     [string]$UnityExePath = '',
     [string]$DotnetExePath = '',
+    [string]$AuthServerAddress = '127.0.0.1',
+    [int]$AuthServerPort = 20001,
+    [string]$BattleServerAddress = '127.0.0.1',
+    [int]$BattleServerPort = 20101,
+    [int]$MongoPort = 27017,
+    [string]$ClientAUserName = 'battle-auto-client-a',
+    [string]$ClientBUserName = 'battle-auto-client-b',
+    [string]$TestAccountPassword = 'BattleAutomation-20260809!',
     [int]$ClientTimeoutSeconds = 120,
     [string]$Bridge = 'puerts',
     [string]$ControllerScriptPath = '',
@@ -33,6 +41,7 @@ $defaultMinimumPlayerCount = '2'
 $defaultMovementDistanceThreshold = '1.0'
 $defaultMovementFrames = '90'
 $defaultSettleFrames = '30'
+$defaultDisconnectFrame = '60'
 $defaultExpectedBuffId = '9001'
 $defaultBuffApplyDelayFrames = '30'
 $defaultBuffDurationFrames = '45'
@@ -120,16 +129,61 @@ function Get-UnityModeArguments {
     return @('-batchmode', '-nographics')
 }
 
+function Start-UnityProcess {
+    param([string[]]$ArgumentList)
+
+    if ($InteractiveEditor) {
+        return Start-Process -FilePath $script:unityExe -ArgumentList $ArgumentList -PassThru
+    }
+
+    return Start-Process `
+        -FilePath $script:unityExe `
+        -ArgumentList $ArgumentList `
+        -PassThru `
+        -WindowStyle Hidden
+}
+
 function Test-PortListening {
     param([int]$Port)
 
-    return [bool](netstat -ano | Select-String -Pattern (':{0}\s' -f $Port))
+    $pattern = '^\s*(?:TCP|UDP)\s+\S+:{0}\s+' -f $Port
+    return [bool](netstat -ano | Select-String -Pattern $pattern)
+}
+
+function Assert-MongoReady {
+    if (-not (Test-PortListening -Port $MongoPort)) {
+        throw "MongoDB is not listening on port $MongoPort. Start mongod before running Unity acceptance."
+    }
+}
+
+function Wait-ServerReady {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$ServerLogPath,
+        [string]$ServerErrorPath
+    )
+
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        if ($Process.HasExited) {
+            throw "Server startup failed because the process exited early. Check: $ServerLogPath / $ServerErrorPath"
+        }
+
+        if ((Test-PortListening -Port $AuthServerPort) -and
+            (Test-PortListening -Port $BattleServerPort)) {
+            return
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    throw "Server readiness timed out. Expected Auth:$AuthServerPort and Battle:$BattleServerPort. Check: $ServerLogPath / $ServerErrorPath"
 }
 
 function Get-ListeningProcessIds {
     param([int]$Port)
 
-    $pattern = ':{0}\s+.*LISTENING\s+(\d+)$' -f $Port
+    $pattern = '^\s*(?:TCP|UDP)\s+\S+:{0}\s+.*\s+(\d+)\s*$' -f $Port
     $matches = netstat -ano | Select-String -Pattern $pattern
     $processIds = New-Object System.Collections.Generic.HashSet[int]
     foreach ($match in $matches) {
@@ -149,12 +203,12 @@ function Get-ListeningProcessIds {
 function Stop-ExistingBattleServer {
     param([string]$ScenarioName)
 
-    $processIds = Get-ListeningProcessIds -Port 20101
+    $processIds = Get-ListeningProcessIds -Port $BattleServerPort
     if ($processIds.Count -eq 0) {
         return
     }
 
-    Write-Warning "Scenario '$ScenarioName' is cleaning up existing battle server processes on port 20101: $($processIds -join ', ')"
+    Write-Warning "Scenario '$ScenarioName' is cleaning up existing battle server processes on port ${BattleServerPort}: $($processIds -join ', ')"
     foreach ($processId in $processIds) {
         try {
             Stop-Process -Id $processId -Force -ErrorAction Stop
@@ -262,6 +316,7 @@ function Get-ScenarioCustomArgs {
         expectedBuffId = $defaultExpectedBuffId
         buffApplyDelayFrames = $defaultBuffApplyDelayFrames
         buffDurationFrames = $defaultBuffDurationFrames
+        disconnectFrame = $defaultDisconnectFrame
         netsimEnabled = $(if ($netsimEnabled) { '1' } else { '0' })
         netsimUplinkDelayMs = [string]$uplinkDelayMs
         netsimDownlinkDelayMs = [string]$downlinkDelayMs
@@ -322,7 +377,7 @@ function Invoke-UnityMethod {
         (ConvertTo-CustomArgsString -Values $CustomArgs)
     ).Where({ $_ -ne $null -and $_ -ne '' })
 
-    $process = Start-Process -FilePath $script:unityExe -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+    $process = Start-UnityProcess -ArgumentList $argumentList
     $process.WaitForExit()
     if ($process.ExitCode -ne 0) {
         throw "Unity executeMethod failed. method=$ExecuteMethod exitCode=$($process.ExitCode) log=$LogPath"
@@ -370,7 +425,16 @@ function Start-ServerProcess {
     New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
 
     $scenarioArgs = Get-ScenarioCustomArgs -ScenarioName $ScenarioName
+    Assert-MongoReady
     Stop-ExistingBattleServer -ScenarioName $ScenarioName
+
+    if (Test-PortListening -Port $BattleServerPort) {
+        throw "Battle port $BattleServerPort is still occupied after cleanup."
+    }
+
+    if (Test-PortListening -Port $AuthServerPort) {
+        throw "Auth port $AuthServerPort is occupied by another process."
+    }
 
     # 通过环境变量传递 automation 配置，避免与 Fantasy 框架的 CommandLine.Parser 冲突
     $serverScenarioName = $ScenarioName
@@ -378,34 +442,47 @@ function Start-ServerProcess {
         $serverScenarioName = 'two-client-buff-lifecycle'
     }
 
-    $escapedDotnetExe = $script:dotnetExe.Replace("'", "''")
-    $rttProbeEnv = if ($ScenarioName -eq 'two-client-rtt-probe') { '1' } else { '' }
-    $serverCommand = @(
-        '$env:BATTLE_AUTOMATION_SCENARIO = ''' + $serverScenarioName + ''';',
-        '$env:BATTLE_AUTOMATION_MINIMUM_PLAYER_COUNT = ''' + $scenarioArgs.minimumPlayerCount + ''';',
-        '$env:BATTLE_AUTOMATION_BUFF_ID = ''' + $scenarioArgs.expectedBuffId + ''';',
-        '$env:BATTLE_AUTOMATION_BUFF_APPLY_DELAY_FRAMES = ''' + $scenarioArgs.buffApplyDelayFrames + ''';',
-        '$env:BATTLE_AUTOMATION_BUFF_DURATION_FRAMES = ''' + $scenarioArgs.buffDurationFrames + ''';',
-        $(if ($rttProbeEnv -ne '') { '$env:BATTLE_RTT_PROBE = ''1''; $env:BATTLE_RTT_AUTHORITATIVE_LEAD = ''1'';' } else { '' }),
-        '& ''' + $escapedDotnetExe + ''' run',
-        '--project "' + $serverProjectPath + '"',
-        $(if ($NoBuild) { '--no-build' } else { '' }),
-        '-- -m Develop',
-        '1>> "' + $serverLogPath + '"',
-        '2>> "' + $serverErrPath + '"'
-    ) -join ' '
-
-
-    $process = Start-Process `
-        -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
-        -ArgumentList @('-NoProfile', '-Command', $serverCommand) `
-        -PassThru `
-        -WindowStyle Hidden
-
-    Start-Sleep -Seconds 6
-    if ($process.HasExited) {
-        throw "Server startup failed because the process exited early. Check: $serverLogPath / $serverErrPath"
+    $serverOutputDirectory = Join-Path (Split-Path $serverProjectPath -Parent) 'bin\Debug\net9.0'
+    $serverDllPath = Join-Path $serverOutputDirectory 'Main.dll'
+    if (-not (Test-Path -LiteralPath $serverDllPath)) {
+        throw "Built server entry was not found: $serverDllPath. Run without -NoBuild first."
     }
+
+    $environmentOverrides = [ordered]@{
+        BATTLE_AUTOMATION_SCENARIO = $serverScenarioName
+        BATTLE_AUTOMATION_MINIMUM_PLAYER_COUNT = $scenarioArgs.minimumPlayerCount
+        BATTLE_AUTOMATION_BUFF_ID = $scenarioArgs.expectedBuffId
+        BATTLE_AUTOMATION_BUFF_APPLY_DELAY_FRAMES = $scenarioArgs.buffApplyDelayFrames
+        BATTLE_AUTOMATION_BUFF_DURATION_FRAMES = $scenarioArgs.buffDurationFrames
+    }
+    if ($ScenarioName -eq 'two-client-rtt-probe') {
+        $environmentOverrides['BATTLE_RTT_PROBE'] = '1'
+        $environmentOverrides['BATTLE_RTT_AUTHORITATIVE_LEAD'] = '1'
+    }
+
+    $previousEnvironment = @{}
+    try {
+        foreach ($name in $environmentOverrides.Keys) {
+            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, [string]$environmentOverrides[$name], 'Process')
+        }
+
+        $process = Start-Process `
+            -FilePath $script:dotnetExe `
+            -ArgumentList @("`"$serverDllPath`"", '-m', 'Develop') `
+            -WorkingDirectory $serverOutputDirectory `
+            -RedirectStandardOutput $serverLogPath `
+            -RedirectStandardError $serverErrPath `
+            -PassThru `
+            -WindowStyle Hidden
+    }
+    finally {
+        foreach ($name in $environmentOverrides.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+        }
+    }
+
+    Wait-ServerReady -Process $process -ServerLogPath $serverLogPath -ServerErrorPath $serverErrPath
 
     return @{
         Process = $process
@@ -432,7 +509,8 @@ function Start-AutomationClient {
     param(
         [string]$ProjectPath,
         [string]$ScenarioName,
-        [string]$ClientId
+        [string]$ClientId,
+        [string]$AuthUserName
     )
 
     $clientDir = Join-Path $runRoot $ScenarioName
@@ -456,8 +534,12 @@ function Start-AutomationClient {
 
     $customArgs = @{
         battleAutomation = '1'
-        battleServerAddress = '127.0.0.1'
-        battleServerPort = '20101'
+        authServerAddress = $AuthServerAddress
+        authServerPort = [string]$AuthServerPort
+        authUserName = $AuthUserName
+        authPassword = $TestAccountPassword
+        battleServerAddress = $BattleServerAddress
+        battleServerPort = [string]$BattleServerPort
         autoOpenBattleUi = '1'
         autoCloseAfterFinish = '1'
         bridge = $Bridge
@@ -471,6 +553,7 @@ function Start-AutomationClient {
         reportPath = $reportPath
         scenario = $ScenarioName
         settleFrames = $scenarioArgs.settleFrames
+        disconnectFrame = $scenarioArgs.disconnectFrame
         expectedBuffId = $scenarioArgs.expectedBuffId
         buffApplyDelayFrames = $scenarioArgs.buffApplyDelayFrames
         buffDurationFrames = $scenarioArgs.buffDurationFrames
@@ -493,7 +576,7 @@ function Start-AutomationClient {
         (ConvertTo-CustomArgsString -Values $customArgs)
     ).Where({ $_ -ne $null -and $_ -ne '' })
 
-    $process = Start-Process -FilePath $script:unityExe -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+    $process = Start-UnityProcess -ArgumentList $argumentList
     return @{
         ClientId = $ClientId
         Process = $process
@@ -611,6 +694,55 @@ function Get-NetworkSimulationEvidence {
     return @{ Passed = $passed; Details = $details }
 }
 
+function Get-ReconnectEvidence {
+    param(
+        [string]$ScenarioName,
+        $ClientAReport,
+        $ClientBReport
+    )
+
+    if (-not $ScenarioName.Equals('two-client-reconnect', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @{ Passed = $true; Details = 'not-a-reconnect-scenario' }
+    }
+
+    $observer = $ClientAReport.snapshot
+    $actor = $ClientBReport.snapshot
+    if ($null -eq $observer -or $null -eq $actor) {
+        return @{ Passed = $false; Details = 'missing reconnect snapshot' }
+    }
+
+    $actorPlayerId = [long]$actor.selfPlayerId
+    $playerIdBeforeDisconnect = [long]$actor.playerIdBeforeAutomationDisconnect
+    $mismatchGrowth = [Math]::Max(
+        0,
+        [int]$actor.stateMismatchCount - [int]$actor.stateMismatchCountAtReconnect)
+    $rollbackGrowth = [Math]::Max(
+        0,
+        [int]$actor.rollbackCount - [int]$actor.rollbackCountAtReconnect)
+    $observerHasActor = @($observer.players | Where-Object { [long]$_.playerId -eq $actorPlayerId }).Count -eq 1
+
+    $passed = [int]$actor.reconnectCount -eq 1 -and
+        [int]$actor.automationControlledDisconnectCount -eq 1 -and
+        $actorPlayerId -gt 0 -and
+        $actorPlayerId -eq $playerIdBeforeDisconnect -and
+        -not [bool]$actor.awaitingFullSnapshot -and
+        [int]$actor.framesToConvergeAfterReconnect -ge 0 -and
+        [int]$actor.framesToConvergeAfterReconnect -le 30 -and
+        $mismatchGrowth -le 3 -and
+        $rollbackGrowth -le 3 -and
+        [int]$actor.gameplayInputMessagesSentWhileAwaitingFullSnapshot -eq 0 -and
+        [int]$observer.activePlayerCount -ge 2 -and
+        $observerHasActor
+
+    $details = "playerId=$actorPlayerId/$playerIdBeforeDisconnect " +
+        "reconnectCount=$($actor.reconnectCount) " +
+        "converge=$($actor.framesToConvergeAfterReconnect)/30 " +
+        "mismatchGrowth=$mismatchGrowth/3 rollbackGrowth=$rollbackGrowth/3 " +
+        "recoveryInputs=$($actor.gameplayInputMessagesSentWhileAwaitingFullSnapshot) " +
+        "observerPlayers=$($observer.activePlayerCount) observerHasActor=$observerHasActor"
+    return @{ Passed = $passed; Details = $details }
+}
+
 function Wait-BothClients {
     param($ClientA, $ClientB)
 
@@ -695,13 +827,25 @@ function Write-CombinedReports {
 $script:unityExe = Resolve-UnityExePath -PreferredPath $UnityExePath
 $script:dotnetExe = Resolve-DotnetExePath -PreferredPath $DotnetExePath
 
+if ([string]::IsNullOrWhiteSpace($ClientAUserName) -or
+    [string]::IsNullOrWhiteSpace($ClientBUserName) -or
+    [string]::IsNullOrWhiteSpace($TestAccountPassword)) {
+    throw 'Both automation usernames and the shared test password must be non-empty.'
+}
+
+if ($ClientAUserName.Equals($ClientBUserName, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'ClientAUserName and ClientBUserName must be different accounts.'
+}
+
+Assert-MongoReady
+
+$cloneProjectPath = Ensure-ParrelSyncClone
+
 if (-not $NoBuild) {
     Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'GameServer\Server\Server.sln'), '-c', 'Debug', '-v', 'minimal', '-m:1')
     Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'UnityProject\GameLogic.csproj'), '-c', 'Debug', '-v', 'minimal', '-m:1')
     Invoke-Dotnet -Arguments @('build', (Join-Path $repoRoot 'UnityProject\Assembly-CSharp-Editor.csproj'), '-c', 'Debug', '-v', 'minimal', '-m:1')
 }
-
-$cloneProjectPath = Ensure-ParrelSyncClone
 $scenarioResults = New-Object System.Collections.Generic.List[object]
 
 foreach ($scenarioName in $Scenario) {
@@ -709,8 +853,16 @@ foreach ($scenarioName in $Scenario) {
     try {
         Stop-StaleAutomationClients
         $serverState = Start-ServerProcess -ScenarioName $scenarioName
-        $clientA = Start-AutomationClient -ProjectPath $unityProjectPath -ScenarioName $scenarioName -ClientId 'client-a'
-        $clientB = Start-AutomationClient -ProjectPath $cloneProjectPath -ScenarioName $scenarioName -ClientId 'client-b'
+        $clientA = Start-AutomationClient `
+            -ProjectPath $unityProjectPath `
+            -ScenarioName $scenarioName `
+            -ClientId 'client-a' `
+            -AuthUserName $ClientAUserName
+        $clientB = Start-AutomationClient `
+            -ProjectPath $cloneProjectPath `
+            -ScenarioName $scenarioName `
+            -ClientId 'client-b' `
+            -AuthUserName $ClientBUserName
 
         $bothReports = Wait-BothClients -ClientA $clientA -ClientB $clientB
         $clientAReport = $bothReports.ReportA
@@ -721,10 +873,15 @@ foreach ($scenarioName in $Scenario) {
             -ClientAReport $clientAReport `
             -ClientBReport $clientBReport `
             -ServerLogPath $serverState.LogPath
+        $reconnectEvidence = Get-ReconnectEvidence `
+            -ScenarioName $scenarioName `
+            -ClientAReport $clientAReport `
+            -ClientBReport $clientBReport
         $passed = [bool]$clientAReport.passed -and `
             [bool]$clientBReport.passed -and `
             -not $serverState.Process.HasExited -and `
-            [bool]$networkEvidence.Passed
+            [bool]$networkEvidence.Passed -and `
+            [bool]$reconnectEvidence.Passed
         $scenarioResults.Add([pscustomobject]@{
             Scenario = $scenarioName
             Passed = $passed
@@ -737,6 +894,7 @@ foreach ($scenarioName in $Scenario) {
             ClientAReason = $clientAReport.reason
             ClientBReason = $clientBReport.reason
             NetworkEvidence = $networkEvidence.Details
+            ReconnectEvidence = $reconnectEvidence.Details
         })
     }
     finally {

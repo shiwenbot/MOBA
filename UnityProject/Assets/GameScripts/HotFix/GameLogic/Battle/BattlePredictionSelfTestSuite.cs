@@ -126,7 +126,26 @@ namespace GameLogic
             "dash-displacement-state-proto-roundtrip",
             "knockback-state-proto-roundtrip",
             "numeric-stamina-base-proto-roundtrip",
-            "stamina-mismatch-triggers-rollback"
+            "stamina-mismatch-triggers-rollback",
+            "disconnected-player-input-is-frozen-not-reused",
+            "disconnected-player-does-not-trigger-knockback",
+            "disconnected-player-still-ticks-buffs-and-stamina",
+            "disconnected-player-remains-knockback-target",
+            "dash-in-flight-completes-during-disconnect",
+            "no-stale-input-reuse-on-first-frame-after-unsuppress",
+            "attribute-baseline-is-per-observer",
+            "new-observer-gets-full-attributes-for-all-players",
+            "existing-observers-unaffected-by-new-observer-full-sync",
+            "attribute-full-sync-not-dependent-on-buff-baseline-absence",
+            "attribute-baseline-frame-advances-per-observer-on-unchanged-frames",
+            "reconnect-buff-baseline-is-fresh-for-new-session",
+            "reconnect-full-sync-restores-buffs-and-stamina",
+            "client-rejoin-rebuilds-from-authoritative-state",
+            "successful-ack-resets-consecutive-probe-timeouts",
+            "reconnect-preserves-cumulative-diagnostics",
+            "no-gameplay-input-while-awaiting-full-snapshot",
+            "awaiting-full-snapshot-times-out-into-retry",
+            "diverged-merge-does-not-clear-awaiting-flag"
         };
 
         public static bool Run(out string failedCase)
@@ -256,6 +275,25 @@ namespace GameLogic
                     "knockback-state-proto-roundtrip" => KnockbackStateProtoRoundTrip(),
                     "numeric-stamina-base-proto-roundtrip" => NumericStaminaBaseProtoRoundTrip(),
                     "stamina-mismatch-triggers-rollback" => StaminaMismatchTriggersRollback(),
+                    "disconnected-player-input-is-frozen-not-reused" => DisconnectedPlayerInputIsFrozenNotReused(),
+                    "disconnected-player-does-not-trigger-knockback" => DisconnectedPlayerDoesNotTriggerKnockback(),
+                    "disconnected-player-still-ticks-buffs-and-stamina" => DisconnectedPlayerStillTicksBuffsAndStamina(),
+                    "disconnected-player-remains-knockback-target" => DisconnectedPlayerRemainsKnockbackTarget(),
+                    "dash-in-flight-completes-during-disconnect" => DashInFlightCompletesDuringDisconnect(),
+                    "no-stale-input-reuse-on-first-frame-after-unsuppress" => NoStaleInputReuseOnFirstFrameAfterUnsuppress(),
+                    "attribute-baseline-is-per-observer" => AttributeBaselineIsPerObserver(),
+                    "new-observer-gets-full-attributes-for-all-players" => NewObserverGetsFullAttributesForAllPlayers(),
+                    "existing-observers-unaffected-by-new-observer-full-sync" => ExistingObserversUnaffectedByNewObserverFullSync(),
+                    "attribute-full-sync-not-dependent-on-buff-baseline-absence" => AttributeFullSyncNotDependentOnBuffBaselineAbsence(),
+                    "attribute-baseline-frame-advances-per-observer-on-unchanged-frames" => AttributeBaselineFrameAdvancesPerObserverOnUnchangedFrames(),
+                    "reconnect-buff-baseline-is-fresh-for-new-session" => ReconnectBuffBaselineIsFreshForNewSession(),
+                    "reconnect-full-sync-restores-buffs-and-stamina" => ReconnectFullSyncRestoresBuffsAndStamina(),
+                    "client-rejoin-rebuilds-from-authoritative-state" => ClientRejoinRebuildsFromAuthoritativeState(),
+                    "successful-ack-resets-consecutive-probe-timeouts" => SuccessfulAckResetsConsecutiveProbeTimeouts(),
+                    "reconnect-preserves-cumulative-diagnostics" => ReconnectPreservesCumulativeDiagnostics(),
+                    "no-gameplay-input-while-awaiting-full-snapshot" => NoGameplayInputWhileAwaitingFullSnapshot(),
+                    "awaiting-full-snapshot-times-out-into-retry" => AwaitingFullSnapshotTimesOutIntoRetry(),
+                    "diverged-merge-does-not-clear-awaiting-flag" => DivergedMergeDoesNotClearAwaitingFlag(),
                     _ => throw new ArgumentException($"Unknown prediction self test case: {caseName}", nameof(caseName))
                 };
 
@@ -2815,6 +2853,7 @@ namespace GameLogic
 
         private sealed class SentInputRecorder
         {
+            public int Count { get; private set; }
             public uint LastFrameIndex { get; private set; }
             public float LastDx { get; private set; }
             public float LastDy { get; private set; }
@@ -2823,6 +2862,7 @@ namespace GameLogic
 
             public void Record(uint frameIndex, uint inputSeq, Fixed64 dx, Fixed64 dy, int skillId)
             {
+                Count++;
                 LastFrameIndex = frameIndex;
                 LastDx = (float)dx;
                 LastDy = (float)dy;

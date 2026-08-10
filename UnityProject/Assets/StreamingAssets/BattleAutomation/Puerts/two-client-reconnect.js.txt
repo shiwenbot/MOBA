@@ -1,0 +1,180 @@
+// Controlled reconnect acceptance scenario.
+// client-b disconnects once and must reclaim the same player; client-a verifies
+// that the retained player never disappears during the reconnect grace period.
+
+let state = {};
+let config = {};
+
+function pending(requestDisconnect) {
+  return JSON.stringify({
+    completed: false,
+    passed: false,
+    reason: "",
+    requestDisconnect: requestDisconnect === true
+  });
+}
+
+function completed(passed, reason) {
+  return JSON.stringify({
+    completed: true,
+    passed: passed === true,
+    reason: reason || "",
+    requestDisconnect: false
+  });
+}
+
+module.exports = {
+  initialize(configJson) {
+    const parsed = JSON.parse(configJson || "{}");
+    const clientId = parsed.clientId || "";
+    config = {
+      disconnectFrame: parsed.disconnectFrame || 60,
+      minimumPlayerCount: parsed.minimumPlayerCount || 2,
+      settleFrames: parsed.settleFrames || 30,
+      isClientB: clientId.indexOf("client-b") >= 0 ||
+                 clientId.indexOf("clone") >= 0 ||
+                 clientId.charAt(clientId.length - 1) === "b" ||
+                 clientId.charAt(clientId.length - 1) === "2"
+    };
+    config.completionFrame = config.disconnectFrame + config.settleFrames + 60;
+
+    state = {
+      joined: false,
+      joinedFrame: 0,
+      initialPlayerId: 0,
+      observedTargetPlayerCount: false,
+      observedPlayerDrop: false,
+      disconnectAccepted: false
+    };
+  },
+
+  tryGetInput(payloadJson) {
+    if (!state.joined || !config.isClientB || state.disconnectAccepted) {
+      return JSON.stringify({ hasInput: false, dx: 0.0, dy: 0.0 });
+    }
+
+    const payload = JSON.parse(payloadJson || "{}");
+    const relativeFrame = (payload.frameIndex | 0) - state.joinedFrame;
+    if (relativeFrame < config.disconnectFrame) {
+      return JSON.stringify({ hasInput: true, dx: -1.0, dy: 0.0 });
+    }
+
+    return JSON.stringify({ hasInput: false, dx: 0.0, dy: 0.0 });
+  },
+
+  tryGetSkillRequest() {
+    return JSON.stringify({ hasSkillRequest: false, skillId: 0 });
+  },
+
+  evaluate(snapshotJson) {
+    const snapshot = JSON.parse(snapshotJson || "{}");
+
+    if (snapshot.joined && !state.joined) {
+      state.joined = true;
+      state.joinedFrame = snapshot.localFrame | 0;
+      state.initialPlayerId = Number(snapshot.selfPlayerId || 0);
+    }
+
+    if ((snapshot.activePlayerCount | 0) >= config.minimumPlayerCount) {
+      state.observedTargetPlayerCount = true;
+    }
+
+    if (state.observedTargetPlayerCount &&
+        (snapshot.activePlayerCount | 0) < config.minimumPlayerCount) {
+      state.observedPlayerDrop = true;
+    }
+
+    if (!state.joined) {
+      return pending(false);
+    }
+
+    const elapsedFrames = (snapshot.localFrame | 0) - state.joinedFrame;
+    if (!config.isClientB) {
+      if (state.observedPlayerDrop) {
+        return completed(false, "reconnect-observer-saw-player-drop-during-grace");
+      }
+
+      if (state.observedTargetPlayerCount &&
+          (snapshot.snapshotMessageCount | 0) > 0 &&
+          elapsedFrames >= config.completionFrame) {
+        return completed(
+          true,
+          "reconnect-observer-continuity players=" + (snapshot.activePlayerCount | 0));
+      }
+
+      return pending(false);
+    }
+
+    if ((snapshot.automationControlledDisconnectCount | 0) > 0) {
+      state.disconnectAccepted = true;
+    }
+
+    if (!state.disconnectAccepted &&
+        state.observedTargetPlayerCount &&
+        elapsedFrames >= config.disconnectFrame) {
+      return pending(true);
+    }
+
+    if (!state.disconnectAccepted) {
+      if (elapsedFrames >= config.disconnectFrame + 60) {
+        return completed(false, "reconnect-controlled-disconnect-not-accepted");
+      }
+
+      return pending(false);
+    }
+
+    const currentPlayerId = Number(snapshot.selfPlayerId || 0);
+    if (currentPlayerId > 0 && currentPlayerId !== state.initialPlayerId) {
+      return completed(
+        false,
+        "reconnect-player-id-changed before=" + state.initialPlayerId +
+        " after=" + currentPlayerId);
+    }
+
+    if ((snapshot.reconnectCount | 0) > 1) {
+      return completed(false, "reconnect-count-exceeded actual=" + (snapshot.reconnectCount | 0));
+    }
+
+    const recoveryCompleted = snapshot.joined === true &&
+                              (snapshot.reconnectCount | 0) === 1 &&
+                              snapshot.awaitingFullSnapshot !== true &&
+                              snapshot.reconnectPhase === "Reconnected";
+    if (recoveryCompleted) {
+      const mismatchGrowth = Math.max(
+        0,
+        (snapshot.stateMismatchCount | 0) - (snapshot.stateMismatchCountAtReconnect | 0));
+      const rollbackGrowth = Math.max(
+        0,
+        (snapshot.rollbackCount | 0) - (snapshot.rollbackCountAtReconnect | 0));
+      const convergenceFrames = snapshot.framesToConvergeAfterReconnect | 0;
+      const recoveryInputs = snapshot.gameplayInputMessagesSentWhileAwaitingFullSnapshot | 0;
+      const beforeDisconnect = Number(snapshot.playerIdBeforeAutomationDisconnect || 0);
+      const passed = beforeDisconnect === state.initialPlayerId &&
+                     (snapshot.automationControlledDisconnectCount | 0) === 1 &&
+                     convergenceFrames >= 0 && convergenceFrames <= 30 &&
+                     mismatchGrowth <= 3 &&
+                     rollbackGrowth <= 3 &&
+                     recoveryInputs === 0;
+      return completed(
+        passed,
+        "reconnect-actor player=" + currentPlayerId + "/" + state.initialPlayerId +
+        " count=" + (snapshot.reconnectCount | 0) +
+        " converge=" + convergenceFrames + "/30" +
+        " mismatchGrowth=" + mismatchGrowth + "/3" +
+        " rollbackGrowth=" + rollbackGrowth + "/3" +
+        " recoveryInputs=" + recoveryInputs);
+    }
+
+    if (elapsedFrames >= config.completionFrame + 120) {
+      return completed(
+        false,
+        "reconnect-actor-timeout phase=" + (snapshot.reconnectPhase || "") +
+        " count=" + (snapshot.reconnectCount | 0) +
+        " awaiting=" + (snapshot.awaitingFullSnapshot === true));
+    }
+
+    return pending(false);
+  },
+
+  dispose() {}
+};

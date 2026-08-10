@@ -84,6 +84,7 @@ namespace GameShared.FrameSync.Network
         public int OverflowDroppedProbeCount { get; private set; }
         public int UnknownAckCount { get; private set; }
         public int TimedOutProbeCount { get; private set; }
+        public int ConsecutiveTimedOutProbeCount { get; private set; }
         public int ClockBackwardCount { get; private set; }
         public int LeadOutOfBoundsCount { get; private set; }
 
@@ -153,7 +154,13 @@ namespace GameShared.FrameSync.Network
             }
 
             ApplySample(rttMs, nowMs);
+            ResetConsecutiveProbeTimeouts();
             return true;
+        }
+
+        public void ResetConsecutiveProbeTimeouts()
+        {
+            ConsecutiveTimedOutProbeCount = 0;
         }
 
         public void CleanupStale(long nowMs, long timeoutMs = DefaultProbeTimeoutMs)
@@ -187,6 +194,7 @@ namespace GameShared.FrameSync.Network
                 _probeNonceOrder.Dequeue();
                 _probeSentAtMsByNonce.Remove(nonce);
                 TimedOutProbeCount++;
+                ConsecutiveTimedOutProbeCount++;
             }
         }
 

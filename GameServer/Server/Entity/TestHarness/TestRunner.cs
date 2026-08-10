@@ -125,6 +125,10 @@ public static class TestRunner
                 checks.Add(RunPredictionSelfTest());
                 break;
 
+            case TestScenario.S9Server:
+                checks.AddRange(RunS9ServerTests());
+                break;
+
             case TestScenario.JoinAlignsGlobalFrame:
             case TestScenario.FrameIndexIsGlobal:
             case TestScenario.InputNormalization:
@@ -184,6 +188,13 @@ public static class TestRunner
                 checks.Add(RunPredictionSelfCase("dual-dash-collision-knockbacks-both"));
                 checks.Add(RunPredictionSelfCase("knockback-state-replays-without-new-mismatch"));
                 checks.Add(RunPredictionSelfCase("remote-body-mirror-survives-restore-self-only"));
+                break;
+
+            case TestScenario.TwoClientReconnect:
+                checks.Add(RunPredictionSelfCase("client-rejoin-rebuilds-from-authoritative-state"));
+                checks.Add(RunPredictionSelfCase("reconnect-preserves-cumulative-diagnostics"));
+                checks.Add(RunPredictionSelfCase("no-gameplay-input-while-awaiting-full-snapshot"));
+                checks.Add(RunPredictionSelfCase("diverged-merge-does-not-clear-awaiting-flag"));
                 break;
 
 
@@ -493,6 +504,21 @@ public static class TestRunner
         return passed
             ? CheckResult.Pass("PredictSelfTest", caseName)
             : CheckResult.Fail("PredictSelfTest", caseName, failedCase);
+    }
+
+    private static List<CheckResult> RunS9ServerTests()
+    {
+        List<CheckResult> checks = new(S9ServerTestSuite.AllCaseNames.Length);
+        for (int i = 0; i < S9ServerTestSuite.AllCaseNames.Length; i++)
+        {
+            string caseName = S9ServerTestSuite.AllCaseNames[i];
+            bool passed = S9ServerTestSuite.RunCase(caseName, out string failure);
+            checks.Add(passed
+                ? CheckResult.Pass("S9ServerTest", caseName)
+                : CheckResult.Fail("S9ServerTest", caseName, failure));
+        }
+
+        return checks;
     }
 
     private static CheckResult RunSingleCheck(string suiteName, string name, Func<bool> test)
@@ -1472,6 +1498,8 @@ public static class TestRunner
                 "too-far-future-input-is-rejected" => TestScenario.TooFarFutureInputIsRejected,
                 "missing-input-reuses-last" => TestScenario.MissingInputReusesLast,
                 "prediction-self" => TestScenario.PredictionSelf,
+                "s9-server" => TestScenario.S9Server,
+                "s9-server-harness" => TestScenario.S9Server,
                 "join-aligns-global-frame" => TestScenario.JoinAlignsGlobalFrame,
                 "frame-index-is-global" => TestScenario.FrameIndexIsGlobal,
                 "input-normalization" => TestScenario.InputNormalization,
@@ -1510,6 +1538,7 @@ public static class TestRunner
                 "two-client-weaknet-downlink-loss" => TestScenario.TwoClientWeakNetDownlinkLoss,
                 "two-client-rtt-probe" => TestScenario.TwoClientRttProbe,
                 "two-client-knockback" => TestScenario.TwoClientKnockback,
+                "two-client-reconnect" => TestScenario.TwoClientReconnect,
 
                 "skill-trigger-buff" => TestScenario.SkillTriggerBuff,
                 "determinism" => TestScenario.Determinism,
@@ -1561,6 +1590,7 @@ public static class TestRunner
         public const string TooFarFutureInputIsRejected = "too-far-future-input-is-rejected";
         public const string MissingInputReusesLast = "missing-input-reuses-last";
         public const string PredictionSelf = "prediction-self";
+        public const string S9Server = "s9-server";
         public const string JoinAlignsGlobalFrame = "join-aligns-global-frame";
         public const string FrameIndexIsGlobal = "frame-index-is-global";
         public const string InputNormalization = "input-normalization";
@@ -1598,6 +1628,7 @@ public static class TestRunner
         public const string TwoClientWeakNetDownlinkLoss = "two-client-weaknet-downlink-loss";
         public const string TwoClientRttProbe = "two-client-rtt-probe";
         public const string TwoClientKnockback = "two-client-knockback";
+        public const string TwoClientReconnect = "two-client-reconnect";
 
         public const string SkillTriggerBuff = "skill-trigger-buff";
         public const string Determinism = "determinism";

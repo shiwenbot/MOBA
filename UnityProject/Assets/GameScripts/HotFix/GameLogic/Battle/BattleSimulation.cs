@@ -22,6 +22,7 @@ namespace GameLogic
         private const int AuthoritativeSnapshotHistoryCapacity = 32;
         private const float InitialRttEmaMs = 100f;
         private const float RttEmaAlpha = 0.2f;
+        public const int ReconnectFullSnapshotTimeoutFrames = 90;
 
         private readonly BattleWorldState _worldState;
         private readonly RemotePlayerBuffer _remotePlayers = new RemotePlayerBuffer();
@@ -48,6 +49,9 @@ namespace GameLogic
         private readonly PredictionErrorSmoother _predictionErrorSmoother = new PredictionErrorSmoother();
 
         private bool _isJoined;
+        private bool _awaitingFullSnapshot;
+        private int _awaitingFullSnapshotFrames;
+        private bool _fullSnapshotTimeoutSignaled;
         private bool _hasRttSample;
         private long _selfPlayerId;
         private uint _inputSeq;
@@ -120,6 +124,9 @@ namespace GameLogic
         }
 
         public bool IsJoined => _isJoined;
+        public bool AwaitingFullSnapshot => _awaitingFullSnapshot;
+        public int AwaitingFullSnapshotFrames => _awaitingFullSnapshotFrames;
+        public bool FullSnapshotTimedOut => _fullSnapshotTimeoutSignaled;
         public long SelfPlayerId => _selfPlayerId;
         public uint LeadFrames => _leadFrames;
         public uint BaselineLeadFrames => _baselineLeadFrames;
@@ -159,6 +166,11 @@ namespace GameLogic
         public float PredictionSmoothingRemainingSeconds => _predictionErrorSmoother.RemainingSeconds;
         public RemotePlayerBuffer RemotePlayers => _remotePlayers;
         public int ActiveSkillExecutionCount => _skillGraphRuntime.ActiveExecutionCount;
+        public int ReconnectCount { get; private set; }
+        public uint LastReconnectFrame { get; private set; }
+        public int RollbackCountAtReconnect { get; private set; }
+        public int StateMismatchCountAtReconnect { get; private set; }
+        public int FramesToConvergeAfterReconnect { get; private set; } = -1;
 
         public void AdvancePredictionErrorSmoothing(float deltaTime)
         {
@@ -184,7 +196,10 @@ namespace GameLogic
             return _hasLatestAuthoritativeSelfPosition;
         }
 
-        public void EnqueueServerSnapshot(BattleWorldSnapshot snapshot, uint selfLatestAcceptedInputFrame)
+        public void EnqueueServerSnapshot(
+            BattleWorldSnapshot snapshot,
+            uint selfLatestAcceptedInputFrame,
+            bool isRecoveryFullSnapshot = false)
         {
             if (snapshot == null)
             {
@@ -201,7 +216,10 @@ namespace GameLogic
                 return;
             }
 
-            _pendingServerSnapshots.Enqueue(new PendingAuthoritativeSnapshot(snapshot, selfLatestAcceptedInputFrame));
+            _pendingServerSnapshots.Enqueue(new PendingAuthoritativeSnapshot(
+                snapshot,
+                selfLatestAcceptedInputFrame,
+                isRecoveryFullSnapshot));
             _hasQueuedServerSnapshot = true;
             _latestQueuedSnapshotFrame = snapshot.FrameIndex;
         }
@@ -268,6 +286,11 @@ namespace GameLogic
             {
                 DeterminismRules.AssertFixedDt(fixedDt);
 
+                if (_awaitingFullSnapshot)
+                {
+                    return TickAwaitingFullSnapshot(frameIndex, fixedDt);
+                }
+
                 _localFrame = frameIndex;
 
                 SaveInputHistory(frameIndex, dx, dy, skillId);
@@ -303,11 +326,34 @@ namespace GameLogic
 
         public void SetJoined(long playerId, uint serverFrame, float x, float y)
         {
-            SetJoined(playerId, serverFrame, (Fixed64)x, (Fixed64)y);
+            SetJoined(playerId, serverFrame, (Fixed64)x, (Fixed64)y, false);
         }
 
         public void SetJoined(long playerId, uint serverFrame, Fixed64 x, Fixed64 y)
         {
+            SetJoined(playerId, serverFrame, x, y, false);
+        }
+
+        public void SetJoined(long playerId, uint serverFrame, Fixed64 x, Fixed64 y, bool isReconnect)
+        {
+            if (isReconnect)
+            {
+                ReconnectCount++;
+                LastReconnectFrame = serverFrame;
+                RollbackCountAtReconnect = _rollbackCount;
+                StateMismatchCountAtReconnect = StateMismatchCount;
+                FramesToConvergeAfterReconnect = -1;
+            }
+            else
+            {
+                ResetCumulativeDiagnostics();
+                ReconnectCount = 0;
+                LastReconnectFrame = 0u;
+                RollbackCountAtReconnect = 0;
+                StateMismatchCountAtReconnect = 0;
+                FramesToConvergeAfterReconnect = -1;
+            }
+
             ClearWorldState();
 
             _selfPlayerId = playerId;
@@ -324,16 +370,6 @@ namespace GameLogic
             RefreshBaselineLeadFrames();
             _pingCount = 0;
             _hashReportCount = 0;
-            HashReportsSent = 0;
-            _checked = 0;
-            _hits = 0;
-            _misses = 0;
-            _skippedNoRecord = 0;
-            _skippedEvicted = 0;
-            StateMismatchCount = 0;
-            PositionMismatchCount = 0;
-            StaminaMismatchCount = 0;
-            ContactMismatchFrames = 0;
             _leadDecreaseCooldownSnapshots = 0;
             _lastServerBufferedInputFrames = 0;
             _hasLastSentInput = false;
@@ -347,10 +383,6 @@ namespace GameLogic
             _skillGraphRuntime.Clear();
             _hasQueuedServerSnapshot = false;
             _latestQueuedSnapshotFrame = serverFrame;
-            _rollbackCount = 0;
-            _lastRollbackReplayFrames = 0;
-            _lastRollbackElapsedMs = 0.0d;
-            _lastRollbackFrame = 0u;
             _hasLastRenderedSelfPosition = false;
             _lastRenderedSelfX = 0.0f;
             _lastRenderedSelfY = 0.0f;
@@ -359,8 +391,27 @@ namespace GameLogic
             _latestAuthoritativeSelfY = Fixed64.Zero;
             _predictionErrorSmoother.Reset();
             _isJoined = true;
+            _awaitingFullSnapshot = isReconnect;
+            _awaitingFullSnapshotFrames = 0;
+            _fullSnapshotTimeoutSignaled = false;
 
             _worldState.AddOrUpdatePlayer(playerId, x, y);
+        }
+
+        public void SuspendForReconnect()
+        {
+            if (!_isJoined)
+            {
+                return;
+            }
+
+            _awaitingFullSnapshot = true;
+            _awaitingFullSnapshotFrames = 0;
+            _fullSnapshotTimeoutSignaled = false;
+            _pendingServerSnapshots.Clear();
+            _hasQueuedServerSnapshot = false;
+            _inputHistory.Clear();
+            _selfPredictions.Clear();
         }
 
 
@@ -400,6 +451,67 @@ namespace GameLogic
         public static bool RunSelfTest(out string failedCase)
         {
             return BattlePredictionSelfTestSuite.Run(out failedCase);
+        }
+
+        private TickResult TickAwaitingFullSnapshot(uint frameIndex, Fixed64 fixedDt)
+        {
+            _localFrame = frameIndex;
+            while (_pendingServerSnapshots.Count > 0)
+            {
+                PendingAuthoritativeSnapshot pending = _pendingServerSnapshots.Dequeue();
+                if (!pending.IsRecoveryFullSnapshot || pending.Snapshot.FrameIndex <= _lastAppliedFrame)
+                {
+                    continue;
+                }
+
+                BattleWorldSnapshot snapshot = pending.Snapshot;
+                ReconcileAuthoritativeSnapshot(
+                    snapshot,
+                    snapshot.FrameIndex,
+                    fixedDt,
+                    ConsistencyResult.NoRecord,
+                    forceRollback: false,
+                    string.Empty);
+                _pendingServerSnapshots.Clear();
+                _hasQueuedServerSnapshot = false;
+                _latestQueuedSnapshotFrame = snapshot.FrameIndex;
+                _awaitingFullSnapshot = false;
+                _awaitingFullSnapshotFrames = 0;
+                _fullSnapshotTimeoutSignaled = false;
+                _predictionErrorSmoother.Reset();
+                _hasLastRenderedSelfPosition = false;
+                FramesToConvergeAfterReconnect = unchecked((int)(snapshot.FrameIndex - LastReconnectFrame));
+
+                uint targetFrameExclusive = unchecked(snapshot.FrameIndex + _leadFrames + 1u);
+                return new TickResult(true, snapshot.FrameIndex, 0, targetFrameExclusive);
+            }
+
+            _hasQueuedServerSnapshot = _pendingServerSnapshots.Count > 0;
+            _awaitingFullSnapshotFrames++;
+            if (_awaitingFullSnapshotFrames >= ReconnectFullSnapshotTimeoutFrames)
+            {
+                _fullSnapshotTimeoutSignaled = true;
+            }
+
+            return default;
+        }
+
+        private void ResetCumulativeDiagnostics()
+        {
+            HashReportsSent = 0;
+            _checked = 0;
+            _hits = 0;
+            _misses = 0;
+            _skippedNoRecord = 0;
+            _skippedEvicted = 0;
+            StateMismatchCount = 0;
+            PositionMismatchCount = 0;
+            StaminaMismatchCount = 0;
+            ContactMismatchFrames = 0;
+            _rollbackCount = 0;
+            _lastRollbackReplayFrames = 0;
+            _lastRollbackElapsedMs = 0.0d;
+            _lastRollbackFrame = 0u;
         }
 
         private bool ApplyPendingServerSnapshot(
@@ -1509,14 +1621,19 @@ namespace GameLogic
 
     internal readonly struct PendingAuthoritativeSnapshot
     {
-        public PendingAuthoritativeSnapshot(BattleWorldSnapshot snapshot, uint selfLatestAcceptedInputFrame)
+        public PendingAuthoritativeSnapshot(
+            BattleWorldSnapshot snapshot,
+            uint selfLatestAcceptedInputFrame,
+            bool isRecoveryFullSnapshot)
         {
             Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
             SelfLatestAcceptedInputFrame = selfLatestAcceptedInputFrame;
+            IsRecoveryFullSnapshot = isRecoveryFullSnapshot;
         }
 
         public BattleWorldSnapshot Snapshot { get; }
         public uint SelfLatestAcceptedInputFrame { get; }
+        public bool IsRecoveryFullSnapshot { get; }
     }
 
     public readonly struct TickResult

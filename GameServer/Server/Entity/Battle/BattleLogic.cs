@@ -21,7 +21,7 @@ public sealed class BattleLogic : IBuffCommandSink
     private readonly Dictionary<long, PlayerState> _statesByPlayerId = new();
     private readonly FrameSyncPhysicsWorld _physicsWorld = new();
     private readonly Dictionary<long, Dictionary<uint, PendingInput>> _pendingInputsByPlayerId = new();
-    private readonly Dictionary<long, ConsumedInput> _lastConsumedInputByPlayerId = new();
+    private readonly Dictionary<long, ReusablePlayerInput> _reusableInputsByPlayerId = new();
     private readonly Dictionary<long, SubmittedInput> _lastSubmittedInputByPlayerId = new();
     private readonly Dictionary<long, uint> _latestAcceptedInputFrameByPlayerId = new();
     private readonly List<long> _playerIdBuffer = new();
@@ -70,19 +70,21 @@ public sealed class BattleLogic : IBuffCommandSink
     {
         if (_statesByPlayerId.TryGetValue(playerId, out PlayerState? existingState))
         {
+            EnsureReusableInput(playerId);
             return existingState!;
         }
 
         PlayerState newState = new PlayerState(playerId, x, y);
         _statesByPlayerId.Add(playerId, newState);
         _physicsWorld.EnsureBody(checked((int)playerId), x, y);
+        EnsureReusableInput(playerId);
         return newState;
     }
 
     public bool RemovePlayer(long playerId)
     {
         _pendingInputsByPlayerId.Remove(playerId);
-        _lastConsumedInputByPlayerId.Remove(playerId);
+        _reusableInputsByPlayerId.Remove(playerId);
         _lastSubmittedInputByPlayerId.Remove(playerId);
         _latestAcceptedInputFrameByPlayerId.Remove(playerId);
         RemovePendingBuffCommands(playerId);
@@ -110,9 +112,43 @@ public sealed class BattleLogic : IBuffCommandSink
             : 0u;
     }
 
+    public bool IsInputSuppressed(long playerId)
+    {
+        return _reusableInputsByPlayerId.TryGetValue(playerId, out ReusablePlayerInput? input) &&
+               input.IsSuppressed;
+    }
+
+    public bool SetInputSuppressed(long playerId, bool suppressed)
+    {
+        if (!_statesByPlayerId.ContainsKey(playerId))
+        {
+            return false;
+        }
+
+        ReusablePlayerInput reusableInput = EnsureReusableInput(playerId);
+        if (!reusableInput.SetSuppressed(suppressed))
+        {
+            return false;
+        }
+
+        if (suppressed)
+        {
+            // Buffered and last-submitted inputs belong to the disconnected session.
+            _pendingInputsByPlayerId.Remove(playerId);
+            _lastSubmittedInputByPlayerId.Remove(playerId);
+        }
+
+        return true;
+    }
+
     public void SubmitInput(long playerId, uint frameIndex, uint inputSeq, long dxRaw, long dyRaw, int skillId = 0)
     {
         if (!_statesByPlayerId.ContainsKey(playerId))
+        {
+            return;
+        }
+
+        if (IsInputSuppressed(playerId))
         {
             return;
         }
@@ -204,23 +240,30 @@ public sealed class BattleLogic : IBuffCommandSink
             Fixed64 dx = Fixed64.Zero;
             Fixed64 dy = Fixed64.Zero;
             bool consumedCurrentFrameInput = false;
-            bool hadLastConsumedInput = _lastConsumedInputByPlayerId.TryGetValue(playerId, out ConsumedInput lastConsumedInput);
-            if (_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) &&
+            ReusablePlayerInput reusableInput = EnsureReusableInput(playerId);
+            bool hadLastConsumedInput = reusableInput.TryGet(
+                out Fixed64 lastConsumedDx,
+                out Fixed64 lastConsumedDy);
+            if (reusableInput.IsSuppressed)
+            {
+                ZeroInputFallbackCount++;
+            }
+            else if (_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) &&
                 playerInputs.TryGetValue(frameIndex, out PendingInput input))
             {
                 dx = input.Dx;
                 dy = input.Dy;
 
-                if (!hadLastConsumedInput || !AreInputsEqual(dx, dy, lastConsumedInput.Dx, lastConsumedInput.Dy))
+                if (!hadLastConsumedInput || !AreInputsEqual(dx, dy, lastConsumedDx, lastConsumedDy))
                 {
                     string previousInput = hadLastConsumedInput
-                        ? FormatInput(lastConsumedInput.Dx, lastConsumedInput.Dy)
+                        ? FormatInput(lastConsumedDx, lastConsumedDy)
                         : "(none)";
                     _logDebug?.Invoke(
                         $"[Battle][ConsumeInputEdge] frame={frameIndex} player={playerId} input={previousInput}->{FormatInput(dx, dy)}");
                 }
 
-                _lastConsumedInputByPlayerId[playerId] = new ConsumedInput(dx, dy);
+                reusableInput.Record(dx, dy);
                 consumedCurrentFrameInput = true;
                 playerInputs.Remove(frameIndex);
                 if (playerInputs.Count == 0)
@@ -230,8 +273,8 @@ public sealed class BattleLogic : IBuffCommandSink
             }
             else if (hadLastConsumedInput)
             {
-                dx = lastConsumedInput.Dx;
-                dy = lastConsumedInput.Dy;
+                dx = lastConsumedDx;
+                dy = lastConsumedDy;
                 ReusedInputCount++;
             }
             else
@@ -395,6 +438,18 @@ public sealed class BattleLogic : IBuffCommandSink
         _playerIdBuffer.Sort();
     }
 
+    private ReusablePlayerInput EnsureReusableInput(long playerId)
+    {
+        if (_reusableInputsByPlayerId.TryGetValue(playerId, out ReusablePlayerInput? existing))
+        {
+            return existing!;
+        }
+
+        ReusablePlayerInput created = new ReusablePlayerInput();
+        _reusableInputsByPlayerId[playerId] = created;
+        return created;
+    }
+
     private void SyncPlayerStatesFromPhysics()
     {
         for (int i = 0; i < _playerIdBuffer.Count; i++)
@@ -420,7 +475,8 @@ public sealed class BattleLogic : IBuffCommandSink
         for (int i = 0; i < _playerIdBuffer.Count; i++)
         {
             long playerId = _playerIdBuffer[i];
-            if (!_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) ||
+            if (IsInputSuppressed(playerId) ||
+                !_pendingInputsByPlayerId.TryGetValue(playerId, out Dictionary<uint, PendingInput>? playerInputs) ||
                 !playerInputs.TryGetValue(frameIndex, out PendingInput input) ||
                 input.SkillId <= 0)
             {
@@ -936,15 +992,4 @@ public sealed class BattleLogic : IBuffCommandSink
         public Fixed64 Dy { get; }
     }
 
-    private readonly struct ConsumedInput
-    {
-        public ConsumedInput(Fixed64 dx, Fixed64 dy)
-        {
-            Dx = dx;
-            Dy = dy;
-        }
-
-        public Fixed64 Dx { get; }
-        public Fixed64 Dy { get; }
-    }
 }

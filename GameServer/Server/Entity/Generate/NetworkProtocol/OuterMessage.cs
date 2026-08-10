@@ -278,11 +278,14 @@ namespace Fantasy
         public void Dispose()
         {
             if (!IsPool()) return; 
+            Token = default;
             MessageObjectPool<C2B_JoinBattle>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.C2B_JoinBattle; } 
         [ProtoIgnore]
         public C2B_JoinBattleResponse ResponseType { get; set; }
+        [ProtoMember(1)]
+        public string Token { get; set; }
     }
     [Serializable]
     [ProtoContract]
@@ -323,6 +326,7 @@ namespace Fantasy
             XRaw = default;
             YRaw = default;
             ServerFrameIndex = default;
+            IsReconnect = default;
             MessageObjectPool<C2B_JoinBattleResponse>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.C2B_JoinBattleResponse; } 
@@ -336,6 +340,8 @@ namespace Fantasy
         public long YRaw { get; set; }
         [ProtoMember(5)]
         public uint ServerFrameIndex { get; set; }
+        [ProtoMember(6)]
+        public bool IsReconnect { get; set; }
     }
     [Serializable]
     [ProtoContract]

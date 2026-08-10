@@ -18,5 +18,8 @@ namespace GameLogic
         /// <summary>服务端 RTT 统计上报到达（每逻辑帧，per-session）。</summary>
         void OnRttStatsUpdated();
 
+        /// <summary>断线、重试、等待全量快照与恢复状态发生变化。</summary>
+        void OnReconnectStatusUpdated();
+
     }
 }

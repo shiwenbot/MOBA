@@ -6,11 +6,14 @@
 powershell -ExecutionPolicy Bypass -File D:\unity\Tencent\TEngine\Tools\AutomationAcceptance\Run-BattleAcceptance.ps1
 ```
 
-默认会执行三个场景：
+默认会执行四个场景：
 
 - `two-client-join` - 两客户端加入房间
 - `two-client-basic-move` - 两客户端基础移动
 - `two-client-disconnect` - 断线测试
+- `two-client-reconnect` - client B 主动断开并以同账号认领同一玩家
+
+S9 起所有真实客户端场景都走 Authentication 真实注册/登录。运行前必须有 MongoDB `27017`，服务端会启动 Auth `20001` 与 Battle `20101`；client A/B 默认使用 `battle-auto-client-a` / `battle-auto-client-b` 两个不同账号。脚本会检查端口并拒绝相同账号。
 
 S4 新增三个按需执行的弱网场景（不加入默认场景，避免普通回归主动注入丢包）：
 
@@ -25,6 +28,7 @@ S4 新增三个按需执行的弱网场景（不加入默认场景，避免普�
   - `two-client-join`
   - `two-client-basic-move`
   - `two-client-disconnect`
+- `two-client-reconnect` 已完成代码与机械断言接入，Unity 双客户端结果待项目负责人执行
 - 当前验证结论：
   - 双客户端均运行在 `puerts-runtime`
   - JS controller 已实际驱动输入与完成判定
@@ -58,6 +62,7 @@ Assets/StreamingAssets/BattleAutomation/Puerts/
 ├── two-client-join.js.txt       # 加入房间场景
 ├── two-client-basic-move.js.txt # 基础移动场景
 ├── two-client-disconnect.js.txt # 断线测试场景
+├── two-client-reconnect.js.txt  # 断开、认领和全量恢复场景
 └── weaknet-controller.js.txt    # 三个 S4 弱网场景共用
 ```
 
@@ -79,7 +84,7 @@ module.exports = {
   evaluate(snapshotJson) {
     // 评估完成状态
     // snapshot: { joined, localFrame, activePlayerCount, players, ... }
-    // 返回: { completed, passed, reason }
+    // 返回: { completed, passed, reason, requestDisconnect? }
   },
 
   dispose() {

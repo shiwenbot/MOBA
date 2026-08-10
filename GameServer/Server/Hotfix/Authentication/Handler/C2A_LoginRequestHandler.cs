@@ -9,12 +9,14 @@ public sealed class C2A_LoginRequestHandler : MessageRPC<C2A_LoginRequest, A2C_L
 {
     protected override async FTask Run(Session session, C2A_LoginRequest request, A2C_LoginResponse response, Action reply)
     {
+        response.Token = string.Empty;
         var scene = session.Scene;
         var result = await AuthenticationHelper.Login(scene, request.UserName, request.Password);
         response.ErrorCode = result.errorCode;
 
         if (response.ErrorCode == 0)
         {
+            response.Token = result.token;
             session.Send(new G2C_LoginMessage()
             {
                 Msg = "Hello TEngine"

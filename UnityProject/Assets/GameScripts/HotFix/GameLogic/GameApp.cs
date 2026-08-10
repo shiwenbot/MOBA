@@ -17,6 +17,7 @@ using TEngine;
 public partial class GameApp
 {
     private static List<Assembly> _hotfixAssembly;
+    private static CommonUIController _commonUIController;
 
     /// <summary>
     /// 热更域App主入口。
@@ -40,7 +41,28 @@ public partial class GameApp
         async UniTaskVoid Init()
         {
             await GameClient.Instance.InitAsync(_hotfixAssembly);
-            GameplaySandboxView.Create();
+            _ = GameModule.UI;
+            _commonUIController = new CommonUIController();
+            _commonUIController.RegUIMessage();
+
+            BattleAutomationConfig automation = BattleAutomationConfig.Current;
+            if (automation.Enabled)
+            {
+                bool authenticated = await DataCenterSys.Instance.EnsureAutomationLogin(
+                    automation.AuthServerAddress,
+                    automation.AuthServerPort,
+                    automation.AuthUserName,
+                    automation.AuthPassword);
+                if (!authenticated)
+                {
+                    Log.Error("[Automation] Authentication failed; gameplay was not started.");
+                    return;
+                }
+            }
+            else
+            {
+                GameEvent.Get<ILoginUI>().ShowLoginUI();
+            }
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             SkillGraphStepBSmokeTest.Run();
             // 带宽节省量调试面板（仅开发期）。服务端需开 BATTLE_BANDWIDTH_STATS=1 才有数据。

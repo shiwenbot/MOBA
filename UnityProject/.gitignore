@@ -83,6 +83,8 @@ crashlytics-build.properties
 [Aa]ssets/StreamingAssets/BattleAutomation/Puerts/*
 ![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/weaknet-controller.js.txt
 ![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/weaknet-controller.js.txt.meta
+![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/two-client-reconnect.js.txt
+![Aa]ssets/StreamingAssets/BattleAutomation/Puerts/two-client-reconnect.js.txt.meta
 
 #Rider
 /.idea/

@@ -12,7 +12,10 @@ public static class AuthenticationHelper
     /// <param name="username">用户名</param>
     /// <param name="password">密码</param>
     /// <returns></returns>
-    public static async FTask<(uint errorCode, long accountId)> Login(Scene scene, string username, string password)
+    public static async FTask<(uint errorCode, long accountId, string token)> Login(
+        Scene scene,
+        string username,
+        string password)
         => await scene.GetComponent<AuthenticationComponent>().Login(username, password);
 
     /// <summary>
